@@ -1,0 +1,140 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Admin dashboard (Phase 11)
+   Only the genuinely new shapes this view needs: vertical section spacing,
+   a two-column tools grid (Excel export / CSV import), a plain data table
+   (no equivalent exists anywhere else in the app yet), and the CSV import
+   card's small extras. Everything else — .card, .card-grid, .stat-card,
+   .notice, .notice-warning, .empty-state, .field-hint, .hotel-generate-bar,
+   .badge — is reused as-is from components.css/hotels.css (project rule 15).
+   ========================================================================== */
+
+.admin-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  margin-top: var(--space-5);
+}
+
+/* A flex column item's default min-width is `auto`, which for a block
+   containing a wide, non-wrapping table (.admin-table's own min-width, so
+   its columns stay legible instead of getting squashed) resolves to that
+   table's full intrinsic width — so without this, the section itself (and
+   everything above it, right up to the page) grows to fit the table
+   instead of the table's own .admin-table-wrap scrolling internally. Real
+   overflow bug caught by this phase's own 320px/375px Playwright check;
+   same root cause and fix as the Phase 4 passport-preview "blowout" bug
+   (min-width: 0 down the container chain). */
+.admin-sections > section {
+  min-width: 0;
+}
+
+.admin-sections h2 {
+  margin: 0 0 var(--space-3);
+}
+
+.admin-section-hint {
+  margin: calc(var(--space-3) * -1) 0 var(--space-3);
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.admin-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.admin-csv-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.admin-import-issues {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ---------------- Data table (Applications management, Staff Directory) ---------------- */
+
+/* The scroll-fade wrapper (components.css .scroll-fade, Phase 12) around
+   .admin-table-wrap needs to know what it's fading TO — these tables sit
+   directly on the page background (no .card wrapper around them, see
+   index.html), not on --color-surface like a card would, so the shared
+   default (--color-surface) would show a visible seam at the edges. */
+.admin-table-scroll-fade {
+  --scroll-fade-bg: var(--color-bg);
+}
+
+.admin-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  min-width: 560px; /* forces the wrapper's own scroll instead of squashing columns illegibly at narrow widths */
+}
+
+.admin-table th,
+.admin-table td {
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.admin-table th {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-faint);
+  background: var(--color-surface-alt);
+}
+
+.admin-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.admin-table tbody tr:hover {
+  background: var(--color-surface-alt);
+}
+
+/* ---------------- Document Templates reference list ---------------- */
+.admin-template-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.admin-template-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface-alt);
+  border-radius: var(--radius-sm);
+}
+
+.admin-template-row__name {
+  font-weight: 600;
+  flex: 1 1 200px;
+}
+
+.admin-template-row__category {
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+  flex: 1 1 160px;
+}

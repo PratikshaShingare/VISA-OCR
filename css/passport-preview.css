@@ -1,0 +1,287 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Passport upload / preview / OCR review (step 1)
+   Mobile-first: single column by default; the two-column workspace and
+   two-column field grid open up at wider widths in responsive.css.
+   ========================================================================== */
+
+/* ---------------- Upload dropzone ---------------- */
+.upload-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-2);
+  padding: var(--space-10) var(--space-5);
+  border: 1.5px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  background: var(--color-surface);
+}
+
+.upload-dropzone:hover,
+.upload-dropzone:focus-visible {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.upload-dropzone.is-dragover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.upload-dropzone .icon {
+  width: 30px;
+  height: 30px;
+  color: var(--color-text-faint);
+}
+
+.upload-dropzone h3 {
+  margin-bottom: 0;
+}
+
+.upload-dropzone p {
+  margin: 0;
+}
+
+.upload-dropzone__filename {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* ---------------- Workspace layout ---------------- */
+.passport-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-6);
+  margin-top: var(--space-5);
+}
+
+/* ---------------- Preview panel ---------------- */
+/* min-width: 0 throughout this chain — without it, a grid/flex item sizes
+   to its content's intrinsic minimum (here, the passport image's natural
+   pixel width), which silently pushes the whole panel wider than the
+   viewport at narrow widths regardless of max-width:100% on the img. */
+.passport-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.passport-preview__stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  min-width: 0;
+  padding: var(--space-4);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* Rotation lives on the image, not the stage — see the comment in
+   passport-preview.js render() for why. */
+.passport-preview__img {
+  max-width: 100%;
+  max-height: 360px;
+  min-width: 0;
+  height: auto;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  transform-origin: center;
+  transition: transform 0.15s ease;
+}
+
+.passport-preview__placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-faint);
+  font-size: 0.85rem;
+  text-align: center;
+  max-width: 30ch;
+}
+
+.passport-preview__controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.passport-preview__rotate-group {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.passport-preview__page-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.passport-preview__page-indicator {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+/* ---------------- Review panel ---------------- */
+.passport-review {
+  min-width: 0;
+}
+
+.passport-review__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.passport-review__status {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+}
+
+.passport-review__save-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-5);
+}
+
+.passport-form-group {
+  padding-top: var(--space-5);
+  margin-top: var(--space-5);
+  border-top: 1px solid var(--color-border);
+}
+
+.passport-form-group:first-child {
+  padding-top: 0;
+  margin-top: 0;
+  border-top: none;
+}
+
+.passport-form-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.passport-form-group__header h3 {
+  margin: 0;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+}
+
+/* ---------------- Per-field OCR confidence styling ---------------- */
+.ocr-field__meta {
+  font-size: 0.74rem;
+  color: var(--color-text-faint);
+  min-height: 1.1em;
+}
+
+.field-review input,
+.field-review select {
+  border-color: var(--color-warning);
+  background: var(--color-warning-soft);
+}
+.field-review .ocr-field__meta {
+  color: var(--color-warning);
+}
+
+.field-ok input,
+.field-ok select {
+  border-color: var(--color-success);
+}
+.field-ok .ocr-field__meta {
+  color: var(--color-success);
+}
+
+.field-missing input,
+.field-missing select {
+  border-style: dashed;
+  border-color: var(--color-border-strong);
+}
+.field-missing .ocr-field__meta {
+  color: var(--color-text-faint);
+}
+
+.field-manual .ocr-field__meta {
+  color: var(--color-text-muted);
+}
+
+/* ---------------- MRZ strip ---------------- */
+.mrz-strip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface-alt);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+
+.mrz-strip code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.78rem;
+  white-space: pre;
+  color: var(--color-text-muted);
+}
+
+/* ---------------- Checkbox rows ---------------- */
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: 0.86rem;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.checkbox-row input[type="checkbox"] {
+  margin-top: 3px;
+  flex: none;
+}
+
+.passport-verify-note {
+  margin: var(--space-2) 0 0;
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+}
+
+/* ---------------- Continue to document (Phase 5, standalone Upload
+   Passport page only — config.showContinueToDocument in
+   passport-processing.js) ---------------- */
+.passport-continue-to-document {
+  margin-top: var(--space-6);
+}
+
+.passport-continue-to-document h3 {
+  margin: 0 0 var(--space-1);
+}
+
+.passport-continue-to-document p {
+  margin: 0 0 var(--space-4);
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+
+.passport-continue-to-document__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

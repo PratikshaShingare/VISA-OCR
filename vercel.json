@@ -1,0 +1,11 @@
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index.py" }
+  ],
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 60,
+      "includeFiles": "{backend/python/**,reference-templates/**,reference-cover-letter-formats/**,reference-hotel-blocking-formats/**,assets/**}"
+    }
+  }
+}

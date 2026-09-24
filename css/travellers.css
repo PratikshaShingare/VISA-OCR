@@ -1,0 +1,81 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Accompanying travellers (wizard step 2)
+   ========================================================================== */
+
+.traveller-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.traveller-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.traveller-card.is-editing {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.traveller-card__info {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.traveller-card__name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traveller-card__meta {
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traveller-card__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+/* ---------------- Edit panel ---------------- */
+.traveller-panel {
+  padding: var(--space-5);
+  margin-bottom: var(--space-6);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.traveller-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.traveller-panel__header h3 {
+  margin: 0;
+}
+
+.traveller-panel__relation {
+  max-width: 320px;
+  margin-bottom: var(--space-5);
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}

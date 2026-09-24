@@ -1,0 +1,174 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Responsive breakpoints
+   Tested at 320 / 375 / 390 / 414 / 768 / 1024 / 1280 / 1440+
+   ========================================================================== */
+
+/* Below desktop (1024px — matches the sidebar's own breakpoint in
+   css/sidebar.css): collapse the header's primary-nav into the mobile
+   drawer. This used to happen at 767px, but the header's primary-nav only
+   ever listed Dashboard/Applications, so it can't carry the six document
+   links the sidebar normally shows — leaving it visible from 768-1023px
+   (tablet) meant that range had neither the sidebar (hidden below 1024px)
+   nor the drawer (only appeared below 768px), so the six document
+   workspaces and Upload Passport were unreachable there. Moved to 1024px
+   so the drawer (which does carry every link — see index.html's
+   .mobile-nav__panel) takes over at the same point the sidebar disappears.
+   Phase 1 of the document-first redesign. */
+@media (max-width: 1023px) {
+  .primary-nav {
+    display: none;
+  }
+
+  .nav-toggle {
+    display: inline-flex;
+  }
+}
+
+/* Below tablet: mobile-only spacing/sizing adjustments (unrelated to the
+   primary-nav/drawer breakpoint above, which now applies up to 1023px). */
+@media (max-width: 767px) {
+  .brand__subtitle {
+    display: none;
+  }
+
+  .profile-menu__name {
+    display: none;
+  }
+
+  .header-actions .btn-primary span {
+    display: none;
+  }
+
+  .view {
+    padding: var(--space-4) var(--space-4) var(--space-8);
+  }
+
+  .view-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .view-header .btn-primary {
+    width: 100%;
+  }
+
+  .card-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .wizard-footer {
+    flex-direction: column-reverse;
+  }
+
+  .wizard-footer .btn {
+    width: 100%;
+  }
+
+  /* Touch-target sizing (Phase 12): below 768px, real fingers replace a
+     mouse pointer, so the compact desktop sizing for icon-only and "small"
+     buttons (36x36 / 32px tall) is bumped toward the ~44px minimum comfortable
+     tap target (Apple HIG / Android Material guidance) — scoped to mobile
+     only so desktop's denser layout is untouched (project rule 16: don't
+     change something without reason). These controls appear throughout the
+     app (document Verify/Reject, hotel/traveller Edit/Remove, the Admin
+     table's own row actions), so one shared rule here covers all of them
+     rather than a per-view fix (project rule 15). */
+  .btn-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .btn-sm {
+    height: 40px;
+    padding: 0 var(--space-4);
+  }
+
+  /* The status-select "pill" (applications.js/admin.js, styled in
+     components.css) was sized to read as a compact badge and ended up only
+     ~24px tall — hard to land a real tap on. Bumped to a real minimum
+     height on mobile without changing its pill appearance. */
+  .status-select {
+    min-height: 32px;
+    padding-top: var(--space-1);
+    padding-bottom: var(--space-1);
+  }
+
+  /* The mobile nav drawer's own links (.mobile-nav__panel reuses
+     .primary-nav__link, which is otherwise a desktop-only, hidden-below-768
+     component) get the same treatment — this only affects the drawer
+     instance since .primary-nav itself stays display:none below 768px. */
+  .mobile-nav__panel .primary-nav__link {
+    padding: var(--space-3);
+    font-size: 0.92rem;
+  }
+}
+
+/* Very small phones (320-374px) */
+@media (max-width: 374px) {
+  .card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .app-header {
+    padding: 0 var(--space-3);
+    gap: var(--space-2);
+  }
+
+  .brand__name {
+    font-size: 0.85rem;
+  }
+}
+
+/* Tablet and up: roomier grid */
+@media (min-width: 768px) {
+  .card-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  /* minmax(0, 1fr), not plain 1fr — a bare 1fr track carries an implicit
+     min-width: auto, so a track only shrinks down to its content's own
+     intrinsic minimum width, never below it. Found while testing Phase 5
+     (js/passport/passport-review-form.js's fields, reused verbatim by both
+     the wizard's step 1 and the new standalone Upload Passport page):
+     populated with real field values at exactly 1024px, where
+     .passport-workspace (below) also narrows the review column to make
+     room for the preview panel, the two field-grid columns' combined
+     intrinsic minimum width (~450px) exceeded the ~340px actually
+     available, overflowing the page by ~106px — the same "automatic
+     minimum size" bug class already fixed elsewhere in this project (see
+     css/sidebar.css's .doc-page-app-bar__actions comment), just in Grid
+     form instead of Flexbox. Confirmed this affected the original wizard
+     step 1 too (not something Phase 5 introduced) once tested with real,
+     populated field values instead of an empty form. */
+  .field-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .checklist-preview-columns {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Desktop: wider stat grid, and the passport preview/review panels sit
+   side by side instead of stacking (Phase 4). */
+@media (min-width: 1024px) {
+  .card-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .passport-workspace {
+    grid-template-columns: minmax(280px, 380px) 1fr;
+    align-items: start;
+  }
+
+  .passport-preview {
+    position: sticky;
+    top: calc(var(--header-h) + var(--space-5));
+  }
+}
+
+@media (min-width: 1280px) {
+  .container {
+    max-width: 1200px;
+  }
+}

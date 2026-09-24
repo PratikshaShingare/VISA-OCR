@@ -1,0 +1,175 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Left sidebar (document-centric navigation)
+   Workflow redesign, Phase 1. Persistent on desktop (>=1024px, matching the
+   existing project convention for "desktop" — see responsive.css's own
+   1024px breakpoint); hidden below that width, where the existing mobile
+   nav drawer (index.html's .mobile-nav, wired up since Phase 1 of the
+   original build) carries the same links instead of a second drawer
+   mechanism (project rule 15 — don't duplicate what already exists).
+
+   Deliberately no new JS: every link below is a plain [data-nav-link]
+   element, so router.js's existing delegated click handler and
+   setActiveView()'s existing [data-nav-link] active-state toggle already
+   cover clicking AND highlighting these with zero changes to that file.
+   ========================================================================== */
+
+.sidebar {
+  flex: none;
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-4) var(--space-3);
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+  position: sticky;
+  top: var(--header-h);
+  align-self: flex-start;
+  height: calc(100vh - var(--header-h));
+  overflow-y: auto;
+}
+
+@media (max-width: 1023px) {
+  .sidebar {
+    display: none;
+  }
+}
+
+.sidebar__link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-size: 0.86rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar__link:hover {
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.sidebar__link.is-active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.sidebar__link .icon {
+  flex: none;
+  color: inherit;
+}
+
+.sidebar__section-label {
+  padding: var(--space-3) var(--space-3) var(--space-1);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-faint);
+}
+
+.sidebar__section-label:first-child {
+  padding-top: var(--space-1);
+}
+
+.sidebar__spacer {
+  flex: 1;
+}
+
+.sidebar__divider {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: var(--space-2) var(--space-1);
+}
+
+/* ---------------- App-body wrapper (sidebar + main content, side by side) ---------------- */
+.app-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+/* .app-main already carries `flex:1` for its own internal layout; as a flex
+   CHILD of .app-body it also needs min-width:0 — otherwise its content's
+   intrinsic width can force the row wider than the viewport instead of
+   letting the sidebar+main split correctly. This is the same flex
+   "default min-width:auto" class of bug this project has already hit and
+   fixed three times (Phase 4 passport image, Phase 11 admin table, Phase
+   11 notice text) — added here pre-emptively rather than waiting to
+   rediscover it. */
+.app-main {
+  min-width: 0;
+}
+
+/* ---------------- "New Application" quick-choice menu ---------------- */
+/* .new-app-menu is its own wrapper class (not .profile-menu) even though
+   its dropdown/item markup reuses .profile-menu__dropdown/.profile-menu__item
+   (components.css) for identical box/hover/open-close styling — sharing the
+   WRAPPER class too would break auth-view.js's outside-click handler, which
+   does `utils.qs(".profile-menu")` (a first-DOM-match query, not scoped to
+   this menu) to find the real account dropdown; a second element with that
+   same class earlier in the DOM would make that query resolve to the wrong
+   menu and immediately re-close the account dropdown every time it opened.
+   Confirmed with a real Playwright click-through before landing on this
+   fix (project rule 17 — test before claiming something works). */
+.new-app-menu {
+  position: relative;
+}
+
+.new-app-menu__dropdown {
+  left: 0;
+  right: auto;
+  min-width: 240px;
+}
+
+@media (max-width: 767px) {
+  .new-app-menu__dropdown {
+    right: 0;
+    left: auto;
+  }
+}
+
+/* ---------------- Standalone document page: active-application bar ----------------
+   Phase 2. Built by js/document-workspace.js; reuses .card/.field-hint/.badge/
+   .btn as-is (project rule 15) — only this small flex layout is new. */
+.doc-page-app-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+
+.doc-page-app-bar__info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.doc-page-app-bar__actions {
+  /* Phase 2 had this as `flex: none` (a single button never needed to
+     shrink). Phase 3 added a second button here, and `flex: none` is
+     `0 0 auto` — flex-shrink:0 — so at narrow widths the pair refused to
+     shrink below its combined max-content width and overflowed the
+     viewport instead of wrapping (real bug caught by the 320-414px
+     checks). min-width: 0 plus the default shrinkable flex-basis (simply
+     not overriding flex-shrink) lets this container shrink to the
+     available row width, at which point its own flex-wrap: wrap stacks
+     the two buttons instead of forcing them off-screen. */
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}

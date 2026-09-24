@@ -1,0 +1,115 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Travel/checklist (step 3) & documents (step 4)
+   ========================================================================== */
+
+/* ---------------- Checklist preview (step 3) ---------------- */
+.checklist-preview-columns {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-6);
+  margin-top: var(--space-4);
+}
+
+.checklist-preview-columns h3 {
+  margin-bottom: var(--space-2);
+}
+
+.checklist-preview-list {
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.checklist-empty {
+  color: var(--color-text-faint);
+  font-size: 0.85rem;
+}
+
+/* ---------------- Completion progress (step 4) ---------------- */
+.checklist-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.checklist-progress__bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-surface-alt);
+  overflow: hidden;
+}
+
+.checklist-progress__fill {
+  height: 100%;
+  background: var(--color-success);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+/* ---------------- Document rows ---------------- */
+.doc-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  margin-bottom: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.doc-row__main {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.doc-row__label {
+  font-weight: 600;
+}
+
+.doc-row__meta {
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+}
+
+.doc-row__verified {
+  font-size: 0.78rem;
+  color: var(--color-success);
+}
+
+.doc-row__note-input {
+  margin-top: var(--space-1);
+  height: 34px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.82rem;
+  max-width: 360px;
+}
+
+.doc-row__note-readonly {
+  font-size: 0.8rem;
+  color: var(--color-danger);
+}
+
+.doc-row__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  flex: none;
+}

@@ -1,0 +1,230 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Base styles
+   Reset, design tokens (light + dark), typography.
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ---- Design tokens : light (default) ---- */
+:root {
+  --color-bg: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f0f2f5;
+  --color-border: #e2e5ea;
+  --color-border-strong: #cbd1d9;
+
+  --color-text: #1b2430;
+  --color-text-muted: #5c6673;
+  --color-text-faint: #8791a0;
+
+  --color-primary: #1c5fae;
+  --color-primary-hover: #154a88;
+  --color-primary-soft: #e8f0fa;
+  --color-primary-contrast: #ffffff;
+
+  --color-accent: #d6373c;
+  --color-accent-soft: #fbe9e9;
+
+  --color-success: #1f8a4c;
+  --color-success-soft: #e7f6ec;
+  --color-warning: #b7791f;
+  --color-warning-soft: #fbf1de;
+  --color-danger: #c62828;
+  --color-danger-soft: #fbeaea;
+  --color-info: #2f6fb0;
+  --color-info-soft: #e9f1fa;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-md: 0 4px 14px rgba(16, 24, 40, 0.08);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+
+  --header-h: 64px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  color-scheme: light;
+}
+
+/* ---- Design tokens : dark ---- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #10151c;
+    --color-surface: #161d26;
+    --color-surface-alt: #1c2430;
+    --color-border: #2a3441;
+    --color-border-strong: #384454;
+
+    --color-text: #e7ebf0;
+    --color-text-muted: #a4afbd;
+    --color-text-faint: #788492;
+
+    --color-primary: #4c8fdd;
+    --color-primary-hover: #6ba2e4;
+    --color-primary-soft: #17293e;
+    --color-primary-contrast: #0b1420;
+
+    --color-accent: #e5686c;
+    --color-accent-soft: #3a2023;
+
+    --color-success: #4cb87c;
+    --color-success-soft: #16281f;
+    --color-warning: #d7a24d;
+    --color-warning-soft: #2c2416;
+    --color-danger: #e17070;
+    --color-danger-soft: #2f1c1c;
+    --color-info: #5b9bd8;
+    --color-info-soft: #16232f;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #10151c;
+  --color-surface: #161d26;
+  --color-surface-alt: #1c2430;
+  --color-border: #2a3441;
+  --color-border-strong: #384454;
+
+  --color-text: #e7ebf0;
+  --color-text-muted: #a4afbd;
+  --color-text-faint: #788492;
+
+  --color-primary: #4c8fdd;
+  --color-primary-hover: #6ba2e4;
+  --color-primary-soft: #17293e;
+  --color-primary-contrast: #0b1420;
+
+  --color-accent: #e5686c;
+  --color-accent-soft: #3a2023;
+
+  --color-success: #4cb87c;
+  --color-success-soft: #16281f;
+  --color-warning: #d7a24d;
+  --color-warning-soft: #2c2416;
+  --color-danger: #e17070;
+  --color-danger-soft: #2f1c1c;
+  --color-info: #5b9bd8;
+  --color-info-soft: #16232f;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0 0 var(--space-2);
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--color-text);
+}
+
+h1 {
+  font-size: 1.5rem;
+}
+h2 {
+  font-size: 1.2rem;
+}
+h3 {
+  font-size: 1.02rem;
+}
+
+p {
+  margin: 0 0 var(--space-3);
+  color: var(--color-text-muted);
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* Visible focus for keyboard users, no focus ring for mouse clicks */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

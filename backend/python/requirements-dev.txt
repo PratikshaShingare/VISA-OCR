@@ -1,0 +1,7 @@
+# Extra dependencies needed only to RUN the test suite in tests/ — never
+# required by the app itself (see requirements.txt for that).
+#
+#   pip install -r requirements.txt -r requirements-dev.txt --break-system-packages
+#
+pytest>=8.0
+httpx>=0.27          # required by fastapi.testclient.TestClient

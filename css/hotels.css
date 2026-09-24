@@ -1,0 +1,126 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Hotel blocking (wizard step 5)
+   ========================================================================== */
+
+.hotel-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.hotel-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.hotel-card.is-editing {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.hotel-card__info {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.hotel-card__name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hotel-card__meta {
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hotel-card__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+/* ---------------- Edit panel ---------------- */
+.hotel-panel {
+  padding: var(--space-5);
+  margin-bottom: var(--space-6);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.hotel-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.hotel-panel__header h3 {
+  margin: 0;
+}
+
+.hotel-panel__guests {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border);
+}
+
+.hotel-panel__guests > label {
+  display: block;
+  margin-bottom: var(--space-2);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.field-hint {
+  margin: var(--space-2) 0 0;
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+}
+
+.hotel-guest-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  max-width: 420px;
+}
+
+.hotel-guest-row input {
+  flex: 1;
+  height: 38px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.85rem;
+}
+
+/* ---------------- Generate voucher ---------------- */
+.hotel-generate-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.hotel-generate-bar__meta {
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+}

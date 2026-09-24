@@ -1,0 +1,59 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Invitation Letter (wizard step 7)
+   Reuses .card, .field, .field-grid, .field-hint, .notice,
+   .hotel-generate-bar, .hotel-panel, .hotel-panel__header,
+   .auth-person-list, .auth-person-row, .cover-subheading (defined in
+   css/hotels.css / css/authorization.css / css/cover-letter.css) as-is —
+   only the signature-upload control is a genuinely new shape on this step
+   (project rule 15 — no duplicated CSS).
+   ========================================================================== */
+
+.signature-upload {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+
+.signature-upload__preview {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+}
+
+.signature-upload__preview img {
+  height: 28px;
+  max-width: 90px;
+  object-fit: contain;
+  background: #fff;
+  border-radius: var(--radius-xs, 3px);
+}
+
+.signature-upload__filename {
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.initors-person-section {
+  margin-bottom: var(--space-5);
+}
+
+.initors-person-section__title {
+  margin: 0 0 var(--space-1);
+  font-size: 0.95rem;
+}
+
+.initors-person-section__subtitle {
+  margin: 0 0 var(--space-4);
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+}

@@ -1,0 +1,28 @@
+# Temporary upload and generation directories
+uploads/
+generated/
+*.tmp
+*.log
+
+# Python cache & virtualenvs
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+
+# Node dependencies
+node_modules/
+npm-debug.log*
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Files downloaded from a Claude chat session and saved into this project by
+# mistake — never part of the app's own source. A real secret leaked into
+# GitHub through exactly this folder once already (see project history) —
+# keep this ignored.
+Claude outputs/

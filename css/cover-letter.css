@@ -1,0 +1,64 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Cover Letter tab (wizard step 6, second half)
+   Reuses .card, .field, .field-grid, .field-hint, .notice,
+   .hotel-generate-bar, .auth-person-list, .auth-person-row (defined in
+   css/hotels.css / css/authorization.css) as-is — only the region selector
+   and the Japan hotel-row editor are genuinely new shapes (project rule 15
+   — no duplicated CSS).
+   ========================================================================== */
+
+.cover-region-select {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+.cover-region-btn {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cover-region-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+
+.cover-region-btn.is-active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.cover-subheading {
+  margin: var(--space-5) 0 var(--space-3);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.cover-hotel-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.cover-hotel-row {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.cover-hotel-row .field-grid {
+  margin-bottom: var(--space-2);
+}
+
+.cover-hotel-row__remove {
+  color: var(--color-danger, #c0392b);
+}

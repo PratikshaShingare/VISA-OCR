@@ -1,0 +1,122 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — "Use Existing Application" picker (Phase 3)
+   A single shared modal, injected once by js/application-picker.js and
+   reused everywhere an existing application can be resumed. Built entirely
+   from the same tokens/components as the rest of the app (.card-style
+   surface, .btn-icon, .badge, .field input) — no new visual language.
+   ========================================================================== */
+
+.app-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60; /* above the mobile nav drawer (50) and profile dropdown (45) */
+  background: rgba(16, 24, 40, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--space-8) var(--space-4);
+  overflow-y: auto;
+}
+
+.app-picker-overlay[hidden] {
+  display: none;
+}
+
+.app-picker {
+  /* min-width: 0 overrides the flex item's default "auto" minimum, which
+     is otherwise its content's min-content size — the same overflow bug
+     class already fixed once in this project (see components.css's
+     .notice span comment): the application ID rendered below
+     (.app-picker__result-meta) is one long underscore-joined token with
+     no natural break point, so without this it forces the whole modal
+     wider than the viewport at 320-414px instead of wrapping. */
+  min-width: 0;
+  width: 100%;
+  max-width: 480px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.app-picker__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.app-picker__header h3 {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.app-picker__search-field {
+  margin: 0;
+}
+
+.app-picker__results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.app-picker__result {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.app-picker__result:hover,
+.app-picker__result:focus-visible {
+  background: var(--color-surface-alt);
+  border-color: var(--color-border-strong);
+}
+
+.app-picker__result-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.app-picker__result-main strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.app-picker__result-meta {
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.app-picker__empty {
+  text-align: center;
+  color: var(--color-text-muted);
+  padding: var(--space-6) var(--space-3);
+  font-size: 0.88rem;
+  margin: 0;
+}

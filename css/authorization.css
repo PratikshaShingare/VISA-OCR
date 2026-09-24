@@ -1,0 +1,100 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Cover & Authorization (wizard step 6)
+   The Generate bar / notice / field-grid classes are shared with
+   css/hotels.css (.hotel-generate-bar, .field, .field-grid, .field-hint,
+   .notice) rather than redefined here — same visual language, no
+   duplicated CSS (project rule 15).
+   ========================================================================== */
+
+.auth-tabs {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.auth-tab {
+  padding: var(--space-3) var(--space-4);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-tab:hover {
+  color: var(--color-text);
+}
+
+.auth-tab.is-active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+.auth-tab-panel {
+  display: none;
+}
+
+.auth-tab-panel.is-active {
+  display: block;
+}
+
+.auth-tab-panel .card {
+  margin-bottom: var(--space-5);
+}
+
+.auth-tab-panel .card h3 {
+  margin: 0 0 var(--space-2);
+}
+
+.auth-tab-panel .card > p {
+  margin: 0 0 var(--space-4);
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.auth-person-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.auth-person-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.auth-person-row:has(input:checked) {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.auth-person-row.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.auth-person-row input[type="checkbox"] {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.auth-person-row__name {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.auth-person-row__meta {
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+}
