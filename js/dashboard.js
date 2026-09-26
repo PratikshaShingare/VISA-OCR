@@ -14,18 +14,53 @@
   // Phase 1 (document-centric redesign): per explicit instruction, the
   // per-status KPI cards (New / Documents Pending / Under Review / Ready for
   // Submission / Submitted / Processing / Approved / Rejected) were removed
-  // and NOT replaced with anything else — that decision is unchanged here.
-  // Dashboard-improvements pass (31-section rebuild spec, "visual
-  // hierarchy"): ONE additional real, computed card is added alongside it —
-  // never a second row of per-status cards, and never a guessed number.
-  // "Documents Generated" counts real generatedAt timestamps already
-  // written by hotels.js/authorization.js/cover-letter.js/invitation.js/
-  // checklist-letter.js's own KhannaState.updateApplication() calls; an
-  // application with zero real generation events contributes 0, honestly.
+  // as their own full row — that decision is unchanged here: this pass adds
+  // a small number of additional real, computed cards, never a second row
+  // of per-status cards, and never a guessed number.
+  // "Documents Generated" / "Documents This Week" count real generatedAt
+  // timestamps already written by hotels.js/authorization.js/
+  // cover-letter.js/invitation.js/checklist-letter.js's own
+  // KhannaState.updateApplication() calls; an application with zero real
+  // generation events contributes 0, honestly. "Active Applications" is
+  // total minus the statuses that mean the work is effectively done
+  // (Submitted / Processing / Approved / Rejected / Cancelled) — a real
+  // aggregate derived from KhannaState.getStats()'s own per-status counts,
+  // not a new source of truth.
   var STAT_CARDS = [
     { key: "total", label: "Total Applications" },
+    { key: "active", label: "Active Applications" },
     { key: "documentsGenerated", label: "Documents Generated" },
+    { key: "documentsThisWeek", label: "Documents This Week" },
   ];
+
+  var CLOSED_STATUSES = ["Submitted", "Processing", "Approved", "Rejected", "Cancelled"];
+  var WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+  // Every real generatedAt timestamp across every document type a single
+  // application has produced (hotel vouchers, both authorization letters,
+  // the cover letter, the invitation letter, and each initor's own covering
+  // letter) — the shared source both countDocumentsGenerated() and
+  // countRecentDocumentEvents() fold over, so the two stats and the
+  // per-application badge in Recent Applications can never drift apart.
+  function collectGeneratedTimestamps(app) {
+    var stamps = [];
+    if (app.coverLetter && app.coverLetter.generatedAt) stamps.push(app.coverLetter.generatedAt);
+    if (app.authorization) {
+      if (app.authorization.passport && app.authorization.passport.generatedAt) stamps.push(app.authorization.passport.generatedAt);
+      if (app.authorization.company && app.authorization.company.generatedAt) stamps.push(app.authorization.company.generatedAt);
+    }
+    if (app.invitation && app.invitation.generatedAt) stamps.push(app.invitation.generatedAt);
+    if (app.initorsLetters && app.initorsLetters.perPerson) {
+      Object.keys(app.initorsLetters.perPerson).forEach(function (personId) {
+        var entry = app.initorsLetters.perPerson[personId];
+        if (entry && entry.generatedAt) stamps.push(entry.generatedAt);
+      });
+    }
+    (app.hotels || []).forEach(function (hotel) {
+      if (hotel.voucherGeneratedAt) stamps.push(hotel.voucherGeneratedAt);
+    });
+    return stamps;
+  }
 
   // Counts real generation EVENTS across every document type this app
   // supports, not just "has this application generated anything" — each
@@ -37,23 +72,36 @@
   function countDocumentsGenerated(apps) {
     var count = 0;
     apps.forEach(function (app) {
-      if (app.coverLetter && app.coverLetter.generatedAt) count += 1;
-      if (app.authorization) {
-        if (app.authorization.passport && app.authorization.passport.generatedAt) count += 1;
-        if (app.authorization.company && app.authorization.company.generatedAt) count += 1;
-      }
-      if (app.invitation && app.invitation.generatedAt) count += 1;
-      if (app.initorsLetters && app.initorsLetters.perPerson) {
-        Object.keys(app.initorsLetters.perPerson).forEach(function (personId) {
-          var entry = app.initorsLetters.perPerson[personId];
-          if (entry && entry.generatedAt) count += 1;
-        });
-      }
-      (app.hotels || []).forEach(function (hotel) {
-        if (hotel.voucherGeneratedAt) count += 1;
+      count += collectGeneratedTimestamps(app).length;
+    });
+    return count;
+  }
+
+  // Same events, but only those genuinely timestamped within the last 7
+  // days — real recent activity, not a rolling guess. Timestamps are
+  // ISO strings (see utils.formatDate's own callers); Date.parse returns
+  // NaN for anything malformed, which correctly never counts as "recent".
+  function countRecentDocumentEvents(apps) {
+    var cutoff = Date.now() - WEEK_MS;
+    var count = 0;
+    apps.forEach(function (app) {
+      collectGeneratedTimestamps(app).forEach(function (stamp) {
+        var t = Date.parse(stamp);
+        if (!isNaN(t) && t >= cutoff) count += 1;
       });
     });
     return count;
+  }
+
+  // Total minus the statuses that mean the work is effectively out of
+  // staff's hands (submitted onward) — every value here comes straight out
+  // of KhannaState.getStats()'s own real per-status counts.
+  function countActiveApplications(stats) {
+    var closed = 0;
+    CLOSED_STATUSES.forEach(function (s) {
+      closed += stats[s] || 0;
+    });
+    return (stats.total || 0) - closed;
   }
 
   function applicantLabel(app) {
@@ -65,7 +113,10 @@
     var container = utils.qs("[data-dashboard-stats]");
     if (!container) return;
     var stats = global.KhannaState.getStats();
-    stats.documentsGenerated = countDocumentsGenerated(global.KhannaState.getApplications());
+    var apps = global.KhannaState.getApplications();
+    stats.documentsGenerated = countDocumentsGenerated(apps);
+    stats.documentsThisWeek = countRecentDocumentEvents(apps);
+    stats.active = countActiveApplications(stats);
     container.innerHTML = STAT_CARDS.map(function (card) {
       return (
         '<div class="card stat-card">' +
@@ -97,14 +148,16 @@
       apps
         .map(function (app, i) {
           var border = i < apps.length - 1 ? "border-bottom:1px solid var(--color-border);" : "";
+          var docCount = collectGeneratedTimestamps(app).length;
+          var docLabel = docCount === 0 ? "No documents yet" : docCount === 1 ? "1 document generated" : docCount + " documents generated";
           return (
-            '<div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);padding:var(--space-4) var(--space-5);' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);flex-wrap:wrap;padding:var(--space-4) var(--space-5);' +
             border +
             '">' +
             '<div style="min-width:0;">' +
             '<div style="font-weight:600;">' + utils.escapeHtml(applicantLabel(app)) + "</div>" +
             '<div style="font-size:.78rem;color:var(--color-text-faint);">' +
-            utils.escapeHtml(app.id) + " · Updated " + utils.formatDate(app.updatedAt) +
+            utils.escapeHtml(app.id) + " · Updated " + utils.formatDate(app.updatedAt) + " · " + docLabel +
             "</div>" +
             "</div>" +
             '<span class="badge ' + utils.statusBadgeClass(app.status) + '">' + utils.escapeHtml(app.status) + "</span>" +

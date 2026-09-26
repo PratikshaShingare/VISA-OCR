@@ -99,6 +99,13 @@
   color: var(--color-danger);
 }
 
+/* Distinct from --error: a partial, recoverable degradation (PDF preview
+   unavailable but the DOCX download still works) reads as a caution, not
+   a broken feature — see document-viewer.js's _setPdfUnavailable(). */
+.doc-viewer__status--warning {
+  color: var(--color-warning);
+}
+
 .doc-viewer__actions {
   display: flex;
   align-items: center;

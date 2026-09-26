@@ -57,8 +57,12 @@ def test_every_expanded_visa_type_and_employment_status_is_accepted():
 
 
 def test_unknown_document_id_is_rejected_not_silently_dropped():
+    """ValueError (not RequiredDocumentLetterError) — this is client-supplied
+    bad input, mapped to a clean HTTP 400 by app.py, same as an invalid
+    country/visa type/employment status. RequiredDocumentLetterError is
+    reserved for the reference template itself being malformed."""
     skip_if_missing(rdl.TEMPLATE_PATH)
-    with pytest.raises(rdl.RequiredDocumentLetterError):
+    with pytest.raises(ValueError):
         rdl.generate_required_document_letter_docx(
             country="Nepal", visa_type="Tourist", document_ids=["not_a_real_document_id"]
         )

@@ -163,7 +163,18 @@
     this.zoomLabelEl = this.el.querySelector("[data-dv='zoom-label']");
     this.metaEl = this.el.querySelector("[data-dv='meta']");
     this.docxBtn = this.el.querySelector("[data-dv='download-docx']");
+    this.pdfBtn = this.el.querySelector("[data-dv='download-pdf']");
     this.regenerateBtn = this.el.querySelector("[data-dv='regenerate']");
+
+    // Root-cause UX fix: "Download PDF" must never sit there enabled while
+    // there is no actual PDF to download — before this fix it stayed
+    // clickable even after a failed/pending generation and silently did
+    // nothing when clicked (this.pdfBlob was null, so _downloadPdf() just
+    // returned). Reproduced live: with PDF conversion unavailable (no
+    // LibreOffice/CloudConvert), clicking "Download PDF" gave no feedback
+    // at all — indistinguishable from a broken button. Disabled by default
+    // here and only re-enabled once a real PDF blob exists (see refresh()).
+    this.pdfBtn.disabled = true;
 
     if (typeof this.options.loadDocx === "function") {
       this.docxBtn.hidden = false;
@@ -257,11 +268,48 @@
     this._renderCurrentPage();
   };
 
-  DocumentViewerInstance.prototype._setStatus = function (message, isError) {
+  // `level` is one of undefined/"neutral" (plain, e.g. "Generating…"),
+  // "warning" (something needs attention but the rest of the workflow
+  // still works — e.g. PDF unavailable while DOCX is fine), or "error"
+  // (nothing usable came back at all). Kept backward-compatible with the
+  // original boolean isError callers (true -> "error").
+  DocumentViewerInstance.prototype._setStatus = function (message, level) {
+    if (level === true) level = "error";
+    if (level === false || level == null) level = "neutral";
     this.statusEl.hidden = !message;
     this.statusEl.textContent = message || "";
-    this.statusEl.classList.toggle("doc-viewer__status--error", !!isError);
+    this.statusEl.classList.toggle("doc-viewer__status--error", level === "error");
+    this.statusEl.classList.toggle("doc-viewer__status--warning", level === "warning");
     this.canvasEl.hidden = !!message;
+  };
+
+  // Root-cause fix: PDF conversion can genuinely be unavailable in an
+  // environment (no LibreOffice installed, or CloudConvert not yet
+  // configured — see pdf_conversion.py) without the DOCX generation itself
+  // being broken at all; they are two entirely separate backend calls.
+  // Before this fix the viewer surfaced PDF failures as a single raw,
+  // technical error string with no distinction between "the whole feature
+  // is down" and "only the preview/PDF path is down, DOCX is fine" — which
+  // reads as alarming/broken even when most of the document workflow is
+  // completely healthy. This keeps the FULL real error message (nothing is
+  // hidden — project rule 9) but leads with a calm, accurate headline and
+  // explicitly points at the DOCX download when it's available.
+  DocumentViewerInstance.prototype._setPdfUnavailable = function (reason) {
+    var hasDocx = typeof this.options.loadDocx === "function";
+    var message = "PDF preview temporarily unavailable. " + reason;
+    if (hasDocx) {
+      message += " You can still download the Word (.docx) document below.";
+    }
+    // "warning", not "error": when DOCX is still available this is a
+    // partial, recoverable degradation, not a broken feature — the whole
+    // point of this fix is that it must not read as one.
+    this._setStatus(message, hasDocx ? "warning" : "error");
+  };
+
+  DocumentViewerInstance.prototype._updatePdfButtonAvailability = function () {
+    if (!this.pdfBtn) return;
+    this.pdfBtn.disabled = !this.pdfBlob;
+    this.pdfBtn.title = this.pdfBlob ? "" : "PDF preview is currently unavailable — see the message above.";
   };
 
   DocumentViewerInstance.prototype.refresh = function () {
@@ -269,6 +317,8 @@
     var token = ++this._renderToken;
     this._setStatus("Generating document…", false);
     this.docxBlob = null;
+    this.pdfBlob = null;
+    this._updatePdfButtonAvailability();
 
     if (typeof this.options.loadPdf !== "function") {
       this._setStatus("No preview available for this document.", true);
@@ -282,6 +332,7 @@
         var result = results[1];
         self.pdfBlob = result.blob;
         self.pdfFilename = result.filename || self.pdfFilename;
+        self._updatePdfButtonAvailability();
         return self.pdfBlob.arrayBuffer().then(function (buf) {
           if (token !== self._renderToken || self.destroyed) return;
           return pdfjsLib.getDocument({ data: buf }).promise.then(function (doc) {
@@ -297,10 +348,9 @@
       })
       .catch(function (err) {
         if (token !== self._renderToken || self.destroyed) return;
-        self._setStatus(
-          "Could not generate a preview: " + (err && err.message ? err.message : "unknown error") + ".",
-          true
-        );
+        self.pdfBlob = null;
+        self._updatePdfButtonAvailability();
+        self._setPdfUnavailable((err && err.message ? err.message : "Unknown error.").replace(/\.?$/, "."));
       });
   };
 

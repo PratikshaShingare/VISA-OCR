@@ -113,7 +113,12 @@ def _fill_letter(
 
     unknown_ids = [d for d in (document_ids or []) if d not in visa_requirements_data.DOCUMENT_CATALOG]
     if unknown_ids:
-        raise RequiredDocumentLetterError(
+        # Client-supplied input, not a template/structure integrity failure —
+        # ValueError (mapped to HTTP 400 by app.py's _stream_document), same
+        # as the country/visa-type/employment-status checks just above.
+        # RequiredDocumentLetterError is reserved for cases where the real
+        # reference template itself doesn't match what this engine expects.
+        raise ValueError(
             f"Unknown document id(s) {unknown_ids!r} — not present in the document catalog. "
             "Refusing to silently drop or guess at an unrecognised selection."
         )

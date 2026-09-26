@@ -90,7 +90,7 @@ class OCRProvider:
     def ocr_text(self, gray_image, config: str = "") -> str:
         raise NotImplementedError
 
-    def ocr_mean_confidence_and_text(self, gray_image) -> Tuple[float, str]:
+    def ocr_mean_confidence_and_text(self, gray_image, config: str = "") -> Tuple[float, str]:
         """Returns (mean word confidence on a 0-100 scale, joined recognized
         text) — used only for scoring which of 4 candidate rotations looks
         most like real, confidently-read text
@@ -125,8 +125,8 @@ class TesseractOCRProvider(OCRProvider):
     def ocr_text(self, gray_image, config: str = "") -> str:
         return self._pytesseract.image_to_string(gray_image, config=config)
 
-    def ocr_mean_confidence_and_text(self, gray_image) -> Tuple[float, str]:
-        data = self._pytesseract.image_to_data(gray_image, output_type=self._pytesseract.Output.DICT)
+    def ocr_mean_confidence_and_text(self, gray_image, config: str = "") -> Tuple[float, str]:
+        data = self._pytesseract.image_to_data(gray_image, output_type=self._pytesseract.Output.DICT, config=config)
         confidences = [int(c) for c in data.get("conf", []) if str(c).strip() not in ("-1", "")]
         mean_conf = statistics.mean(confidences) if confidences else 0.0
         text = " ".join(t for t in data.get("text", []) if t.strip())
@@ -245,7 +245,9 @@ class GoogleVisionOCRProvider(OCRProvider):
             return text
         return " ".join(w["text"] for w in self._words(full_text_annotation))
 
-    def ocr_mean_confidence_and_text(self, gray_image) -> Tuple[float, str]:
+    def ocr_mean_confidence_and_text(self, gray_image, config: str = "") -> Tuple[float, str]:
+        # `config` (Tesseract PSM/whitelist flags) has no Vision equivalent
+        # — same deliberate no-op as ocr_text() above.
         full_text_annotation = self._annotate(gray_image)
         words = self._words(full_text_annotation)
         text = " ".join(w["text"] for w in words) or full_text_annotation.get("text", "")

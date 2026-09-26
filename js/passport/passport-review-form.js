@@ -255,23 +255,89 @@
     }
   }
 
+  // Maps a raw backend warning sentence to a short field label for the
+  // collapsible detail list. Backend-owned wording (ocr_runner.py) stays
+  // the single source of truth for WHY something needs review; this is
+  // purely a presentation label so the compact list reads as "Field —
+  // reason" instead of a wall of full sentences. Falls back to "Page"
+  // for anything unrecognized rather than silently dropping a warning —
+  // a genuine backend warning must never disappear just because its
+  // wording doesn't match a known pattern here.
+  var WARNING_LABEL_PATTERNS = [
+    { re: /passport number check digit/i, label: "Passport number" },
+    { re: /date of birth check digit/i, label: "Date of birth" },
+    { re: /passport expiry check digit/i, label: "Passport expiry" },
+    { re: /mrz composite check digit/i, label: "MRZ" },
+    { re: /mrz lines were not detected/i, label: "MRZ" },
+    { re: /orientation could not be determined/i, label: "Page orientation" },
+    { re: /this page looks blank/i, label: "Page image" },
+  ];
+
+  function warningLabel(message) {
+    for (var i = 0; i < WARNING_LABEL_PATTERNS.length; i++) {
+      if (WARNING_LABEL_PATTERNS[i].re.test(message)) return WARNING_LABEL_PATTERNS[i].label;
+    }
+    return "Page";
+  }
+
+  // Trims the backend's own standard "— please verify manually." suffix
+  // for the compact detail line (the collapsible section's own heading
+  // already says "needs review" / "Verification required", so repeating
+  // it on every single line was exactly the noisy repetition being fixed)
+  // — never touches the message itself, only this display copy.
+  function warningReason(message) {
+    return message.replace(/\s*[—-]\s*please verify manually\.?\s*$/i, "").trim();
+  }
+
+  /**
+   * Compact-by-default OCR warning UI (redesigned per explicit staff
+   * feedback that a wall of individual warning banners looked alarming
+   * even when the underlying OCR read was largely reliable):
+   *
+   *  - Zero warnings: a single small, calm confirmation — never nothing,
+   *    so staff still get an explicit "this was checked" signal, and
+   *    never a big banner, since nothing here needs their attention.
+   *  - One or more warnings: ONE compact summary line ("Verification
+   *    required — N field(s) need review") that expands, on click, into
+   *    the actual per-field detail. Nothing is hidden or downgraded —
+   *    every genuine warning the backend returned is still listed in
+   *    full — this only changes how much space it takes up before staff
+   *    choose to look.
+   */
   function renderWarnings(container, warnings) {
     var box = utils.qs("[data-ocr-warnings]", container);
     if (!box) return;
-    if (!warnings || !warnings.length) {
-      box.innerHTML = "";
+    var list = warnings || [];
+
+    if (!list.length) {
+      box.innerHTML =
+        '<div class="notice notice-success">' +
+        '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="m20 6-11 11-5-5"/></svg>' +
+        "<span>OCR result looks reliable — no fields were flagged for extra verification.</span>" +
+        "</div>";
       return;
     }
-    box.innerHTML = warnings
+
+    var itemsHtml = list
       .map(function (w) {
         return (
-          '<div class="notice notice-warning">' +
-          '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>' +
-          "<span>" + utils.escapeHtml(w) + "</span>" +
-          "</div>"
+          "<li><strong>" + utils.escapeHtml(warningLabel(w)) + "</strong> — " +
+          utils.escapeHtml(warningReason(w)) + "</li>"
         );
       })
       .join("");
+
+    box.innerHTML =
+      '<details class="notice notice-warning ocr-warning-summary">' +
+      "<summary>" +
+      '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>' +
+      "<span>Verification required — " + list.length + (list.length === 1 ? " field needs review" : " fields need review") + "</span>" +
+      "</summary>" +
+      '<div class="ocr-warning-summary__body">' +
+      "<p>Verification details</p>" +
+      '<ul class="ocr-warning-summary__list">' + itemsHtml + "</ul>" +
+      "</div>" +
+      "</details>";
   }
 
   function setBanner(container, mode) {

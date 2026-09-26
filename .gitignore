@@ -26,3 +26,5 @@ Thumbs.db
 # GitHub through exactly this folder once already (see project history) —
 # keep this ignored.
 Claude outputs/
+
+.vercel

@@ -312,6 +312,74 @@
   color: var(--color-success);
 }
 
+/* ---------------- Compact OCR verification summary (Phase 2 addendum) ----
+   Redesigned so a stack of individual check-digit/orientation warnings
+   reads as ONE compact, collapsible line by default — "Verification
+   required — N fields need review" — rather than a wall of alarming
+   banners, without hiding or softening any individual warning: every one
+   is still listed in full once expanded (see renderWarnings() in
+   passport-review-form.js). Built on the existing .notice/.notice-warning
+   look so it stays visually consistent with every other notice in the
+   app, not a new one-off style. */
+.ocr-warning-summary {
+  display: block;
+  padding: 0;
+}
+
+.ocr-warning-summary > summary {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+}
+
+.ocr-warning-summary > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ocr-warning-summary > summary::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  margin-left: auto;
+  margin-top: 4px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  flex: none;
+  opacity: 0.6;
+}
+
+.ocr-warning-summary[open] > summary::after {
+  transform: rotate(-135deg);
+  margin-top: 8px;
+}
+
+.ocr-warning-summary__body {
+  padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + 24px);
+}
+
+.ocr-warning-summary__body > p {
+  margin: 0 0 var(--space-1);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-faint);
+}
+
+.ocr-warning-summary__list {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 0.85rem;
+}
+
 /* ---------------- Scroll-fade affordance (Phase 12) ----------------
    A real, scroll-position-driven hint that a horizontally-scrollable strip
    (a wide data table, the wizard stepper) has more content off to one
