@@ -3,29 +3,7 @@
    Tested at 320 / 375 / 390 / 414 / 768 / 1024 / 1280 / 1440+
    ========================================================================== */
 
-/* Below desktop (1024px — matches the sidebar's own breakpoint in
-   css/sidebar.css): collapse the header's primary-nav into the mobile
-   drawer. This used to happen at 767px, but the header's primary-nav only
-   ever listed Dashboard/Applications, so it can't carry the six document
-   links the sidebar normally shows — leaving it visible from 768-1023px
-   (tablet) meant that range had neither the sidebar (hidden below 1024px)
-   nor the drawer (only appeared below 768px), so the six document
-   workspaces and Upload Passport were unreachable there. Moved to 1024px
-   so the drawer (which does carry every link — see index.html's
-   .mobile-nav__panel) takes over at the same point the sidebar disappears.
-   Phase 1 of the document-first redesign. */
-@media (max-width: 1023px) {
-  .primary-nav {
-    display: none;
-  }
-
-  .nav-toggle {
-    display: inline-flex;
-  }
-}
-
-/* Below tablet: mobile-only spacing/sizing adjustments (unrelated to the
-   primary-nav/drawer breakpoint above, which now applies up to 1023px). */
+/* Below tablet: mobile-only spacing/sizing adjustments. */
 @media (max-width: 767px) {
   .brand__subtitle {
     display: none;
@@ -94,12 +72,33 @@
   }
 
   /* The mobile nav drawer's own links (.mobile-nav__panel reuses
-     .primary-nav__link, which is otherwise a desktop-only, hidden-below-768
-     component) get the same treatment — this only affects the drawer
-     instance since .primary-nav itself stays display:none below 768px. */
+     .primary-nav__link for its styling — the header's own .primary-nav
+     container no longer exists, so this class now lives only here) get
+     larger touch-friendly sizing below 768px. */
   .mobile-nav__panel .primary-nav__link {
     padding: var(--space-3);
     font-size: 0.92rem;
+  }
+}
+
+/* On real phones (this app's own 320/375/390/414 required widths all fall
+   here), pushing .app-main over by a fixed ~300px open menu the css/layout.css
+   push-layout rule uses at wider widths would leave main content only
+   20-70px wide — technically zero overflow, but not usable (project rule
+   13: "avoid horizontal overflow" is the floor, not the bar — mobile must
+   be designed INTENTIONALLY). Below 576px the open menu instead takes the
+   FULL width, so .app-main (flex:1, min-width:0 — css/sidebar.css) shrinks
+   to 0 and is cleanly out of the way rather than squeezed into an
+   unreadable sliver; closing the menu returns it to full width exactly as
+   before. Still a push, not a floating overlay — no backdrop, no dimming —
+   just a push all the way to 100%. */
+@media (max-width: 575px) {
+  .mobile-nav.is-open {
+    width: 100%;
+  }
+
+  .mobile-nav__panel {
+    width: 100%;
   }
 }
 

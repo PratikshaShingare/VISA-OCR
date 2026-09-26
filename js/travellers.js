@@ -178,10 +178,15 @@
       "<h2>Accompanying travellers</h2>" +
       "<p>Anyone travelling with the applicant on this same application. Each traveller gets their own passport upload and OCR review, just like the applicant.</p>" +
       "</div>" +
+      '<div class="view-header__actions">' +
+      '<button class="btn btn-secondary btn-sm" type="button" data-action="use-existing-traveller">' +
+      "Use Existing Traveller" +
+      "</button>" +
       '<button class="btn btn-primary btn-sm" type="button" data-action="add-traveller">' +
       '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>' +
       "Add traveller" +
       "</button>" +
+      "</div>" +
       "</div>" +
       '<div class="traveller-list" data-travellers-list></div>' +
       '<div data-traveller-panel></div>';
@@ -191,6 +196,19 @@
       if (!app) return;
       var traveller = global.KhannaState.addTraveller(app.id, "");
       openPanel(traveller.id);
+    });
+
+    // Phase 5: the traveller-side equivalent of the document pages' "Use
+    // Existing Applicant" button (Phase 2) — pulls a traveller already
+    // saved from any earlier application onto this one instead of staff
+    // re-typing their passport/contact details from scratch.
+    utils.on(r, "click", "[data-action='use-existing-traveller']", function () {
+      var app = getApp();
+      if (!app || !global.KhannaTravellerPicker) return;
+      global.KhannaTravellerPicker.open(function (profile) {
+        var traveller = global.KhannaState.applyTravellerProfileToApplication(app.id, profile.id, profile.relation || "");
+        if (traveller) openPanel(traveller.id);
+      });
     });
 
     utils.on(r, "click", "[data-action='edit-traveller']", function (e, target) {

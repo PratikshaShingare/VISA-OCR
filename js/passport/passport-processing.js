@@ -19,6 +19,32 @@
   var reviewForm = global.KhannaPassportReviewForm;
   var preview = global.KhannaPassportPreview;
 
+  // Shown only on the standalone Upload Passport page (config.showContinueToDocument),
+  // never inside the wizard's own step 1 — once this person's passport is saved and
+  // verified, staff can jump straight into generating any of this application's
+  // documents without hunting through the sidebar.
+  var CONTINUE_TO_DOCUMENT_LINKS = [
+    { view: "cover-letter", label: "Cover Letter" },
+    { view: "hotel-blocking", label: "Hotel Blocking" },
+    { view: "passport-authorization", label: "Passport Authorization Letter" },
+    { view: "company-authorization", label: "Company Authorization Letter" },
+    { view: "invitation-letter", label: "Invitation Letter" },
+    { view: "checklist-letter", label: "Checklist Letter" },
+  ];
+
+  function continueToDocumentHtml() {
+    var links = CONTINUE_TO_DOCUMENT_LINKS.map(function (d) {
+      return '<a class="btn btn-secondary btn-sm" href="#/' + d.view + '">' + d.label + "</a>";
+    }).join("");
+    return (
+      '<div class="passport-continue-to-document card" data-passport-continue-to-document hidden>' +
+      "<h3>Continue to document</h3>" +
+      "<p>Passport details are saved for this applicant. Choose which document to generate next.</p>" +
+      '<div class="passport-continue-to-document__grid">' + links + "</div>" +
+      "</div>"
+    );
+  }
+
   /**
    * @param {Object} config
    *   root: HTMLElement — mount point
@@ -26,6 +52,7 @@
    *   getPerson: (app) => Person  (e.g. app.applicant)
    *   savePerson: (app, personPatch, activityMessage) => void
    *   registerValidator: (fn) => void  — wires this step's completeness into the wizard footer
+   *   showContinueToDocument: boolean — standalone Upload Passport page only
    */
   function createController(config) {
     var session = null; // built fresh each time a person is loaded
@@ -45,6 +72,7 @@
         resultByPage: {}, // pageIndex -> last OCR result for that page
         status: "idle", // idle | counting-pages | processing | error
         errorMessage: null,
+        isPdf: false,
       };
     }
 
@@ -81,6 +109,9 @@
         '<div class="passport-review">' +
         '<div class="passport-review__actions">' +
         '<button type="button" class="btn btn-primary btn-sm" data-passport-run-ocr>Run OCR</button>' +
+        '<button type="button" class="btn btn-secondary btn-sm" data-passport-run-ocr-openrouter ' +
+        'title="Testing path — calls an OpenRouter vision model instead of the Tesseract/Google Vision pipeline above. Single image only.">' +
+        "Run OCR (OpenRouter — testing)</button>" +
         '<button type="button" class="btn btn-ghost btn-sm" data-passport-replace>Replace file</button>' +
         '<span class="passport-review__status" data-passport-status></span>' +
         "</div>" +
@@ -89,7 +120,8 @@
         '<button type="button" class="btn btn-primary" data-passport-save>Save passport details</button>' +
         "</div>" +
         "</div>" +
-        "</div>";
+        "</div>" +
+        (config.showContinueToDocument ? continueToDocumentHtml() : "");
 
       reviewForm.bindInteractions(r);
       bindEvents(r);
@@ -115,6 +147,12 @@
     function setStatus(r, text) {
       var el = utils.qs("[data-passport-status]", r);
       if (el) el.textContent = text || "";
+    }
+
+    function updateContinueToDocumentVisibility(r) {
+      if (!config.showContinueToDocument) return;
+      var el = utils.qs("[data-passport-continue-to-document]", r);
+      if (el) el.hidden = !isPersonComplete();
     }
 
     function currentRotation() {
@@ -147,7 +185,20 @@
         {
           imageSrc: imageSrc,
           placeholderLabel: placeholderLabel,
-          rotationDeg: result ? 0 : currentRotation(), // once processed, the backend already returns an upright image
+          // Real bug fixed here (Phase 3): this used to be `result ? 0 :
+          // currentRotation()` — once a page had been OCR'd, the rotate
+          // buttons still updated rotationByPage internally but the CSS
+          // transform stayed frozen at 0deg, so clicking Rotate on an
+          // already-processed page produced NO visible change at all (found
+          // via a real Playwright test: rotate + flip + flip-back all
+          // stayed "rotate(0deg)"). Always showing currentRotation() here
+          // gives immediate visual feedback either way; runOcr() below now
+          // resets a page's rotationByPage to 0 the moment its processed
+          // image comes back (the backend has already baked that rotation
+          // into the pixels via forced_rotation — confirmed against a real
+          // image: forced_rotation=90 swaps the returned image's
+          // width/height), so the display never double-rotates.
+          rotationDeg: currentRotation(),
           pageIndex: session.currentPageIndex,
           totalPages: session.totalPages,
           busy: session.status === "processing",
@@ -185,6 +236,14 @@
       showWorkspace(r);
 
       var isPdf = /pdf$/i.test(file.type) || /\.pdf$/i.test(file.name);
+      session.isPdf = isPdf;
+      var openRouterBtn = utils.qs("[data-passport-run-ocr-openrouter]", r);
+      if (openRouterBtn) {
+        openRouterBtn.disabled = isPdf;
+        openRouterBtn.title = isPdf
+          ? "This testing path only supports a single image (JPG/PNG/WEBP), not a PDF."
+          : "Testing path — calls an OpenRouter vision model instead of the Tesseract/Google Vision pipeline above. Single image only.";
+      }
       if (!isPdf) {
         var reader = new FileReader();
         reader.onload = function () {
@@ -222,9 +281,50 @@
         function (result) {
           session.status = "idle";
           session.resultByPage[session.currentPageIndex] = result;
+          // The rotation just requested (forcedRotation, above) is now
+          // baked into result.processedImageBase64's actual pixels — reset
+          // this page's tracked rotation to 0 so the preview shows the
+          // already-correct image at rotate(0deg) instead of rotating it a
+          // second time on top of itself. Rotating again from here starts a
+          // fresh delta for the *next* Run OCR call.
+          session.rotationByPage[session.currentPageIndex] = 0;
           if (session.imageRef) {
             imageStore.update(session.imageRef, { processedDataUrl: "data:image/png;base64," + result.processedImageBase64 });
           }
+          setStatus(r, "");
+          renderPreview(r);
+          reviewForm.applyOcrResult(r, result);
+        },
+        function (err) {
+          session.status = "error";
+          session.errorMessage = err.message;
+          renderPreview(r);
+          setStatus(r, err.message);
+        }
+      );
+    }
+
+    /**
+     * TESTING PATH — separate from runOcr() above: calls the OpenRouter
+     * vision-model endpoint instead of the production Tesseract/Google
+     * Vision pipeline, but still applies its result through the SAME
+     * reviewForm.applyOcrResult() so it renders identically (same field
+     * contract — see openrouter_ocr.py's module docstring). Does not touch
+     * session.rotationByPage or imageStore's processedDataUrl the way
+     * runOcr() does, since this path returns no processed/rotated image —
+     * the existing original upload preview (or "not previewed" placeholder)
+     * is left exactly as-is.
+     */
+    function runOcrOpenRouter(r) {
+      if (!session || !session.file || session.isPdf) return;
+      session.status = "processing";
+      setStatus(r, "Running OCR via OpenRouter (testing) — this can take a few seconds...");
+      renderPreview(r);
+
+      api.processPassportOpenRouter(session.file).then(
+        function (result) {
+          session.status = "idle";
+          session.resultByPage[session.currentPageIndex] = result;
           setStatus(r, "");
           renderPreview(r);
           reviewForm.applyOcrResult(r, result);
@@ -259,8 +359,18 @@
       });
 
       config.savePerson(app, personPatch, "Passport details saved");
+      // Phase 2 of the document-centric rebuild: mirror the just-saved
+      // applicant into the reusable profile pool immediately, so it's
+      // available to every document page's "Use Existing Applicant" picker
+      // right away — not only from this one application (spec: "Save
+      // Applicant -> becomes reusable immediately across all document
+      // modules"). Traveller entries get the equivalent hook via
+      // config.onPersonSaved in travellers.js when that flow adopts this
+      // same controller; not every config here represents an applicant.
+      if (config.onPersonSaved) config.onPersonSaved(app);
       reviewForm.setBanner(r, values.verified ? "verified" : "extracted");
       if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
+      updateContinueToDocumentVisibility(r);
       setStatus(r, "Saved.");
     }
 
@@ -315,6 +425,10 @@
         runOcr(r);
       });
 
+      utils.on(r, "click", "[data-passport-run-ocr-openrouter]", function () {
+        runOcrOpenRouter(r);
+      });
+
       utils.on(r, "click", "[data-passport-save]", function () {
         savePerson(r);
       });
@@ -340,6 +454,7 @@
         showWorkspace(r);
       }
       renderPreview(r);
+      updateContinueToDocumentVisibility(r);
     }
 
     if (config.registerValidator) config.registerValidator(isPersonComplete);
@@ -367,6 +482,11 @@
       savePerson: function (app, personPatch, activityMessage) {
         global.KhannaState.updateApplication(app.id, { applicant: personPatch }, activityMessage);
       },
+      onPersonSaved: function (app) {
+        if (global.KhannaState.syncApplicantProfileFromApplication) {
+          global.KhannaState.syncApplicantProfileFromApplication(app.id);
+        }
+      },
       registerValidator: function (fn) {
         if (global.KhannaRouter) global.KhannaRouter.registerStepValidator("new-application", 1, fn);
       },
@@ -381,9 +501,58 @@
     if (location.hash.indexOf("new-application") !== -1) controller.render();
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initApplicantStep);
-  } else {
+  // ---- Bootstrap the standalone "Upload Passport" page instance (Phase 5) ----
+  // A second, independent createController() instance — its own closure, its
+  // own session — mounted into index.html's [data-upload-passport-page-root]
+  // (the "Upload Passport" nav link / sidebar tile / dashboard card, all
+  // pointing at #/upload-passport). Reuses the exact same OCR/preview/review
+  // pipeline as the wizard's step 1 above; nothing here is reimplemented.
+  // Like every other standalone document page (document-workspace.js's
+  // DOC_VIEWS), it reads/writes whichever application is currently active —
+  // if none is active yet, document-workspace.js's own "Create new
+  // application" bar (rendered above this mount point) handles that, and
+  // this controller's render() picks it up via the same khanna:navigate
+  // event once one exists.
+  function initStandalonePage() {
+    var utils2 = global.KhannaUtils;
+    var mountPoint = utils2.qs("[data-upload-passport-page-root]");
+    if (!mountPoint) return;
+
+    var controller = createController({
+      root: mountPoint,
+      instanceId: "applicant-standalone",
+      showContinueToDocument: true,
+      getApplication: function () {
+        return global.KhannaState.getActiveApplication();
+      },
+      getPerson: function (app) {
+        return app.applicant;
+      },
+      savePerson: function (app, personPatch, activityMessage) {
+        global.KhannaState.updateApplication(app.id, { applicant: personPatch }, activityMessage);
+      },
+      onPersonSaved: function (app) {
+        if (global.KhannaState.syncApplicantProfileFromApplication) {
+          global.KhannaState.syncApplicantProfileFromApplication(app.id);
+        }
+      },
+    });
+
+    document.addEventListener("khanna:navigate", function (e) {
+      if (e.detail.view === "upload-passport") controller.render();
+    });
+
+    if (location.hash.indexOf("upload-passport") !== -1) controller.render();
+  }
+
+  function initPassportProcessing() {
     initApplicantStep();
+    initStandalonePage();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initPassportProcessing);
+  } else {
+    initPassportProcessing();
   }
 })(window);

@@ -54,6 +54,9 @@ import hotel_voucher_engine
 import invitation_letter_engine
 import ocr_providers
 import ocr_runner
+import openrouter_ocr
+import required_document_letter_engine
+import visa_requirements_data
 
 app = FastAPI(title="Khanna Travels & Holidays — Local Backend", version="0.1.0")
 
@@ -152,6 +155,47 @@ async def process_passport(
     return result
 
 
+@app.post("/api/passport/process-openrouter")
+async def process_passport_openrouter(file: UploadFile = File(...)):
+    """TESTING PATH — a second, independent passport-OCR route that calls an
+    OpenRouter vision model instead of the existing Tesseract/Google Cloud
+    Vision pipeline above. Deliberately separate from /api/passport/process:
+    it does not call ocr_runner.process_passport_file, does not share its
+    orientation/deskew/crop image pipeline, and is wired to its own,
+    clearly-labelled frontend button (see js/passport/passport-processing.js)
+    so staff can compare the two without the production OCR path being
+    touched at all. See openrouter_ocr.py for the full design/security
+    notes — in short: OPENROUTER_API_KEY lives only in this process's
+    environment, is read fresh on every call, and is never sent to or
+    accepted from the frontend.
+
+    Single image only (JPG/PNG/WEBP) — this testing path implements
+    "passport image -> OCR extraction -> structured JSON" only, not PDF or
+    multi-page handling."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in openrouter_ocr.MIME_BY_EXTENSION:
+        raise HTTPException(
+            400,
+            f"Unsupported file type '{ext}' for this OCR test path. "
+            f"Allowed: {sorted(openrouter_ocr.MIME_BY_EXTENSION)} (a scanned image, not a PDF).",
+        )
+
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "File too large (max 25MB).")
+    if not contents:
+        raise HTTPException(400, "Uploaded file is empty.")
+
+    try:
+        result = openrouter_ocr.extract_passport_fields_via_openrouter(contents, file.filename or "")
+    except openrouter_ocr.OpenRouterOCRError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:  # noqa: BLE001 — surface as a clean 500, never a raw stack trace to the UI
+        raise HTTPException(500, f"OpenRouter passport processing failed: {e}")
+
+    return result
+
+
 @app.post("/api/passport/page-count")
 async def page_count(file: UploadFile = File(...)):
     ext = os.path.splitext(file.filename or "")[1].lower()
@@ -175,6 +219,64 @@ async def page_count(file: UploadFile = File(...)):
             pass
 
 
+PREVIEW_CONVERTIBLE_EXTENSIONS = {".docx"}
+MAX_PREVIEW_UPLOAD_BYTES = 25 * 1024 * 1024  # 25MB — same cap as a passport upload
+
+
+@app.post("/api/documents/preview-convert")
+async def preview_convert(file: UploadFile = File(...)):
+    """Phase 3 fix for the "DOCX preview does not work properly" bug report.
+
+    A browser cannot reliably render a .docx file inline — window.open()-ing
+    its raw bytes either downloads it or shows garbled XML, which is exactly
+    the fake, non-functional "preview" project rule 9 rules out. The correct
+    fix (per the project's own instructions) is a real backend conversion to
+    PDF, which browsers DO render natively. This reuses the exact same,
+    already-tested docx_utils.convert_docx_bytes_to_pdf() every generated
+    document's own PDF download already goes through (project rule 15 — no
+    second conversion path) — local LibreOffice or CloudConvert, whichever
+    PDF_CONVERSION_PROVIDER resolves to.
+
+    This is a READ-ONLY preview: the uploaded bytes are converted in memory
+    and streamed straight back, never written anywhere the original staff
+    upload could be confused with or overwrite. The frontend's own copy of
+    the original .docx (js/documents/document-file-store.js, in-memory only)
+    is never touched by this endpoint — the conversion result is a separate,
+    disposable PDF the browser tab discards once closed."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in PREVIEW_CONVERTIBLE_EXTENSIONS:
+        raise HTTPException(
+            400,
+            f"Preview conversion only supports {sorted(PREVIEW_CONVERTIBLE_EXTENSIONS)} files, not '{ext}'. "
+            "Images and PDFs already open directly in the browser and don't need this endpoint.",
+        )
+
+    contents = await file.read()
+    if len(contents) > MAX_PREVIEW_UPLOAD_BYTES:
+        raise HTTPException(400, "File too large to preview (max 25MB).")
+    if not contents:
+        raise HTTPException(400, "Uploaded file is empty.")
+
+    base_name = os.path.splitext(file.filename or "document")[0] or "document"
+    try:
+        pdf_bytes = docx_utils.convert_docx_bytes_to_pdf(contents, base_name=base_name)
+    except docx_utils.DocxBuildError as e:
+        # Never silently fall back to "just download the original" — that
+        # would hide the real reason a staff member sees no preview at all
+        # (project rule: "do not simply hide the error message").
+        raise HTTPException(503, f"Could not convert this file for preview: {e}")
+    except Exception as e:  # noqa: BLE001 — surface as a clean 500, never a raw stack trace to the UI
+        raise HTTPException(500, f"Preview conversion failed: {e}")
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        # "inline", not "attachment" — this is a preview to view in a new
+        # tab, not a file to save, unlike every download endpoint above.
+        headers={"Content-Disposition": 'inline; filename="preview.pdf"'},
+    )
+
+
 @app.get("/api/applications/status-list")
 def status_list():
     """Exposes the canonical status list from data_model.py so the frontend
@@ -183,8 +285,22 @@ def status_list():
 
 
 def _safe_filename(applicant_name: Optional[str], suffix: str, ext: str) -> str:
-    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", applicant_name or suffix).strip("_") or suffix
-    return f"{safe_name}_{suffix}.{ext}"
+    """Builds "<Applicant_Name>_<Suffix>.<ext>" when a real applicant name
+    was given, or just "<Suffix>.<ext>" when it wasn't — never
+    "<Suffix>_<Suffix>.<ext>". Real bug found while testing the Required
+    Document Letter endpoint (which, being a standalone letter with no
+    Applicant/Traveller record, always calls this with applicant_name=None):
+    the previous version fell back to using `suffix` itself as the
+    applicant-name slot, then unconditionally appended `_{suffix}` again,
+    producing a doubled, unprofessional-looking filename
+    (`Required_Document_Letter_Required_Document_Letter.docx`) for every
+    document type whenever no applicant name is available — not new to this
+    endpoint, just newly surfaced by it."""
+    if applicant_name:
+        safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", applicant_name).strip("_")
+        if safe_name:
+            return f"{safe_name}_{suffix}.{ext}"
+    return f"{suffix}.{ext}"
 
 
 async def _read_optional_signature(signature: Optional[UploadFile]) -> Optional[bytes]:
@@ -680,6 +796,122 @@ async def initors_covering_letter(
         error_types=(invitation_letter_engine.InvitationLetterError, docx_utils.DocxBuildError),
         applicant_name=parsed.applicantName,
         suffix="Initors_Covering_Letter",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Required Document Letter — a standalone checklist letter, not tied to any
+# Applicant/Traveller record. The country/visa-type/employment-status rules
+# live server-side (this file + visa_requirements_data.py /
+# required_document_letter_engine.py), not as frontend if/else, so the
+# frontend only ever needs to render whatever this backend returns.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/visa-requirements/countries")
+def visa_requirements_countries():
+    """Real, static reference data for every dropdown/checklist on the
+    Required Document Letter page: the country typeahead, the expanded
+    visa-type and employment-status lists, the bank-statement/ITR/
+    processing-time pick-lists, and the full document catalog (every
+    document this letter can ever list, in canonical order) — a single
+    source of truth the frontend renders from, never its own hardcoded
+    option lists or document if/else chains."""
+    return {
+        "countries": visa_requirements_data.COUNTRIES,
+        "visaTypes": visa_requirements_data.VISA_TYPES,
+        "employmentStatuses": visa_requirements_data.EMPLOYMENT_STATUSES,
+        "bankStatementDurationOptions": visa_requirements_data.BANK_STATEMENT_DURATION_OPTIONS,
+        "itrYearOptions": visa_requirements_data.ITR_YEAR_OPTIONS,
+        "processingTimeOptions": visa_requirements_data.PROCESSING_TIME_OPTIONS,
+        "documentCatalog": visa_requirements_data.get_document_catalog(),
+    }
+
+
+@app.get("/api/visa-requirements/suggested-documents")
+def visa_requirements_suggested_documents(
+    visaType: str,
+    employmentStatus: str = "Other",
+    invited: bool = False,
+    hasUsVisaCopy: bool = False,
+    country: Optional[str] = None,
+):
+    """Returns which document ids should be PRE-CHECKED for this enquiry,
+    computed from the structured DOCUMENT_CATALOG rule engine (never a
+    frontend if/else chain — see visa_requirements_data.py's own module
+    docstring). Every id returned is still just a suggestion: the frontend
+    renders it as an editable, pre-checked checkbox, and only whatever is
+    actually still checked at generation time is sent back to
+    /api/documents/required-document-letter."""
+    if visaType not in visa_requirements_data.VISA_TYPES:
+        raise HTTPException(400, f"visaType must be one of {visa_requirements_data.VISA_TYPES}.")
+    if employmentStatus not in visa_requirements_data.EMPLOYMENT_STATUSES:
+        raise HTTPException(400, f"employmentStatus must be one of {visa_requirements_data.EMPLOYMENT_STATUSES}.")
+    circumstances = []
+    if invited:
+        circumstances.append("invited")
+    if hasUsVisaCopy:
+        circumstances.append("hasUsVisaCopy")
+    return {
+        "suggestedDocumentIds": visa_requirements_data.resolve_suggested_document_ids(
+            visaType, employmentStatus, circumstances, country
+        )
+    }
+
+
+@app.get("/api/visa-requirements/lookup")
+def visa_requirements_lookup(country: str, visaType: str):
+    """Returns whatever REAL, sourced figures this app currently has for
+    this exact country+visaType combination (see visa_requirements_data.py's
+    own module docstring for how narrow that currently is) — an empty
+    object when nothing has been verified, never a guessed number. The
+    frontend uses this only to PRE-FILL editable fields; staff can always
+    override it, and a missing field is shown as "Check current official
+    requirement," never silently left blank with no explanation."""
+    if visaType not in visa_requirements_data.VISA_TYPES:
+        raise HTTPException(400, f"visaType must be one of {visa_requirements_data.VISA_TYPES}.")
+    return visa_requirements_data.lookup(country, visaType)
+
+
+class RequiredDocumentLetterRequest(BaseModel):
+    country: str
+    visaType: str
+    employmentStatus: str = "Other"
+    documentIds: list[str] = []
+    bankStatementDuration: str = ""
+    itrYears: str = ""
+    processingTime: str = ""
+    visaFees: str = ""
+    format: Literal["docx", "pdf"] = "docx"
+    applicantName: Optional[str] = None
+
+
+@app.post("/api/documents/required-document-letter")
+def required_document_letter(payload: RequiredDocumentLetterRequest):
+    if not payload.country or not payload.country.strip():
+        raise HTTPException(400, "Country is required.")
+    if payload.visaType not in visa_requirements_data.VISA_TYPES:
+        raise HTTPException(400, f"visaType must be one of {visa_requirements_data.VISA_TYPES}.")
+    if payload.employmentStatus not in visa_requirements_data.EMPLOYMENT_STATUSES:
+        raise HTTPException(400, f"employmentStatus must be one of {visa_requirements_data.EMPLOYMENT_STATUSES}.")
+
+    kwargs = dict(
+        country=payload.country,
+        visa_type=payload.visaType,
+        employment_status=payload.employmentStatus,
+        document_ids=payload.documentIds,
+        bank_statement_duration=payload.bankStatementDuration,
+        itr_years=payload.itrYears,
+        processing_time=payload.processingTime,
+        visa_fees=payload.visaFees,
+    )
+    return _stream_document(
+        build_docx=lambda: required_document_letter_engine.generate_required_document_letter_docx(**kwargs),
+        build_pdf=lambda: required_document_letter_engine.generate_required_document_letter_pdf(**kwargs),
+        fmt=payload.format,
+        error_types=(required_document_letter_engine.RequiredDocumentLetterError, docx_utils.DocxBuildError),
+        applicant_name=payload.applicantName,
+        suffix="Required_Document_Letter",
     )
 
 

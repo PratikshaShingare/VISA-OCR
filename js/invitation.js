@@ -259,12 +259,9 @@
   function invitationGenerateBarHtml(ready, generatedAt) {
     return (
       '<div class="hotel-generate-bar">' +
-      '<button class="btn btn-primary btn-sm" type="button" data-action="generate-invitation" data-format="docx"' +
+      '<button class="btn btn-primary btn-sm" type="button" data-action="generate-invitation"' +
       (ready ? "" : " disabled") +
-      ">Generate (.docx)</button>" +
-      '<button class="btn btn-secondary btn-sm" type="button" data-action="generate-invitation" data-format="pdf"' +
-      (ready ? "" : " disabled") +
-      ">Download as PDF</button>" +
+      ">Generate &amp; Preview Invitation Letter</button>" +
       (generatedAt ? '<span class="hotel-generate-bar__meta">Last generated ' + utils.formatDate(generatedAt) + "</span>" : "") +
       "</div>"
     );
@@ -324,6 +321,15 @@
     refreshInvitationReadiness();
   }
 
+  // Kept as a SIBLING of [data-invitation-card] (mounted once in
+  // mountSkeleton(), never rebuilt by renderInvitationCard()'s own
+  // box.innerHTML= rebuild) — same reasoning as cover-letter.js's own
+  // data-doc-preview placement, so the mounted viewer instance survives
+  // every readiness/field re-render instead of being torn out from under
+  // itself. Keyed by root() since this box is stable across re-renders
+  // within a given mount (dual-mount safe: wizard step vs standalone page).
+  var invitationViewerHandles = new WeakMap();
+
   /* ---------------------------------------------------------------------
    * Invitation Letter — generation
    * ------------------------------------------------------------------- */
@@ -372,40 +378,60 @@
     };
   }
 
-  function generateInvitation(format, btn) {
+  function invitationSignatureFile(app) {
+    var state = invitationState(app);
+    var cached = state.signatureFileRef ? fileStore.get(state.signatureFileRef) : null;
+    return cached ? cached.file : null;
+  }
+
+  function generateInvitation(btn) {
     var app = getApp();
     if (!app || !invitationReady(app)) return;
     showInvitationError("");
+    var r = root();
+    if (!r) return;
+    var previewBox = utils.qs("[data-invitation-preview]", r);
+    if (!previewBox) return;
+
+    var handle = invitationViewerHandles.get(r);
+    if (!handle) {
+      handle = global.KhannaDocumentViewer.mount(previewBox, {
+        title: "Invitation Letter",
+        loadPdf: function () {
+          var a = getApp();
+          return api.downloadInvitationLetter(buildInvitationPayload(a, "pdf"), invitationSignatureFile(a));
+        },
+        loadDocx: function () {
+          var a = getApp();
+          return api.downloadInvitationLetter(buildInvitationPayload(a, "docx"), invitationSignatureFile(a));
+        },
+        onEdit: function () {
+          var box = utils.qs("[data-invitation-card]", root());
+          if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
+        },
+        onRegenerate: function () {
+          return Promise.resolve();
+        },
+      });
+      invitationViewerHandles.set(r, handle);
+    }
+
     var originalText = btn.textContent;
     btn.disabled = true;
     btn.textContent = "Generating…";
-
-    var payload = buildInvitationPayload(app, format);
-    var state = invitationState(app);
-    var cached = state.signatureFileRef ? fileStore.get(state.signatureFileRef) : null;
-    var signatureFile = cached ? cached.file : null;
-
-    api.downloadInvitationLetter(payload, signatureFile).then(
-      function (result) {
-        utils.triggerFileDownload(result.blob, result.filename);
+    handle
+      .refresh()
+      .then(function () {
         var ts = new Date().toISOString();
-        global.KhannaState.updateApplication(
-          app.id,
-          { invitation: { generatedAt: ts } },
-          "Invitation Letter generated (" + format.toUpperCase() + ")"
-        );
-        // The generate bar's "Last generated" text picks up the fresh
-        // timestamp via the KhannaState.subscribe callback below —
-        // deliberately not refreshed directly here, matching
-        // authorization.js/cover-letter.js's own discipline (success and
-        // failure both flow through exactly one place).
-      },
-      function (err) {
+        global.KhannaState.updateApplication(app.id, { invitation: { generatedAt: ts } }, "Invitation Letter generated");
+      })
+      .catch(function (err) {
+        showInvitationError((err && err.message) || "Could not generate the invitation letter.");
+      })
+      .finally(function () {
         btn.disabled = false;
         btn.textContent = originalText;
-        showInvitationError((err && err.message) || "Could not generate the invitation letter.");
-      }
-    );
+      });
   }
 
   /* ---------------------------------------------------------------------
@@ -584,14 +610,9 @@
       '<div class="hotel-generate-bar">' +
       '<button class="btn btn-primary btn-sm" type="button" data-action="generate-initors" data-person-id="' +
       utils.escapeHtml(personId) +
-      '" data-format="docx"' +
+      '"' +
       (ready ? "" : " disabled") +
-      ">Generate (.docx)</button>" +
-      '<button class="btn btn-secondary btn-sm" type="button" data-action="generate-initors" data-person-id="' +
-      utils.escapeHtml(personId) +
-      '" data-format="pdf"' +
-      (ready ? "" : " disabled") +
-      ">Download as PDF</button>" +
+      ">Generate &amp; Preview Letter</button>" +
       (generatedAt ? '<span class="hotel-generate-bar__meta">Last generated ' + utils.formatDate(generatedAt) + "</span>" : "") +
       "</div>"
     );
@@ -638,6 +659,7 @@
       personGenerateBarHtml(person.id, ready, entry.generatedAt) +
       "</div>" +
       '<div data-initors-error="' + utils.escapeHtml(person.id) + '"></div>' +
+      '<div data-initors-preview="' + utils.escapeHtml(person.id) + '" style="margin-top:var(--space-4);"></div>' +
       "</div>"
     );
   }
@@ -721,7 +743,20 @@
       : "";
   }
 
-  function generateInitors(personId, format, btn) {
+  // Keyed by the previewBox element itself, not by root() or personId:
+  // personSectionHtml() (and therefore its own data-initors-preview box) is
+  // fully rebuilt by renderInitorsCard() on every selection/signature
+  // change, so a fresh box element naturally gets a fresh viewer handle —
+  // same reasoning as authorization.js's own per-previewBox keying.
+  var initorsViewerHandles = new WeakMap();
+
+  function initorsSignatureFile(app, personId) {
+    var entry = perPersonEntry(app, personId);
+    var cached = entry.signatureFileRef ? fileStore.get(entry.signatureFileRef) : null;
+    return cached ? cached.file : null;
+  }
+
+  function generateInitors(personId, btn) {
     var app = getApp();
     if (!app) return;
     var selected = selectedInitorsPeople(app);
@@ -735,33 +770,64 @@
     if (!subject || !spouse || !initorsPersonReadyToGenerate(app, subject)) return;
 
     showInitorsError(personId, "");
+    var r = root();
+    if (!r) return;
+    var previewBox = utils.qs('[data-initors-preview="' + personId + '"]', r);
+    if (!previewBox) return;
+
+    var handle = initorsViewerHandles.get(previewBox);
+    if (!handle) {
+      handle = global.KhannaDocumentViewer.mount(previewBox, {
+        title: (subject.fullName || "Traveller") + "’s Initors Covering Letter",
+        loadPdf: function () {
+          var a = getApp();
+          var sel = selectedInitorsPeople(a);
+          var subj = sel.find(function (p) { return p.id === personId; });
+          var sp = sel.find(function (p) { return p.id !== personId; });
+          if (!subj || !sp) return Promise.reject(new Error("Select exactly 2 people to continue."));
+          return api.downloadInitorsCoveringLetter(buildInitorsPayload(a, subj, sp, "pdf"), initorsSignatureFile(a, personId));
+        },
+        loadDocx: function () {
+          var a = getApp();
+          var sel = selectedInitorsPeople(a);
+          var subj = sel.find(function (p) { return p.id === personId; });
+          var sp = sel.find(function (p) { return p.id !== personId; });
+          if (!subj || !sp) return Promise.reject(new Error("Select exactly 2 people to continue."));
+          return api.downloadInitorsCoveringLetter(buildInitorsPayload(a, subj, sp, "docx"), initorsSignatureFile(a, personId));
+        },
+        onEdit: function () {
+          var box = utils.qs('[data-initors-person-section="' + personId + '"]', root());
+          if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
+        },
+        onRegenerate: function () {
+          return Promise.resolve();
+        },
+      });
+      initorsViewerHandles.set(previewBox, handle);
+    }
+
     var originalText = btn.textContent;
     btn.disabled = true;
     btn.textContent = "Generating…";
-
-    var payload = buildInitorsPayload(app, subject, spouse, format);
-    var entry = perPersonEntry(app, personId);
-    var cached = entry.signatureFileRef ? fileStore.get(entry.signatureFileRef) : null;
-    var signatureFile = cached ? cached.file : null;
-
-    api.downloadInitorsCoveringLetter(payload, signatureFile).then(
-      function (result) {
-        utils.triggerFileDownload(result.blob, result.filename);
+    handle
+      .refresh()
+      .then(function () {
         var ts = new Date().toISOString();
         var patch = { initorsLetters: { perPerson: {} } };
         patch.initorsLetters.perPerson[personId] = { generatedAt: ts };
         global.KhannaState.updateApplication(
           app.id,
           patch,
-          "Initors Covering Letter generated for " + (subject.fullName || "traveller") + " (" + format.toUpperCase() + ")"
+          "Initors Covering Letter generated for " + (subject.fullName || "traveller")
         );
-      },
-      function (err) {
+      })
+      .catch(function (err) {
+        showInitorsError(personId, (err && err.message) || "Could not generate this covering letter.");
+      })
+      .finally(function () {
         btn.disabled = false;
         btn.textContent = originalText;
-        showInitorsError(personId, (err && err.message) || "Could not generate this covering letter.");
-      }
-    );
+      });
   }
 
   /* ---------------------------------------------------------------------
@@ -816,6 +882,7 @@
       "</div>" +
       "</div>" +
       '<div class="card" data-invitation-card></div>' +
+      '<div data-invitation-preview style="margin-top:var(--space-4);"></div>' +
       '<div class="card" data-initors-card></div>';
 
     utils.on(r, "change", "[data-invitation-invitee]", function (e, target) {
@@ -933,12 +1000,12 @@
 
     utils.on(r, "click", "[data-action='generate-invitation']", function (e, target) {
       if (target.disabled) return;
-      generateInvitation(target.getAttribute("data-format"), target);
+      generateInvitation(target);
     });
 
     utils.on(r, "click", "[data-action='generate-initors']", function (e, target) {
       if (target.disabled) return;
-      generateInitors(target.getAttribute("data-person-id"), target.getAttribute("data-format"), target);
+      generateInitors(target.getAttribute("data-person-id"), target);
     });
   }
 

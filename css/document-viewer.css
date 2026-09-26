@@ -1,0 +1,143 @@
+/* ==========================================================================
+   Shared A4 document viewer (js/document-viewer.js)
+   Mounted inline into a document module's own card area — not a modal
+   overlay — so it sits naturally below that module's existing form,
+   matching the rest of this app's card-based layout language instead of
+   introducing a second visual system. Full screen is handled by the
+   Fullscreen API on .doc-viewer itself (see :fullscreen rules below), not
+   a custom overlay.
+   ========================================================================== */
+
+.doc-viewer {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.doc-viewer:fullscreen {
+  border-radius: 0;
+  height: 100vh;
+}
+
+.doc-viewer:fullscreen .doc-viewer__body {
+  background: var(--color-surface-alt);
+}
+
+.doc-viewer__toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+}
+
+.doc-viewer__title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-right: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.doc-viewer__group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.doc-viewer__zoom-label,
+.doc-viewer__page-label {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  min-width: 64px;
+  text-align: center;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  cursor: default;
+}
+
+.doc-viewer__body {
+  flex: 1;
+  min-height: 320px;
+  max-height: 72vh;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--color-bg);
+}
+
+.doc-viewer:fullscreen .doc-viewer__body {
+  max-height: none;
+}
+
+.doc-viewer__canvas {
+  box-shadow: var(--shadow-md);
+  background: #fff;
+  /* Exact A4/Letter page proportions come from pdf.js's own viewport —
+     nothing here forces an aspect ratio, so whatever page size the real
+     generated PDF actually has is what renders. */
+}
+
+.doc-viewer__status {
+  padding: var(--space-8) var(--space-4);
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.doc-viewer__status--error {
+  color: var(--color-danger);
+}
+
+.doc-viewer__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+}
+
+.doc-viewer__actions-left {
+  font-size: 0.78rem;
+  color: var(--color-text-faint);
+}
+
+.doc-viewer__actions-right {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 575px) {
+  .doc-viewer__toolbar {
+    justify-content: center;
+  }
+  .doc-viewer__title {
+    flex-basis: 100%;
+    text-align: center;
+    margin-right: 0;
+  }
+  .doc-viewer__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .doc-viewer__actions-right {
+    justify-content: stretch;
+  }
+  .doc-viewer__actions-right .btn {
+    flex: 1;
+  }
+}

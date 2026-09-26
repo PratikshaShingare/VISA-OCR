@@ -20,6 +20,8 @@
 
   var APPLICATIONS_KEY = "khanna_applications_v1";
   var ACTIVE_KEY = "khanna_active_application_id_v1";
+  var APPLICANT_PROFILES_KEY = "khanna_applicant_profiles_v1";
+  var TRAVELLER_PROFILES_KEY = "khanna_traveller_profiles_v1";
 
   // Canonical application status list (Master Prompt, Phase 26).
   var STATUSES = [
@@ -292,6 +294,260 @@
   }
 
   /* ---------------------------------------------------------------------
+   * Reusable Applicant/Traveller profile pool (Phase 2 of the
+   * document-centric rebuild — 2026-09-25).
+   *
+   * Before this, an Application's `applicant` and each `travellers[]` entry
+   * were data that existed ONLY inside that one Application record — the
+   * exact same person had to be re-entered from scratch for every new
+   * document/application. This adds a separate, shared pool of person
+   * profiles ("APR"/"TPR" ids) that any document page can search and reuse,
+   * per the explicit spec: "Applicant/Traveller Profile -> saved reusable
+   * information -> Documents use this information".
+   *
+   * Deliberately NOT a breaking change: `application.applicant` and
+   * `application.travellers[]` keep exactly their old shape and are still
+   * what every document engine/controller reads today (project rule
+   * "EXISTING DATA MUST REMAIN REUSABLE"). A profile is a denormalized
+   * COPY of a person's data (same emptyPerson() shape, project rule 15 — no
+   * second copy of that shape), linked back to the application via a plain
+   * `applicantId` / traveller `profileId` string. `makeProfileStore()` is
+   * one generic factory shared by both pools instead of two hand-written
+   * copies of the same CRUD/search logic.
+   * ------------------------------------------------------------------- */
+
+  // Same person, same passport number (or, lacking that, same name+DOB) ==
+  // same profile. This is the one place "is this the same person" is
+  // decided, so both Applicant and Traveller pools — and the migration
+  // below — agree on it.
+  function profileDedupeKey(person) {
+    var passportNo = person && person.passport && person.passport.current && person.passport.current.number;
+    if (passportNo && String(passportNo).trim()) return "pp:" + String(passportNo).trim().toUpperCase();
+    var full = person && person.fullName && person.fullName.trim();
+    if (!full) return null;
+    return "nd:" + full.toLowerCase() + "|" + ((person && person.dob) || "");
+  }
+
+  function personHasData(person) {
+    if (!person) return false;
+    var passportNo = person.passport && person.passport.current && person.passport.current.number;
+    return !!((person.fullName && person.fullName.trim()) || (passportNo && String(passportNo).trim()));
+  }
+
+  function profileHaystack(p) {
+    var passportNo = (p.passport && p.passport.current && p.passport.current.number) || "";
+    var email = (p.contact && p.contact.email) || "";
+    var country = (p.address && p.address.country) || "";
+    return [p.fullName, passportNo, email, p.nationality, country].join(" ").toLowerCase();
+  }
+
+  function makeProfileStore(kind, storageKey) {
+    var list = storage.get(storageKey, []);
+    if (!Array.isArray(list)) list = [];
+
+    function persistStore() {
+      storage.set(storageKey, list);
+    }
+
+    function getAll() {
+      return list
+        .slice()
+        .sort(function (a, b) {
+          return new Date(b.updatedAt) - new Date(a.updatedAt);
+        });
+    }
+
+    function get(id) {
+      return (
+        list.find(function (p) {
+          return p.id === id;
+        }) || null
+      );
+    }
+
+    function findByPerson(person) {
+      var key = profileDedupeKey(person);
+      if (!key) return null;
+      return (
+        list.find(function (p) {
+          return profileDedupeKey(p) === key;
+        }) || null
+      );
+    }
+
+    function search(query) {
+      var q = (query || "").trim().toLowerCase();
+      var all = getAll();
+      if (!q) return all;
+      return all.filter(function (p) {
+        return profileHaystack(p).indexOf(q) !== -1;
+      });
+    }
+
+    // Upserts by explicit id when given (an edit), else by dedupe match
+    // (passport number / name+dob) so saving the same person twice updates
+    // one profile instead of creating duplicates ("Do NOT duplicate
+    // applicant data unnecessarily").
+    function upsert(personData, id) {
+      var existing = id ? get(id) : findByPerson(personData);
+      var ts = nowIso();
+      if (existing) {
+        var merged = deepMerge(existing, personData);
+        merged.updatedAt = ts;
+        list = list.map(function (p) {
+          return p.id === existing.id ? merged : p;
+        });
+        persistStore();
+        notify();
+        return merged;
+      }
+      var created = Object.assign(deepMerge(emptyPerson(), personData), {
+        id: utils.generateId(kind === "traveller" ? "TPR" : "APR"),
+        kind: kind,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      list.push(created);
+      persistStore();
+      notify();
+      return created;
+    }
+
+    function remove(id) {
+      var before = list.length;
+      list = list.filter(function (p) {
+        return p.id !== id;
+      });
+      persistStore();
+      notify();
+      return list.length !== before;
+    }
+
+    return { getAll: getAll, get: get, findByPerson: findByPerson, search: search, upsert: upsert, remove: remove };
+  }
+
+  var applicantProfiles = makeProfileStore("applicant", APPLICANT_PROFILES_KEY);
+  var travellerProfiles = makeProfileStore("traveller", TRAVELLER_PROFILES_KEY);
+
+  // Strips profile-only bookkeeping fields (id/kind/createdAt/updatedAt) so
+  // the rest can be dropped straight into an application's applicant/
+  // traveller person shape without leaking pool metadata onto it.
+  function personDataFromProfile(profile) {
+    var copy = Object.assign({}, profile);
+    delete copy.id;
+    delete copy.kind;
+    delete copy.createdAt;
+    delete copy.updatedAt;
+    return copy;
+  }
+
+  // Called by the document-centric app-bar's "Use Existing Applicant"
+  // picker: copies a saved profile's data onto the given application (which
+  // is exactly what every existing document controller already reads from
+  // `application.applicant`) and records the link.
+  function applyApplicantProfileToApplication(appId, profileId) {
+    var profile = applicantProfiles.get(profileId);
+    if (!profile) return null;
+    return updateApplication(
+      appId,
+      { applicant: personDataFromProfile(profile), applicantId: profile.id },
+      'Applicant "' + (profile.fullName || "Untitled applicant") + '" applied from a saved profile'
+    );
+  }
+
+  // Called right after the passport OCR/review flow saves an applicant onto
+  // the active application (passport-processing.js) — mirrors that same
+  // data into the reusable pool immediately, per spec ("Save Applicant ->
+  // becomes reusable immediately across all document modules"), and links
+  // the application to that profile going forward.
+  function syncApplicantProfileFromApplication(appId) {
+    var app = getApplication(appId);
+    if (!app || !personHasData(app.applicant)) return null;
+    var profile = applicantProfiles.upsert(app.applicant, app.applicantId || null);
+    if (app.applicantId !== profile.id) {
+      updateApplication(appId, { applicantId: profile.id });
+    }
+    return profile;
+  }
+
+  // Same idea, for one traveller entry within an application's own
+  // `travellers[]` array.
+  function syncTravellerProfileFromApplication(appId, travellerId) {
+    var traveller = getTraveller(appId, travellerId);
+    if (!traveller || !personHasData(traveller)) return null;
+    var profile = travellerProfiles.upsert(traveller, traveller.profileId || null);
+    if (traveller.profileId !== profile.id) {
+      updateTraveller(appId, travellerId, { profileId: profile.id });
+    }
+    return profile;
+  }
+
+  // The reverse direction for travellers, mirroring applyApplicantProfileToApplication
+  // above: called by the new "Use Existing Traveller" picker (travellers.js)
+  // to add a saved traveller profile onto the current application as a new
+  // traveller entry, instead of staff re-typing someone already on file
+  // (this was the one explicitly-flagged remaining gap from Phase 2 — "no
+  // picker UI yet to pull a saved traveller into a new application"). Always
+  // APPENDS a new traveller (never overwrites an existing one) since an
+  // application can have several travellers; `relation` lets the caller
+  // override the profile's last-used relation label for this application
+  // (the same person can be "Spouse" on one trip and "Colleague" on
+  // another).
+  function applyTravellerProfileToApplication(appId, profileId, relation) {
+    var app = getApplication(appId);
+    var profile = travellerProfiles.get(profileId);
+    if (!app || !profile) return null;
+    var traveller = Object.assign({}, personDataFromProfile(profile), {
+      id: utils.generateId("TRV"),
+      relation: relation || profile.relation || "",
+      profileId: profile.id,
+    });
+    var travellers = (app.travellers || []).concat([traveller]);
+    updateApplication(
+      appId,
+      { travellers: travellers },
+      'Traveller "' + (profile.fullName || "Untitled traveller") + '" applied from a saved profile'
+    );
+    return traveller;
+  }
+
+  // One-time (per app record) backfill: applications saved before this pool
+  // existed already have real applicant/traveller data embedded, just no
+  // profileId/applicantId link yet. Every already-saved application must
+  // stay fully usable (project rule "EXISTING DATA MUST REMAIN REUSABLE"),
+  // so this links them into the pool rather than requiring re-entry.
+  // Idempotent and cheap: only applications/travellers still missing a
+  // link are touched, so this is a no-op on every load after the first.
+  function migrateApplicantAndTravellerProfiles() {
+    var changed = false;
+    applications = applications.map(function (app) {
+      var next = app;
+      if (!next.applicantId && personHasData(next.applicant)) {
+        var applicantProfile = applicantProfiles.upsert(next.applicant);
+        next = Object.assign({}, next, { applicantId: applicantProfile.id });
+        changed = true;
+      }
+      if (
+        Array.isArray(next.travellers) &&
+        next.travellers.some(function (t) {
+          return !t.profileId && personHasData(t);
+        })
+      ) {
+        next = Object.assign({}, next, {
+          travellers: next.travellers.map(function (t) {
+            if (t.profileId || !personHasData(t)) return t;
+            var travellerProfile = travellerProfiles.upsert(t);
+            return Object.assign({}, t, { profileId: travellerProfile.id });
+          }),
+        });
+        changed = true;
+      }
+      return next;
+    });
+    if (changed) persist();
+  }
+
+  /* ---------------------------------------------------------------------
    * Persistence
    * ------------------------------------------------------------------- */
 
@@ -319,6 +575,7 @@
     applications = storage.get(APPLICATIONS_KEY, []);
     if (!Array.isArray(applications)) applications = [];
     activeApplicationId = storage.get(ACTIVE_KEY, null);
+    migrateApplicantAndTravellerProfiles();
   }
 
   function getApplications() {
@@ -613,6 +870,23 @@
     createEmptyPerson: emptyPerson,
     // exposed for cover-letter.js's Japan hotel-table editor (Phase 9).
     createEmptyCoverLetterHotel: emptyCoverLetterHotel,
+
+    // ---- Reusable Applicant/Traveller profile pool (Phase 2) ----
+    getApplicantProfiles: applicantProfiles.getAll,
+    getApplicantProfile: applicantProfiles.get,
+    searchApplicantProfiles: applicantProfiles.search,
+    saveApplicantProfile: applicantProfiles.upsert,
+    deleteApplicantProfile: applicantProfiles.remove,
+    applyApplicantProfileToApplication: applyApplicantProfileToApplication,
+    syncApplicantProfileFromApplication: syncApplicantProfileFromApplication,
+
+    getTravellerProfiles: travellerProfiles.getAll,
+    getTravellerProfile: travellerProfiles.get,
+    searchTravellerProfiles: travellerProfiles.search,
+    saveTravellerProfile: travellerProfiles.upsert,
+    deleteTravellerProfile: travellerProfiles.remove,
+    syncTravellerProfileFromApplication: syncTravellerProfileFromApplication,
+    applyTravellerProfileToApplication: applyTravellerProfileToApplication,
   };
 
   // Load persisted state immediately (synchronous, no DOM dependency) so

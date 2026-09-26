@@ -57,6 +57,37 @@
     return err;
   }
 
+  // Phase 3 fix — traced a real "Request failed (HTTP 404)" bug report to
+  // its actual root cause instead of just rephrasing the message.
+  //
+  // FastAPI itself ALWAYS returns a JSON body (`{"detail": "..."}`) for
+  // every response this backend can produce, including its own built-in
+  // 404 for an unmatched route (confirmed against the real running
+  // app.py: `{"detail":"Not Found"}`, already surfaced by the `body.detail`
+  // branch below). The ONLY way to hit the generic fallback message is a
+  // response whose body ISN'T parseable JSON at all — proving whatever
+  // answered this request was NOT this FastAPI backend.
+  //
+  // Reproduced two concrete ways this actually happens with a real browser
+  // (not guessed — both confirmed end-to-end against this exact codebase):
+  //   1. resolveApiBaseUrl() (below) only recognizes "localhost", "127.0.0.1"
+  //      and file: as local — opening the app via any other address (a LAN
+  //      IP, a machine hostname, an IDE Live-Server-style URL) makes it use
+  //      a RELATIVE "" API base meant for a same-origin production
+  //      deployment. Every "API" call then silently goes to the FRONTEND's
+  //      own static server (Start Frontend.bat, port 8766) instead of the
+  //      real backend — which has no /api/* routes and returns its own
+  //      genuine, same-origin (so not CORS-blocked either) 404/501 with a
+  //      plain HTML body. This is almost certainly what a real staff member
+  //      hit: it reproduces the bare "Request failed (HTTP 404)" symptom
+  //      exactly, with OCR doing nothing, and no console/CORS error to hint
+  //      at why.
+  //   2. Less likely locally (blocked by CORS in a real browser unless the
+  //      impostor also sets permissive CORS headers, which most simple dev
+  //      servers don't): a second local server occupying port 8000 instead
+  //      of the real backend.
+  // Both are covered below so this is right whichever one it turns out to
+  // be, rather than only handling the one that happened to reproduce here.
   function parseErrorResponse(response) {
     return response
       .json()
@@ -64,7 +95,36 @@
         return null;
       })
       .then(function (body) {
-        var detail = body && body.detail ? body.detail : "Request failed (HTTP " + response.status + ").";
+        var detail;
+        if (body && body.detail) {
+          detail = body.detail;
+        } else if (body) {
+          // Valid JSON, but not this backend's own error shape — some other
+          // JSON API is answering here.
+          detail =
+            "Something answered at " + response.url + " (HTTP " + response.status + "), but its response " +
+            "doesn't look like it came from the Khanna backend. Check that nothing else is using port 8000.";
+        } else if (!API_BASE_URL) {
+          // The single most likely cause, confirmed by reproduction (see
+          // the comment above): API_BASE_URL is relative, so this request
+          // went to the page's own origin, not the backend.
+          detail =
+            "This page was opened from an address (" + global.location.origin + ") this app doesn't recognize " +
+            "as a local address, so it sent this request to itself instead of the real backend at " +
+            "http://localhost:8000 (HTTP " + response.status + ", not from the Khanna backend). Open the app " +
+            "using the exact address Start Frontend.bat prints — http://localhost:8766/index.html — not a LAN " +
+            "IP, a different hostname, or an IDE's own preview URL.";
+        } else {
+          // Not JSON at all, and API_BASE_URL correctly pointed at
+          // localhost:8000 — this is the "something else is using port
+          // 8000" case (see comment above; less likely with a real browser
+          // due to CORS, but not impossible).
+          detail =
+            "Unexpected response from " + response.url + " (HTTP " + response.status + "). This backend always " +
+            "replies with real JSON, so something other than the Khanna backend is answering on this address — " +
+            "most likely another program is already using port 8000. Close any other local server bound to " +
+            "that port, make sure only \"Start Backend.bat\" is running, and try again.";
+        }
         var err = new Error(detail);
         err.status = response.status;
         return err;
@@ -90,8 +150,24 @@
     );
   }
 
+  // Phase 3: catches the "wrong server on this port" failure mode (see
+  // parseErrorResponse's comment above) proactively, before staff ever get
+  // as far as uploading a passport — a 200 OK with valid JSON that just
+  // isn't THIS backend's own health shape (`service: "khanna-backend"`)
+  // would otherwise look identical to a real, working connection.
   function checkHealth() {
-    return request(API_BASE_URL + "/api/health", { method: "GET" });
+    return request(API_BASE_URL + "/api/health", { method: "GET" }).then(function (body) {
+      if (!body || body.service !== "khanna-backend") {
+        var err = new Error(
+          "Something is responding at " + API_BASE_URL + "/api/health, but it isn't the Khanna backend " +
+          "(unexpected response). Check that nothing else is using port 8000 and that \"Start Backend.bat\" " +
+          "is the server actually running there."
+        );
+        err.isWrongServer = true;
+        throw err;
+      }
+      return body;
+    });
   }
 
   function getPageCount(file) {
@@ -114,6 +190,48 @@
       form.append("forced_rotation", String(forcedRotation));
     }
     return request(API_BASE_URL + "/api/passport/process", { method: "POST", body: form });
+  }
+
+  /**
+   * TESTING PATH — calls the separate OpenRouter vision-model OCR endpoint
+   * (backend/python/openrouter_ocr.py) instead of the production Tesseract/
+   * Google Vision pipeline above. Single image only (no PDF, no page
+   * index/rotation) — see that module's docstring for why. The API key
+   * lives only on the backend; nothing about it crosses into this file.
+   * @param {File} file a JPG/PNG/WEBP image
+   */
+  function processPassportOpenRouter(file) {
+    var form = new FormData();
+    form.append("file", file, file.name);
+    return request(API_BASE_URL + "/api/passport/process-openrouter", { method: "POST", body: form });
+  }
+
+  /**
+   * Phase 3 fix — converts a .docx to PDF purely for inline preview (see
+   * app.py's /api/documents/preview-convert docstring for why this exists:
+   * a browser can't render .docx directly, and faking a preview is exactly
+   * what project rule 9 forbids). Returns the PDF as a Blob the caller can
+   * open with URL.createObjectURL — this never touches or replaces the
+   * original file the caller already has.
+   * @param {File} file a .docx File (e.g. from KhannaDocumentFileStore)
+   * @returns {Promise<Blob>}
+   */
+  function previewConvertToPdf(file) {
+    var form = new FormData();
+    form.append("file", file, file.name);
+    return fetch(API_BASE_URL + "/api/documents/preview-convert", { method: "POST", body: form }).then(
+      function (res) {
+        if (!res.ok) {
+          return parseErrorResponse(res).then(function (err) {
+            throw err;
+          });
+        }
+        return res.blob();
+      },
+      function () {
+        throw unreachableError();
+      }
+    );
   }
 
   /**
@@ -322,11 +440,77 @@
     );
   }
 
+  /**
+   * Required Document Letter module — real, static reference data for the
+   * country dropdown/typeahead, the expanded visa-type and employment-
+   * status lists, the bank-statement/ITR/processing-time pick-lists, and
+   * the full document catalog (every checkbox this letter can ever show).
+   * A plain GET, not a document download.
+   */
+  function getVisaCountries() {
+    return request(API_BASE_URL + "/api/visa-requirements/countries", { method: "GET" });
+  }
+
+  /**
+   * Returns which document catalog ids should be PRE-CHECKED for a given
+   * enquiry (the structured rule-engine result from
+   * visa_requirements_data.resolve_suggested_document_ids) — still just a
+   * suggestion; checklist-letter.js renders every id as an editable
+   * checkbox and only sends back whatever is actually still checked.
+   * @param {Object} args { visaType, employmentStatus, invited, hasUsVisaCopy, country }
+   */
+  function getSuggestedDocuments(args) {
+    args = args || {};
+    var params = ["visaType=" + encodeURIComponent(args.visaType || "")];
+    if (args.employmentStatus) params.push("employmentStatus=" + encodeURIComponent(args.employmentStatus));
+    if (args.invited) params.push("invited=true");
+    if (args.hasUsVisaCopy) params.push("hasUsVisaCopy=true");
+    if (args.country) params.push("country=" + encodeURIComponent(args.country));
+    return request(API_BASE_URL + "/api/visa-requirements/suggested-documents?" + params.join("&"), { method: "GET" });
+  }
+
+  /**
+   * Looks up whatever REAL, sourced figures this app currently has for one
+   * exact country+visaType combination (see backend/python/
+   * visa_requirements_data.py's own module docstring for how narrow that
+   * currently is). Resolves with an EMPTY object when nothing has been
+   * verified — never a guessed number (project rule 9) — the caller (
+   * checklist-letter.js) treats that as "show 'Check current official
+   * requirement'," not as an error.
+   * @param {string} country
+   * @param {string} visaType "Transit" | "Tourist" | "Business"
+   */
+  function lookupVisaRequirement(country, visaType) {
+    var qs = "?country=" + encodeURIComponent(country) + "&visaType=" + encodeURIComponent(visaType);
+    return request(API_BASE_URL + "/api/visa-requirements/lookup" + qs, { method: "GET" });
+  }
+
+  /**
+   * Generates the Required Document Letter — a standalone checklist letter
+   * (no Applicant/Traveller record required). `documentIds` is the final,
+   * staff-editable list of checked catalog ids — the backend resolves each
+   * id to its real label (substituting bank-statement/ITR dynamic values)
+   * via visa_requirements_data.py's own rule engine; nothing is invented
+   * frontend-side.
+   * @param {Object} payload { country, visaType, employmentStatus,
+   *   documentIds, bankStatementDuration, itrYears, processingTime,
+   *   visaFees, format, applicantName }
+   */
+  function downloadRequiredDocumentLetter(payload) {
+    return downloadDocumentFile(
+      "/api/documents/required-document-letter",
+      payload,
+      "Required_Document_Letter." + (payload.format || "docx")
+    );
+  }
+
   global.KhannaApi = {
     API_BASE_URL: API_BASE_URL,
     checkHealth: checkHealth,
     getPageCount: getPageCount,
     processPassport: processPassport,
+    processPassportOpenRouter: processPassportOpenRouter,
+    previewConvertToPdf: previewConvertToPdf,
     downloadHotelVoucher: downloadHotelVoucher,
     downloadPassportAuthorization: downloadPassportAuthorization,
     downloadCompanyAuthorization: downloadCompanyAuthorization,
@@ -334,5 +518,9 @@
     downloadInvitationLetter: downloadInvitationLetter,
     downloadInitorsCoveringLetter: downloadInitorsCoveringLetter,
     exportApplicationsExcel: exportApplicationsExcel,
+    getVisaCountries: getVisaCountries,
+    getSuggestedDocuments: getSuggestedDocuments,
+    lookupVisaRequirement: lookupVisaRequirement,
+    downloadRequiredDocumentLetter: downloadRequiredDocumentLetter,
   };
 })(window);

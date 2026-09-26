@@ -59,13 +59,11 @@
   white-space: nowrap;
 }
 
-.primary-nav {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  margin-left: var(--space-4);
-}
-
+/* .primary-nav (the header's horizontal nav container) was removed — all
+   navigation now lives in the single hamburger-menu drawer (.mobile-nav
+   below), shown at every breakpoint. .primary-nav__link itself is kept:
+   the drawer's links (.mobile-nav__panel .primary-nav__link) reuse this
+   class for their own styling. */
 .primary-nav__link {
   display: inline-flex;
   align-items: center;
@@ -98,8 +96,10 @@
   gap: var(--space-2);
 }
 
+/* Always visible (menu lives only in the hamburger drawer now, at every
+   breakpoint — no separate desktop nav to fall back to). */
 .nav-toggle {
-  display: none;
+  display: inline-flex;
 }
 
 /* ---------------- Main content ---------------- */
@@ -129,6 +129,17 @@
   justify-content: space-between;
   gap: var(--space-4);
   margin-bottom: var(--space-6);
+  flex-wrap: wrap;
+}
+
+/* Wraps two-or-more action buttons in a .view-header so they lay out as
+   one flex item (row of buttons) instead of each fighting justify-content:
+   space-between individually — e.g. travellers.js's "Use Existing
+   Traveller" + "Add traveller". */
+.view-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
@@ -269,37 +280,55 @@
   color: var(--color-text-faint);
 }
 
-/* ---------------- Mobile nav drawer ---------------- */
+/* ---------------- Menu panel (hamburger-toggled, PUSH layout) ----------------
+   The single navigation surface for the whole app, at every breakpoint,
+   toggled by the header's [data-nav-toggle] hamburger button (js/app.js).
+   Per an explicit user request this is deliberately NOT a floating overlay
+   with a dimming backdrop (an earlier version of this file was exactly
+   that) — opening the menu PUSHES .app-main over instead of covering it:
+   .mobile-nav is a normal in-flow flex sibling of .app-main inside the
+   already-flex .app-body (see css/sidebar.css), collapsed to width:0 by
+   default and animating open on click; .app-main already carries
+   min-width:0 (sidebar.css) so it shrinks to make room instead of
+   overflowing. position:sticky keeps it pinned under the header as the
+   page scrolls — "static," not floating above the content on its own
+   layer — matching the old .sidebar's own proven behaviour (removed
+   earlier this same redesign) but now toggleable instead of always-open,
+   and available at every width instead of only >=1024px. */
 .mobile-nav {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: none;
+  flex: none;
+  width: 0;
+  overflow: hidden;
+  position: sticky;
+  top: var(--header-h);
+  align-self: flex-start;
+  height: calc(100vh - var(--header-h));
+  background: var(--color-surface);
+  border-right: 1px solid transparent;
+  transition: width 0.2s ease, border-color 0.2s ease;
 }
 
 .mobile-nav.is-open {
-  display: block;
+  width: min(78vw, 300px);
+  border-right-color: var(--color-border);
 }
 
+/* No longer an overlay, so there's nothing to dim behind it. */
 .mobile-nav__backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(15, 20, 28, 0.45);
+  display: none;
 }
 
+/* Kept at a fixed width regardless of the collapsed/expanded state above —
+   .mobile-nav's own width transition + overflow:hidden is what animates
+   the reveal, so this inner content never itself reflows/wraps mid-toggle. */
 .mobile-nav__panel {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(78vw, 320px);
-  background: var(--color-surface);
+  width: min(78vw, 300px);
+  height: 100%;
   padding: var(--space-5);
-  padding-top: calc(var(--space-5) + var(--safe-top));
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  box-shadow: var(--shadow-md);
+  overflow-y: auto;
 }
 
 .mobile-nav__panel .primary-nav__link {

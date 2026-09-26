@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 # Canonical application status list (Master Prompt, Phase 26).
 STATUSES: List[str] = [

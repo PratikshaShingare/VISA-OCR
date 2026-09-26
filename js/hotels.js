@@ -145,10 +145,8 @@
           "<span>Add at least one hotel with name, city and check-in/check-out dates before generating a voucher.</span>" +
           "</div>") +
       '<div class="hotel-generate-bar">' +
-      '<button class="btn btn-primary btn-sm" type="button" data-action="generate-voucher" data-format="docx"' + (ready ? "" : " disabled") + ">" +
-      "Generate Hotel Voucher (.docx)</button>" +
-      '<button class="btn btn-secondary btn-sm" type="button" data-action="generate-voucher" data-format="pdf"' + (ready ? "" : " disabled") + ">" +
-      "Download as PDF</button>" +
+      '<button class="btn btn-primary btn-sm" type="button" data-action="generate-voucher"' + (ready ? "" : " disabled") + ">" +
+      "Generate &amp; Preview Hotel Voucher</button>" +
       (lastGenerated ? '<span class="hotel-generate-bar__meta">Last generated ' + utils.formatDate(lastGenerated) + "</span>" : "") +
       "</div>" +
       '<div data-voucher-error></div>';
@@ -300,44 +298,85 @@
       : "";
   }
 
-  function generateVoucher(format, btn) {
+  // Keyed by root element (not a single shared variable) for the same
+  // reason getActiveHotelId/setActiveHotelId above are: this controller can
+  // be mounted twice at once (wizard step 5 + the standalone Hotel
+  // Blocking page), and a single shared viewer handle would let the wrong
+  // root's "Regenerate" refresh a viewer instance actually mounted in the
+  // other root's DOM.
+  var viewerHandles = new WeakMap();
+
+  function applicantNameOf(app) {
+    return [app.applicant.firstName, app.applicant.lastName].filter(Boolean).join(" ") || "Application";
+  }
+
+  function markVoucherGenerated(app) {
+    var ts = new Date().toISOString();
+    var hotels = (app.hotels || []).map(function (h) {
+      return Object.assign({}, h, { voucherGeneratedAt: ts });
+    });
+    // Goes through the normal state-change subscription (renderList() only
+    // — renderGenerateBar's own "Last generated" meta line is cosmetic and
+    // does not need to force a viewer remount, so this module does NOT
+    // resubscribe renderGenerateBar to every state change).
+    global.KhannaState.updateApplication(app.id, { hotels: hotels }, "Hotel voucher generated");
+  }
+
+  // generateAndPreview() replaces the old "Generate (.docx)" / "Download
+  // as PDF" two-button flow (a real 31-section-spec requirement: preview
+  // must show the exact generated PDF, and DOCX/PDF must both come from
+  // the shared viewer rather than two separate blind downloads). Both
+  // loadPdf/loadDocx below read getApp()/app.hotels live at CALL time (not
+  // a stale snapshot captured once), so the viewer's own "Regenerate"
+  // button — or simply reopening/editing hotels and clicking Generate
+  // again — always reflects whatever is currently saved.
+  function generateAndPreview(btn) {
     var app = getApp();
     if (!app) return;
     showVoucherError("");
+    var r = root();
+    if (!r) return;
+    var previewBox = utils.qs("[data-voucher-preview]", r);
+    if (!previewBox) return;
+
+    var handle = viewerHandles.get(r);
+    if (!handle) {
+      handle = global.KhannaDocumentViewer.mount(previewBox, {
+        title: "Hotel Voucher",
+        loadPdf: function () {
+          var a = getApp();
+          return api.downloadHotelVoucher(a.hotels, "pdf", applicantNameOf(a));
+        },
+        loadDocx: function () {
+          var a = getApp();
+          return api.downloadHotelVoucher(a.hotels, "docx", applicantNameOf(a));
+        },
+        onEdit: function () {
+          var listEl = utils.qs("[data-hotels-list]", root());
+          if (listEl) listEl.scrollIntoView({ behavior: "smooth", block: "start" });
+        },
+        onRegenerate: function () {
+          return Promise.resolve();
+        },
+      });
+      viewerHandles.set(r, handle);
+    }
+
     var originalText = btn.textContent;
     btn.disabled = true;
     btn.textContent = "Generating…";
-
-    var applicantName = [app.applicant.firstName, app.applicant.lastName].filter(Boolean).join(" ") || "Application";
-
-    api.downloadHotelVoucher(app.hotels, format, applicantName).then(
-      function (result) {
-        utils.triggerFileDownload(result.blob, result.filename);
-        var ts = new Date().toISOString();
-        var hotels = (app.hotels || []).map(function (h) {
-          return Object.assign({}, h, { voucherGeneratedAt: ts });
-        });
-        // Goes through the normal state-change subscription, which calls
-        // renderList() -> renderGenerateBar() and rebuilds this whole card
-        // (including a fresh "Last generated" line) — correct here because
-        // there is no error message that a rebuild would need to preserve.
-        global.KhannaState.updateApplication(
-          app.id,
-          { hotels: hotels },
-          "Hotel voucher generated (" + format.toUpperCase() + ", " + hotels.length + " hotel(s))"
-        );
-      },
-      function (err) {
-        // Deliberately does NOT call renderGenerateBar() here: that would
-        // rebuild this card's HTML (a fresh, empty [data-voucher-error]
-        // included) and immediately erase the message showVoucherError is
-        // about to set — a real bug caught by testing the backend-down
-        // path, not just the happy path. Only the button itself is reset.
+    handle
+      .refresh()
+      .then(function () {
+        markVoucherGenerated(app);
+      })
+      .catch(function (err) {
+        showVoucherError(err && err.message ? err.message : "Could not generate the hotel voucher.");
+      })
+      .finally(function () {
         btn.disabled = false;
         btn.textContent = originalText;
-        showVoucherError(err && err.message ? err.message : "Could not generate the hotel voucher.");
-      }
-    );
+      });
   }
 
   function mountSkeleton() {
@@ -356,7 +395,8 @@
       "</div>" +
       '<div class="hotel-list" data-hotels-list></div>' +
       '<div data-hotel-panel></div>' +
-      '<div class="card" data-voucher-generate></div>';
+      '<div class="card" data-voucher-generate></div>' +
+      '<div data-voucher-preview style="margin-top:var(--space-4);"></div>';
 
     utils.on(r, "click", "[data-action='add-hotel']", function () {
       var app = getApp();
@@ -437,7 +477,7 @@
 
     utils.on(r, "click", "[data-action='generate-voucher']", function (e, target) {
       if (target.disabled) return;
-      generateVoucher(target.getAttribute("data-format"), target);
+      generateAndPreview(target);
     });
   }
 

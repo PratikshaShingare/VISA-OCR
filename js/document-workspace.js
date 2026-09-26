@@ -60,6 +60,7 @@
         '<span class="badge ' + utils.statusBadgeClass(app.status) + '">' + utils.escapeHtml(app.status) + "</span>" +
         "</div>" +
         '<div class="doc-page-app-bar__actions">' +
+        '<button class="btn btn-secondary btn-sm" type="button" data-action="pick-doc-applicant">Use Existing Applicant</button>' +
         '<button class="btn btn-secondary btn-sm" type="button" data-action="pick-doc-application">Use existing application</button>' +
         '<button class="btn btn-secondary btn-sm" type="button" data-action="create-doc-application">Start a different application</button>' +
         "</div>" +
@@ -70,9 +71,10 @@
       '<div class="card doc-page-app-bar">' +
       '<div class="doc-page-app-bar__info">' +
       "<strong>No application selected yet</strong>" +
-      '<span class="field-hint">Create a fresh application to generate this document, or use one you already started.</span>' +
+      '<span class="field-hint">Reuse a saved applicant, or create a fresh application to generate this document.</span>' +
       "</div>" +
       '<div class="doc-page-app-bar__actions">' +
+      '<button class="btn btn-secondary btn-sm" type="button" data-action="pick-doc-applicant">Use Existing Applicant</button>' +
       '<button class="btn btn-secondary btn-sm" type="button" data-action="pick-doc-application">Use existing application</button>' +
       '<button class="btn btn-primary btn-sm" type="button" data-action="create-doc-application">Create new application</button>' +
       "</div>" +
@@ -127,6 +129,25 @@
         // document controller are refreshed explicitly, same as the
         // "create new" path above.
         global.KhannaState.setActiveApplicationId(app.id);
+        rerenderCurrentDocumentController();
+      });
+    });
+
+    // "Use Existing Applicant" (Phase 2): pulls a saved person profile from
+    // the reusable pool (core/state.js) onto whichever application is
+    // active on this document page — creating a fresh one first if none is
+    // active yet — so every field this document's controller reads from
+    // `application.applicant` is auto-populated without retyping it.
+    utils.on(document, "click", "[data-action='pick-doc-applicant']", function (e) {
+      e.preventDefault();
+      if (!global.KhannaApplicantPicker) return;
+      global.KhannaApplicantPicker.open(function (profile) {
+        var app = global.KhannaState.getActiveApplication();
+        if (!app) {
+          var user = global.KhannaAuth ? global.KhannaAuth.getCurrentUser() : null;
+          app = global.KhannaState.createApplication(user ? user.email : "");
+        }
+        global.KhannaState.applyApplicantProfileToApplication(app.id, profile.id);
         rerenderCurrentDocumentController();
       });
     });

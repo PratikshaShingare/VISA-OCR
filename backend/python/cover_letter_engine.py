@@ -64,7 +64,6 @@ from typing import Optional
 
 from docx import Document
 from docx.table import Table
-from docx.text.paragraph import Paragraph
 
 import docx_utils
 import letter_shared

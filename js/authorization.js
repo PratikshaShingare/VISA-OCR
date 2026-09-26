@@ -210,14 +210,9 @@
       '<div class="hotel-generate-bar">' +
       '<button class="btn btn-primary btn-sm" type="button" data-action="generate-authorization" data-group="' +
       group +
-      '" data-format="docx"' +
+      '"' +
       (ready ? "" : " disabled") +
-      ">Generate (.docx)</button>" +
-      '<button class="btn btn-secondary btn-sm" type="button" data-action="generate-authorization" data-group="' +
-      group +
-      '" data-format="pdf"' +
-      (ready ? "" : " disabled") +
-      ">Download as PDF</button>" +
+      ">Generate &amp; Preview</button>" +
       (generatedAt ? '<span class="hotel-generate-bar__meta">Last generated ' + utils.formatDate(generatedAt) + "</span>" : "") +
       "</div>"
     );
@@ -289,7 +284,8 @@
       "</div>" +
       '<div data-auth-readiness="passport"></div>' +
       '<div data-generate-bar="passport"></div>' +
-      '<div data-auth-error="passport"></div>';
+      '<div data-auth-error="passport"></div>' +
+      '<div data-doc-preview="passport" style="margin-top:var(--space-4);"></div>';
     refreshChecklist("passport", 2);
     refreshGenerateBar("passport");
     refreshReadinessNotice(
@@ -311,7 +307,8 @@
       "</div>" +
       '<div data-auth-readiness="company"></div>' +
       '<div data-generate-bar="company"></div>' +
-      '<div data-auth-error="company"></div>';
+      '<div data-auth-error="company"></div>' +
+      '<div data-doc-preview="company" style="margin-top:var(--space-4);"></div>';
     refreshChecklist("company", null);
     refreshGenerateBar("company");
     refreshReadinessNotice(
@@ -356,22 +353,21 @@
     return { fullName: person.fullName, passportNumber: person.passportNumber };
   }
 
-  function generateAuthorization(group, format, btn) {
-    var app = getApp();
-    if (!app) return;
-    showAuthError(group, "");
-    var originalText = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "Generating…";
+  // Keyed by group ROOT element (activeGroupRoot(group)), not by "group"
+  // string alone — the same group ("passport"/"company") can be mounted
+  // simultaneously on the wizard root AND a standalone page root (same
+  // dual-mount hazard hotels.js's viewerHandles WeakMap already guards
+  // against), so the map key must identify which physical DOM root a
+  // handle belongs to.
+  var viewerHandles = new WeakMap();
 
+  function buildAuthorizationPayload(group, app, format) {
     var applicantName = [app.applicant.firstName, app.applicant.lastName].filter(Boolean).join(" ") || "Application";
     var state = authState(app, group);
     var selected = selectedPeopleFor(app, group);
-
-    var promise;
     if (group === "passport") {
       var ordered = orderPeopleForLetter(selected);
-      promise = api.downloadPassportAuthorization({
+      return api.downloadPassportAuthorization({
         people: ordered.map(personToPassportPayload),
         recipientCentreName: state.recipientCentreName || "",
         recipientAddress: state.recipientAddress || "",
@@ -379,34 +375,64 @@
         format: format,
         applicantName: applicantName,
       });
-    } else {
-      promise = api.downloadCompanyAuthorization({
-        people: selected.map(personToCompanyPayload),
-        recipientText: state.recipientText || "",
-        format: format,
-        applicantName: applicantName,
+    }
+    return api.downloadCompanyAuthorization({
+      people: selected.map(personToCompanyPayload),
+      recipientText: state.recipientText || "",
+      format: format,
+      applicantName: applicantName,
+    });
+  }
+
+  function generateAuthorization(group, btn) {
+    var app = getApp();
+    if (!app) return;
+    showAuthError(group, "");
+    var r = activeGroupRoot(group);
+    if (!r) return;
+    var previewBox = utils.qs('[data-doc-preview="' + group + '"]', r);
+    if (!previewBox) return;
+
+    var handle = viewerHandles.get(previewBox);
+    if (!handle) {
+      handle = global.KhannaDocumentViewer.mount(previewBox, {
+        title: group === "passport" ? "Passport Authorization Letter" : "Company Authorization Letter",
+        loadPdf: function () {
+          return buildAuthorizationPayload(group, getApp(), "pdf");
+        },
+        loadDocx: function () {
+          return buildAuthorizationPayload(group, getApp(), "docx");
+        },
+        onEdit: function () {
+          var box = utils.qs('[data-auth-checklist="' + group + '"]', activeGroupRoot(group));
+          if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
+        },
+        onRegenerate: function () {
+          return Promise.resolve();
+        },
       });
+      viewerHandles.set(previewBox, handle);
     }
 
-    promise.then(
-      function (result) {
-        utils.triggerFileDownload(result.blob, result.filename);
+    var originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Generating…";
+    handle
+      .refresh()
+      .then(function () {
         var ts = new Date().toISOString();
         var patch = { authorization: {} };
         patch.authorization[group] = { generatedAt: ts };
         var label = group === "passport" ? "Passport Authorization Letter" : "Company Authorization Letter";
-        global.KhannaState.updateApplication(app.id, patch, label + " generated (" + format.toUpperCase() + ")");
-        // The generate bar picks up the fresh "Last generated" timestamp
-        // via the KhannaState.subscribe callback below — deliberately NOT
-        // called directly here, so success and failure both flow through
-        // exactly one place (matches hotels.js's own discipline).
-      },
-      function (err) {
+        global.KhannaState.updateApplication(app.id, patch, label + " generated");
+      })
+      .catch(function (err) {
+        showAuthError(group, (err && err.message) || "Could not generate the letter.");
+      })
+      .finally(function () {
         btn.disabled = false;
         btn.textContent = originalText;
-        showAuthError(group, (err && err.message) || "Could not generate the letter.");
-      }
-    );
+      });
   }
 
   /* ---------------------------------------------------------------------
@@ -499,7 +525,7 @@
 
   function onGenerateAuthorizationClick(e, target) {
     if (target.disabled) return;
-    generateAuthorization(target.getAttribute("data-group"), target.getAttribute("data-format"), target);
+    generateAuthorization(target.getAttribute("data-group"), target);
   }
 
   // Standalone Passport/Company Authorization pages (Phase 2): a single

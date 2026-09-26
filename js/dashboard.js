@@ -11,18 +11,50 @@
 
   var utils = global.KhannaUtils;
 
-  // Phase 27: the KPI cards shown on the dashboard.
+  // Phase 1 (document-centric redesign): per explicit instruction, the
+  // per-status KPI cards (New / Documents Pending / Under Review / Ready for
+  // Submission / Submitted / Processing / Approved / Rejected) were removed
+  // and NOT replaced with anything else — that decision is unchanged here.
+  // Dashboard-improvements pass (31-section rebuild spec, "visual
+  // hierarchy"): ONE additional real, computed card is added alongside it —
+  // never a second row of per-status cards, and never a guessed number.
+  // "Documents Generated" counts real generatedAt timestamps already
+  // written by hotels.js/authorization.js/cover-letter.js/invitation.js/
+  // checklist-letter.js's own KhannaState.updateApplication() calls; an
+  // application with zero real generation events contributes 0, honestly.
   var STAT_CARDS = [
     { key: "total", label: "Total Applications" },
-    { key: "New", label: "New Applications" },
-    { key: "Documents Pending", label: "Documents Pending" },
-    { key: "Under Review", label: "Under Review" },
-    { key: "Ready for Submission", label: "Ready for Submission" },
-    { key: "Submitted", label: "Submitted" },
-    { key: "Processing", label: "Processing" },
-    { key: "Approved", label: "Approved" },
-    { key: "Rejected", label: "Rejected" },
+    { key: "documentsGenerated", label: "Documents Generated" },
   ];
+
+  // Counts real generation EVENTS across every document type this app
+  // supports, not just "has this application generated anything" — each
+  // hotel voucher, each authorization letter, each cover letter, the
+  // invitation letter, and each spouse's own initors letter all count
+  // separately, matching what a staff member would actually think of as
+  // "how many documents have we generated." Never invents a number: an
+  // application with none of these timestamps set contributes 0.
+  function countDocumentsGenerated(apps) {
+    var count = 0;
+    apps.forEach(function (app) {
+      if (app.coverLetter && app.coverLetter.generatedAt) count += 1;
+      if (app.authorization) {
+        if (app.authorization.passport && app.authorization.passport.generatedAt) count += 1;
+        if (app.authorization.company && app.authorization.company.generatedAt) count += 1;
+      }
+      if (app.invitation && app.invitation.generatedAt) count += 1;
+      if (app.initorsLetters && app.initorsLetters.perPerson) {
+        Object.keys(app.initorsLetters.perPerson).forEach(function (personId) {
+          var entry = app.initorsLetters.perPerson[personId];
+          if (entry && entry.generatedAt) count += 1;
+        });
+      }
+      (app.hotels || []).forEach(function (hotel) {
+        if (hotel.voucherGeneratedAt) count += 1;
+      });
+    });
+    return count;
+  }
 
   function applicantLabel(app) {
     var name = app.applicant && app.applicant.fullName;
@@ -33,6 +65,7 @@
     var container = utils.qs("[data-dashboard-stats]");
     if (!container) return;
     var stats = global.KhannaState.getStats();
+    stats.documentsGenerated = countDocumentsGenerated(global.KhannaState.getApplications());
     container.innerHTML = STAT_CARDS.map(function (card) {
       return (
         '<div class="card stat-card">' +
@@ -46,15 +79,15 @@
   function renderRecent() {
     var container = utils.qs("[data-dashboard-recent]");
     if (!container) return;
-    var apps = global.KhannaState.getApplications().slice(0, 5);
+    var all = global.KhannaState.getApplications();
+    var apps = all.slice(0, 4);
 
     if (apps.length === 0) {
       container.innerHTML =
         '<div class="empty-state">' +
         '<svg class="icon" viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg>' +
         "<h3>No applications yet</h3>" +
-        "<p>Application counts, recent activity and pending documents will show up here once applications start coming in.</p>" +
-        '<button class="btn btn-secondary btn-sm" type="button" data-action="new-application">Create the first application</button>' +
+        "<p>Application counts and recent activity will show up here once applications start coming in. Start from a document card above, or upload a passport to create an applicant.</p>" +
         "</div>";
       return;
     }
@@ -79,7 +112,10 @@
           );
         })
         .join("") +
-      "</div>";
+      "</div>" +
+      (all.length > 4
+        ? '<div style="margin-top:var(--space-3);"><a class="btn btn-secondary btn-sm" href="#/applications" data-nav-link="applications">View All Applications</a></div>'
+        : "");
   }
 
   function render() {

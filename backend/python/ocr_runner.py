@@ -34,10 +34,8 @@ per-word confidences come from.
 from __future__ import annotations
 
 import base64
-import io
 import os
 import re
-import statistics
 import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -79,6 +77,11 @@ OLD_PASSPORT_LABEL_RE = re.compile(
     r"(?:OLD|PREVIOUS|FORMER)\s+PASSPORT\s*(?:NO\.?|NUMBER)?\s*[:\-]?\s*([A-Z0-9]{6,9})",
     re.IGNORECASE,
 )
+# Indian PIN codes are always exactly 6 digits — reliably extractable by
+# pattern alone (unlike a full postal address), but still requires an
+# explicit "PIN"/"PIN CODE" label so this never guesses at an unrelated
+# 6-digit number (an MRZ fragment, a phone number) elsewhere on the page.
+INDIA_PIN_LABEL_RE = re.compile(r"PIN\s*(?:CODE)?\s*[:\-]?\s*(\d{6})", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +541,39 @@ def extract_passport_fields(ocr_text: str, mrz: Optional[Dict[str, Any]]) -> Dic
 
     issuing_authority = _search_label(ocr_text, [r"ISSUING\s+AUTHORITY", r"AUTHORITY"])
     fields["issuingAuthority"] = _confidence_field(issuing_authority, 0.4 if issuing_authority else 0.0, "viz", True)
+
+    # "Place of issue" is a distinct printed field from "issuing authority"
+    # on Indian passports (e.g. authority = "REGIONAL PASSPORT OFFICE",
+    # place of issue = "MUMBAI") and from "date of issue" — the review form
+    # (current.issuePlace) already has an editable field for it; this was
+    # missing here, silently leaving it OCR-blank on every passport.
+    place_of_issue = _search_label(ocr_text, [r"PLACE\s+OF\s+ISSUE"])
+    fields["placeOfIssue"] = _confidence_field(place_of_issue, 0.4 if place_of_issue else 0.0, "viz", True)
+
+    # Applicant's home address, and PIN code specifically (spec: "address,
+    # PIN where available"). A full multi-line postal address (line 2,
+    # city, state, country as separate fields) cannot be reliably split out
+    # from OCR text alone without real layout/line-structure parsing this
+    # pipeline does not do — rather than guess and risk silently wrong data
+    # in a field staff might not double-check as carefully as a passport
+    # number, only the two pieces that ARE reliably extractable from VIZ
+    # text are attempted here: whatever follows an "Address" label on its
+    # own line (addressLine1), and the 6-digit Indian PIN code specifically
+    # (see INDIA_PIN_LABEL_RE above). addressLine2/city/state/country are
+    # intentionally left for manual entry — the review form has real,
+    # editable fields for all six either way (project rule 10: a field OCR
+    # did not return is never silently hidden, just marked "please enter
+    # manually").
+    address_line1 = _search_label(ocr_text, [r"PRESENT\s+ADDRESS", r"ADDRESS"])
+    fields["addressLine1"] = _confidence_field(address_line1, 0.3 if address_line1 else 0.0, "viz", True)
+    fields["addressLine2"] = _confidence_field(None, 0.0, "none", True)
+    fields["addressCity"] = _confidence_field(None, 0.0, "none", True)
+    fields["addressState"] = _confidence_field(None, 0.0, "none", True)
+    fields["addressCountry"] = _confidence_field(None, 0.0, "none", True)
+
+    pin_match = INDIA_PIN_LABEL_RE.search(ocr_text or "")
+    address_pincode = pin_match.group(1) if pin_match else None
+    fields["addressPincode"] = _confidence_field(address_pincode, 0.5 if address_pincode else 0.0, "viz", True)
 
     # Phase 10 — current vs old passport number must never be confused.
     # The MRZ number above is always the CURRENT passport. An "old /

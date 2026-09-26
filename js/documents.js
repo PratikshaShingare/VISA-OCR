@@ -16,6 +16,21 @@
 
   var utils = global.KhannaUtils;
   var fileStore = global.KhannaDocumentFileStore;
+  var api = global.KhannaApi;
+
+  // A browser can render an image or PDF inline on its own, but not a
+  // .doc/.docx — window.open()-ing one either downloads it or shows raw
+  // XML, which would be exactly the fake, non-functional preview project
+  // rule 9 forbids. Matched by mimeType first (set from the real File
+  // object at upload time — see handleFileChosen) and by extension as a
+  // fallback for a browser that reports an empty/generic mimeType for
+  // Word files, which happens in practice.
+  function isDocx(mimeType, fileName) {
+    return (
+      mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      /\.docx$/i.test(fileName || "")
+    );
+  }
 
   function root() {
     return utils.qs("[data-documents-step-root]");
@@ -198,11 +213,30 @@
         return d.id === docId;
       });
       var cached = doc && doc.fileRef ? fileStore.get(doc.fileRef) : null;
-      if (cached && cached.objectUrl) {
-        window.open(cached.objectUrl, "_blank", "noopener");
-      } else {
+      if (!cached || !cached.objectUrl) {
         setStatusNote(docId, "Original file not available in this session — please re-upload to view it.");
+        return;
       }
+      if (!isDocx(doc.mimeType, doc.fileName)) {
+        // Images and PDFs already render natively in a new tab — unchanged.
+        window.open(cached.objectUrl, "_blank", "noopener");
+        return;
+      }
+      // Phase 3 fix: convert a COPY to PDF on the backend for a real
+      // preview (see js/core/api.js's previewConvertToPdf / app.py's
+      // /api/documents/preview-convert) instead of opening the raw .docx,
+      // which browsers can't render. The original in fileStore is never
+      // touched by this — only this disposable preview blob is created.
+      setStatusNote(docId, "Converting for preview...");
+      api.previewConvertToPdf(cached.file).then(
+        function (pdfBlob) {
+          window.open(URL.createObjectURL(pdfBlob), "_blank", "noopener");
+          renderList();
+        },
+        function (err) {
+          setStatusNote(docId, "Could not open a preview: " + err.message);
+        }
+      );
     });
 
     utils.on(r, "click", "[data-action='verify-doc']", function (e, target) {

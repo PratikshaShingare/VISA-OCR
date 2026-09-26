@@ -36,6 +36,21 @@
     { path: "applicant.placeOfBirth", label: "Place of birth" },
   ];
 
+  // Address (project spec's field list: "address, PIN where available").
+  // A 3-level path ("applicant.address.line1") — readValues()/loadExisting()
+  // handle this group separately from PERSONAL_FIELDS below since those two
+  // only ever split off a single flat key (f.path.split(".")[1]); this is
+  // the one nested exception, matching the applicant.address shape
+  // KhannaState's emptyPerson() already models.
+  var ADDRESS_FIELDS = [
+    { path: "applicant.address.line1", label: "Address line 1" },
+    { path: "applicant.address.line2", label: "Address line 2" },
+    { path: "applicant.address.city", label: "City" },
+    { path: "applicant.address.state", label: "State" },
+    { path: "applicant.address.pincode", label: "PIN code" },
+    { path: "applicant.address.country", label: "Country" },
+  ];
+
   var CURRENT_PASSPORT_FIELDS = [
     { path: "current.number", label: "Passport number" },
     { path: "current.type", label: "Document type" },
@@ -101,6 +116,13 @@
       "<h3>Personal details</h3>" +
       '<div class="field-grid">' +
       PERSONAL_FIELDS.map(row).join("") +
+      "</div>" +
+      "</div>" +
+      "" +
+      '<div class="passport-form-group">' +
+      "<h3>Address</h3>" +
+      '<div class="field-grid">' +
+      ADDRESS_FIELDS.map(row).join("") +
       "</div>" +
       "</div>" +
       "" +
@@ -278,6 +300,11 @@
     PERSONAL_FIELDS.forEach(function (f) {
       applicant[f.path.split(".")[1]] = getFieldValue(container, f.path);
     });
+    var address = {};
+    ADDRESS_FIELDS.forEach(function (f) {
+      address[f.path.split(".")[2]] = getFieldValue(container, f.path);
+    });
+    applicant.address = address;
     var current = {};
     CURRENT_PASSPORT_FIELDS.forEach(function (f) {
       current[f.path.split(".")[1]] = getFieldValue(container, f.path);
@@ -304,6 +331,11 @@
     PERSONAL_FIELDS.forEach(function (f) {
       var key = f.path.split(".")[1];
       setFieldValue(container, f.path, applicant[key]);
+    });
+    var address = applicant.address || {};
+    ADDRESS_FIELDS.forEach(function (f) {
+      var key = f.path.split(".")[2];
+      setFieldValue(container, f.path, address[key]);
     });
     CURRENT_PASSPORT_FIELDS.forEach(function (f) {
       var key = f.path.split(".")[1];
@@ -345,12 +377,20 @@
     applyOcrField(container, "applicant.nationality", fields.nationality);
     applyOcrField(container, "applicant.placeOfBirth", fields.placeOfBirth);
 
+    applyOcrField(container, "applicant.address.line1", fields.addressLine1);
+    applyOcrField(container, "applicant.address.line2", fields.addressLine2);
+    applyOcrField(container, "applicant.address.city", fields.addressCity);
+    applyOcrField(container, "applicant.address.state", fields.addressState);
+    applyOcrField(container, "applicant.address.pincode", fields.addressPincode);
+    applyOcrField(container, "applicant.address.country", fields.addressCountry);
+
     applyOcrField(container, "current.number", fields.passportNumber);
     applyOcrField(container, "current.type", fields.passportType);
     applyOcrField(container, "current.countryCode", fields.countryCode);
     applyOcrField(container, "current.issueDate", fields.dateOfIssue);
     applyOcrField(container, "current.expiryDate", fields.dateOfExpiry);
     applyOcrField(container, "current.issuingAuthority", fields.issuingAuthority);
+    applyOcrField(container, "current.issuePlace", fields.placeOfIssue);
 
     if (fields.oldPassportNumber && fields.oldPassportNumber.value) {
       var toggle = utils.qs("[data-old-passport-toggle]", container);

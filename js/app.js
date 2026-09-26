@@ -14,16 +14,37 @@
     var drawer = utils.qs("[data-mobile-nav]");
     if (!drawer) return;
 
+    function setToggleState(isOpen) {
+      utils.qsa("[data-nav-toggle]").forEach(function (btn) {
+        btn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+        btn.setAttribute("aria-label", isOpen ? "Close menu" : "Open menu");
+      });
+    }
     function open() {
       drawer.classList.add("is-open");
       drawer.setAttribute("aria-hidden", "false");
+      setToggleState(true);
     }
     function close() {
       drawer.classList.remove("is-open");
       drawer.setAttribute("aria-hidden", "true");
+      setToggleState(false);
     }
 
-    utils.on(document, "click", "[data-nav-toggle]", open);
+    // The hamburger button is a real open/close TOGGLE (not open-only) —
+    // clicking it while the drawer is already open closes it again, the
+    // expected behaviour for the only nav entry point in the app now that
+    // the header nav bar and sidebar have been removed (see
+    // vercel-migration-status.md). stopPropagation keeps this click from
+    // also being seen by any outside-click-to-close logic elsewhere.
+    utils.on(document, "click", "[data-nav-toggle]", function (e) {
+      e.stopPropagation();
+      if (drawer.classList.contains("is-open")) {
+        close();
+      } else {
+        open();
+      }
+    });
     utils.on(document, "click", "[data-mobile-nav-close]", close);
     utils.on(document, "click", "[data-mobile-nav-backdrop]", close);
 

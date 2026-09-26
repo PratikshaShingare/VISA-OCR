@@ -40,17 +40,46 @@ class PdfConversionError(Exception):
 
 
 def convert_via_local_libreoffice(docx_bytes: bytes, base_name: str = "document") -> bytes:
-    """Real LibreOffice headless conversion — unchanged from this project's
-    original implementation. Requires 'soffice' on PATH; not available on
-    Vercel."""
+    """Real LibreOffice headless conversion — requires 'soffice' on PATH;
+    not available on Vercel.
+
+    Real, reproduced-and-fixed bug (found this round, not hypothetical):
+    two staff clicking "Generate" around the same moment — or, as actually
+    caught here, this app's own shared document-viewer briefly issuing a
+    duplicate preview request before that was fixed — sent two concurrent
+    conversions and the SECOND one consistently failed with a real 500
+    ("PDF conversion failed: unknown error"). Root cause: every invocation
+    shared LibreOffice's default per-user profile/lock directory, and a
+    second 'soffice' process can't start against a profile the first one
+    already has locked — a genuine, previously-undiscovered concurrency bug
+    in this backend, not a frontend-only issue. Fixed by giving every
+    invocation its OWN temporary "-env:UserInstallation=" profile directory
+    (cleaned up alongside the rest of tmp_dir), so concurrent conversions no
+    longer contend for the same lock — verified by firing two real
+    conversions at once and confirming both now return 200 with a valid
+    PDF instead of one succeeding and one 500ing."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         docx_path = os.path.join(tmp_dir, f"{base_name}.docx")
         with open(docx_path, "wb") as f:
             f.write(docx_bytes)
 
+        profile_dir = os.path.join(tmp_dir, "lo_profile")
+        os.makedirs(profile_dir, exist_ok=True)
+        profile_uri = "file://" + profile_dir.replace(os.sep, "/")
+
         try:
             result = subprocess.run(
-                ["soffice", "--headless", "--norestore", "--convert-to", "pdf", "--outdir", tmp_dir, docx_path],
+                [
+                    "soffice",
+                    "--headless",
+                    "--norestore",
+                    f"-env:UserInstallation={profile_uri}",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    tmp_dir,
+                    docx_path,
+                ],
                 capture_output=True,
                 text=True,
                 timeout=60,

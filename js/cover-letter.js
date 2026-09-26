@@ -219,12 +219,9 @@
   function generateBarHtml(ready, generatedAt) {
     return (
       '<div class="hotel-generate-bar">' +
-      '<button class="btn btn-primary btn-sm" type="button" data-action="generate-cover-letter" data-format="docx"' +
+      '<button class="btn btn-primary btn-sm" type="button" data-action="generate-cover-letter"' +
       (ready ? "" : " disabled") +
-      ">Generate (.docx)</button>" +
-      '<button class="btn btn-secondary btn-sm" type="button" data-action="generate-cover-letter" data-format="pdf"' +
-      (ready ? "" : " disabled") +
-      ">Download as PDF</button>" +
+      ">Generate &amp; Preview</button>" +
       (generatedAt ? '<span class="hotel-generate-bar__meta">Last generated ' + utils.formatDate(generatedAt) + "</span>" : "") +
       "</div>"
     );
@@ -507,36 +504,60 @@
     return payload;
   }
 
-  function generate(format, btn) {
+  // Keyed by root element — this module dual-mounts (wizard root vs. the
+  // standalone Cover Letter page root; see root() above), same hazard
+  // hotels.js's own viewerHandles WeakMap already guards against.
+  var viewerHandles = new WeakMap();
+
+  function generate(btn) {
     var app = getApp();
     if (!app || !isReady(app)) return;
     showError("");
+    var r = root();
+    if (!r) return;
+    var previewBox = utils.qs("[data-doc-preview]", r);
+    if (!previewBox) return;
+
+    var handle = viewerHandles.get(r);
+    if (!handle) {
+      handle = global.KhannaDocumentViewer.mount(previewBox, {
+        title: "Cover Letter",
+        loadPdf: function () {
+          var a = getApp();
+          return api.downloadCoverLetter(buildPayload(a, "pdf"));
+        },
+        loadDocx: function () {
+          var a = getApp();
+          return api.downloadCoverLetter(buildPayload(a, "docx"));
+        },
+        onEdit: function () {
+          var box = utils.qs("[data-cover-letter-card]", root());
+          if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
+        },
+        onRegenerate: function () {
+          return Promise.resolve();
+        },
+      });
+      viewerHandles.set(r, handle);
+    }
+
     var originalText = btn.textContent;
     btn.disabled = true;
     btn.textContent = "Generating…";
-
-    var payload = buildPayload(app, format);
-    api.downloadCoverLetter(payload).then(
-      function (result) {
-        utils.triggerFileDownload(result.blob, result.filename);
+    var region = coverState(app).region;
+    handle
+      .refresh()
+      .then(function () {
         var ts = new Date().toISOString();
-        global.KhannaState.updateApplication(
-          app.id,
-          { coverLetter: { generatedAt: ts } },
-          payload.region + " Cover Letter generated (" + format.toUpperCase() + ")"
-        );
-        // The generate bar's "Last generated" text picks up the fresh
-        // timestamp via the KhannaState.subscribe callback below —
-        // deliberately not refreshed directly here, matching
-        // authorization.js's own discipline (success and failure both flow
-        // through exactly one place).
-      },
-      function (err) {
+        global.KhannaState.updateApplication(app.id, { coverLetter: { generatedAt: ts } }, region + " Cover Letter generated");
+      })
+      .catch(function (err) {
+        showError((err && err.message) || "Could not generate the cover letter.");
+      })
+      .finally(function () {
         btn.disabled = false;
         btn.textContent = originalText;
-        showError((err && err.message) || "Could not generate the cover letter.");
-      }
-    );
+      });
   }
 
   /* ---------------------------------------------------------------------
@@ -554,7 +575,16 @@
       "<p>Choose the destination region — the letter's wording, required fields and person limits all come from that region's own real reference template.</p>" +
       '<div data-cover-region-select>' + regionSelectorHtml(region) + "</div>" +
       '<div data-cover-letter-card></div>' +
-      "</div>";
+      "</div>" +
+      // Deliberately a SIBLING of [data-cover-letter-card], not nested
+      // inside it: renderCard() replaces that card's entire innerHTML on
+      // every region change and person-selection change (see renderCard()
+      // callers below), which would otherwise destroy a mounted preview on
+      // any such edit. Living one level up here, it only remounts fresh on
+      // a full mountSkeleton() (a real navigation), matching hotels.js's/
+      // authorization.js's own "preview div lives outside the part that
+      // rebuilds on every edit" placement.
+      '<div data-doc-preview style="margin-top:var(--space-4);"></div>';
 
     utils.on(r, "click", "[data-cover-region]", function (e, target) {
       var current = getApp();
@@ -661,7 +691,7 @@
 
     utils.on(r, "click", "[data-action='generate-cover-letter']", function (e, target) {
       if (target.disabled) return;
-      generate(target.getAttribute("data-format"), target);
+      generate(target);
     });
   }
 
