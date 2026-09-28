@@ -129,6 +129,16 @@
   gap: var(--space-4);
 }
 
+/* Dashboard now shows a single stat card (Total Applications) — the
+   responsive.css breakpoints below force .card-grid to repeat(3/4,1fr)
+   for the multi-card layouts used elsewhere, which would otherwise leave
+   this one real card stretched or trailed by empty grid tracks on wide
+   screens. Scoped to this container only — .card-grid itself stays
+   shared/unmodified for every other page that still uses it. */
+[data-dashboard-stats] {
+  grid-template-columns: minmax(200px, 260px) !important;
+}
+
 .stat-card {
   display: flex;
   flex-direction: column;

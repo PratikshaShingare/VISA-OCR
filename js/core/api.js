@@ -177,6 +177,24 @@
   }
 
   /**
+   * Hotel Blocking's "Upload Hotel Voucher" (backend/python/hotel_voucher_ocr.py)
+   * — extracts whatever fields can be found on a staff-uploaded hotel/OTA
+   * voucher (image or PDF), for js/hotels.js to prefill into the already-
+   * editable Hotel Blocking form fields. A sibling of processPassport()
+   * above, not a variant — completely separate backend module, since a
+   * hotel voucher shares nothing with passport MRZ/bio-data parsing beyond
+   * the underlying image pipeline.
+   * @param {File} file
+   * @param {number} [pageIndex]
+   */
+  function processHotelVoucher(file, pageIndex) {
+    var form = new FormData();
+    form.append("file", file, file.name);
+    form.append("page_index", String(pageIndex || 0));
+    return request(API_BASE_URL + "/api/hotel-voucher/process", { method: "POST", body: form });
+  }
+
+  /**
    * @param {File} file
    * @param {number} pageIndex
    * @param {number|null} forcedRotation 0/90/180/270, or null to let the
@@ -512,6 +530,7 @@
     processPassportOpenRouter: processPassportOpenRouter,
     previewConvertToPdf: previewConvertToPdf,
     downloadHotelVoucher: downloadHotelVoucher,
+    processHotelVoucher: processHotelVoucher,
     downloadPassportAuthorization: downloadPassportAuthorization,
     downloadCompanyAuthorization: downloadCompanyAuthorization,
     downloadCoverLetter: downloadCoverLetter,

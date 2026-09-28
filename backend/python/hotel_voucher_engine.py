@@ -138,6 +138,22 @@ def _fmt_date(value: Optional[str]) -> str:
         return str(value)  # show whatever was given rather than hide it
 
 
+def _format_guest_counts(hotel: dict) -> str:
+    """Combines the (explicitly split, on request) adults/children counts
+    into one "2 Adult(s), 2 Child(s)"-style string for both cells that used
+    to just print the single, undifferentiated noOfGuests value. Children
+    is only appended when a real, non-zero count was actually entered — a
+    booking with no children shouldn't print "0 Child(s)"."""
+    adults = str(hotel.get("noOfAdults") or "").strip()
+    children = str(hotel.get("noOfChildren") or "").strip()
+    parts = []
+    if adults:
+        parts.append(f"{adults} Adult(s)")
+    if children and children != "0":
+        parts.append(f"{children} Child(s)")
+    return ", ".join(parts) if parts else "—"
+
+
 def _nights(check_in: Optional[str], check_out: Optional[str]) -> Optional[int]:
     try:
         d1 = datetime.strptime(check_in, "%Y-%m-%d").date()
@@ -166,7 +182,7 @@ def _fill_hotel_block(table: Table, hotel: dict) -> None:
 
     _set_cell_text(booking.rows[1].cells[3], hotel.get("hotelName") or "—")
     _set_cell_text(booking.rows[2].cells[1], hotel.get("leadGuestName") or "—")
-    _set_cell_text(booking.rows[2].cells[3], str(hotel.get("noOfGuests") or "—"))
+    _set_cell_text(booking.rows[2].cells[3], _format_guest_counts(hotel))
     _set_cell_text(booking.rows[3].cells[1], str(hotel.get("noOfRooms") or "—"))
     _set_cell_text(booking.rows[3].cells[3], hotel.get("phone") or "—")
     _set_cell_text(booking.rows[4].cells[1], _fmt_date(hotel.get("checkIn")))
@@ -182,8 +198,7 @@ def _fill_hotel_block(table: Table, hotel: dict) -> None:
         guest_names = [hotel.get("leadGuestName") or "—"]
     _set_guest_names(guest.rows[1].cells[0], guest_names)
     _set_cell_text(guest.rows[1].cells[1], hotel.get("roomType") or "—")
-    no_of_guests = hotel.get("noOfGuests") or "—"
-    _set_cell_text(guest.rows[1].cells[2], f"{no_of_guests} adult(s)")
+    _set_cell_text(guest.rows[1].cells[2], _format_guest_counts(hotel))
 
 
 def generate_hotel_voucher_docx(hotels: list[dict]) -> bytes:

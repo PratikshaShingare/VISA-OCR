@@ -1,11 +1,12 @@
 /* ==========================================================================
    Khanna Travels & Holidays — Passport preview widget
    Pure rendering + interaction for the image-preview panel used in the
-   passport step: the page image itself, rotate controls, and a single
-   "Flip Page" control for multi-page uploads (Phase 11/12 of the master
-   prompt: rotation is tracked independently per page; one flip control
-   replaces separate prev/next buttons; rotate controls are icon-only with
-   aria-labels and no visible degree text — Phase 13).
+   passport step: the page image itself, rotate controls, and — for
+   multi-page uploads — distinct previous/next page-navigation arrows (the
+   earlier single wrapping "Flip page" button was replaced on explicit
+   request for two arrow buttons so staff can step backward too, not just
+   cycle forward). Rotate controls remain icon-only with aria-labels and no
+   visible degree text.
 
    This module owns no session state of its own — it just renders whatever
    state object it is given and reports user actions back through callbacks.
@@ -20,8 +21,10 @@
     '<svg class="icon" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3.2-6.9"/><path d="M21 3v6h-6"/></svg>';
   var ROTATE_LEFT_ICON =
     '<svg class="icon" viewBox="0 0 24 24" style="transform:scaleX(-1);"><path d="M21 12a9 9 0 1 1-3.2-6.9"/><path d="M21 3v6h-6"/></svg>';
-  var FLIP_ICON =
-    '<svg class="icon" viewBox="0 0 24 24"><path d="M7 7h10M7 7l3-3M7 7l3 3M17 17H7M17 17l-3 3M17 17l-3-3"/></svg>';
+  var ARROW_LEFT_ICON =
+    '<svg class="icon" viewBox="0 0 24 24"><path d="M15 6 9 12l6 6"/></svg>';
+  var ARROW_RIGHT_ICON =
+    '<svg class="icon" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>';
 
   /**
    * @param {HTMLElement} container element to render the preview into
@@ -34,7 +37,8 @@
    *   busy: boolean                   — OCR in progress, disable controls
    * @param {Object} callbacks
    *   onRotate(deltaDeg)
-   *   onFlipPage()
+   *   onPrevPage()
+   *   onNextPage()
    */
   function render(container, state, callbacks) {
     if (!container) return;
@@ -65,11 +69,11 @@
       "</div>" +
       (multiPage
         ? '<div class="passport-preview__page-control">' +
-          '<button type="button" class="btn btn-ghost btn-sm" data-preview-flip-page aria-label="Flip to next page"' + (state.busy ? " disabled" : "") + ">" +
-          FLIP_ICON +
-          "<span>Flip page</span>" +
-          "</button>" +
+          '<button type="button" class="btn-icon" data-preview-page-prev aria-label="Previous page"' +
+          (state.busy || state.pageIndex <= 0 ? " disabled" : "") + ">" + ARROW_LEFT_ICON + "</button>" +
           '<span class="passport-preview__page-indicator">Page ' + (state.pageIndex + 1) + " of " + state.totalPages + "</span>" +
+          '<button type="button" class="btn-icon" data-preview-page-next aria-label="Next page"' +
+          (state.busy || state.pageIndex >= state.totalPages - 1 ? " disabled" : "") + ">" + ARROW_RIGHT_ICON + "</button>" +
           "</div>"
         : "") +
       "</div>";
@@ -79,8 +83,11 @@
         callbacks.onRotate(parseInt(target.getAttribute("data-preview-rotate"), 10));
       }
     });
-    utils.on(container, "click", "[data-preview-flip-page]", function () {
-      if (callbacks && callbacks.onFlipPage) callbacks.onFlipPage();
+    utils.on(container, "click", "[data-preview-page-prev]", function () {
+      if (callbacks && callbacks.onPrevPage) callbacks.onPrevPage();
+    });
+    utils.on(container, "click", "[data-preview-page-next]", function () {
+      if (callbacks && callbacks.onNextPage) callbacks.onNextPage();
     });
   }
 

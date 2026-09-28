@@ -11,37 +11,19 @@
 
   var utils = global.KhannaUtils;
 
-  // Phase 1 (document-centric redesign): per explicit instruction, the
-  // per-status KPI cards (New / Documents Pending / Under Review / Ready for
-  // Submission / Submitted / Processing / Approved / Rejected) were removed
-  // as their own full row — that decision is unchanged here: this pass adds
-  // a small number of additional real, computed cards, never a second row
-  // of per-status cards, and never a guessed number.
-  // "Documents Generated" / "Documents This Week" count real generatedAt
-  // timestamps already written by hotels.js/authorization.js/
-  // cover-letter.js/invitation.js/checklist-letter.js's own
-  // KhannaState.updateApplication() calls; an application with zero real
-  // generation events contributes 0, honestly. "Active Applications" is
-  // total minus the statuses that mean the work is effectively done
-  // (Submitted / Processing / Approved / Rejected / Cancelled) — a real
-  // aggregate derived from KhannaState.getStats()'s own per-status counts,
-  // not a new source of truth.
-  var STAT_CARDS = [
-    { key: "total", label: "Total Applications" },
-    { key: "active", label: "Active Applications" },
-    { key: "documentsGenerated", label: "Documents Generated" },
-    { key: "documentsThisWeek", label: "Documents This Week" },
-  ];
-
-  var CLOSED_STATUSES = ["Submitted", "Processing", "Approved", "Rejected", "Cancelled"];
-  var WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+  // Per explicit instruction, the dashboard shows only the one real,
+  // unambiguous count — Total Applications. "Active Applications",
+  // "Documents Generated" and "Documents This Week" (added in an earlier
+  // pass) were removed again on request; collectGeneratedTimestamps()
+  // below is kept regardless, since renderRecent() still uses it to show
+  // each application's own "N documents generated" line.
+  var STAT_CARDS = [{ key: "total", label: "Total Applications" }];
 
   // Every real generatedAt timestamp across every document type a single
   // application has produced (hotel vouchers, both authorization letters,
   // the cover letter, the invitation letter, and each initor's own covering
-  // letter) — the shared source both countDocumentsGenerated() and
-  // countRecentDocumentEvents() fold over, so the two stats and the
-  // per-application badge in Recent Applications can never drift apart.
+  // letter) — used by renderRecent() below for each application's own
+  // "N documents generated" line.
   function collectGeneratedTimestamps(app) {
     var stamps = [];
     if (app.coverLetter && app.coverLetter.generatedAt) stamps.push(app.coverLetter.generatedAt);
@@ -62,48 +44,6 @@
     return stamps;
   }
 
-  // Counts real generation EVENTS across every document type this app
-  // supports, not just "has this application generated anything" — each
-  // hotel voucher, each authorization letter, each cover letter, the
-  // invitation letter, and each spouse's own initors letter all count
-  // separately, matching what a staff member would actually think of as
-  // "how many documents have we generated." Never invents a number: an
-  // application with none of these timestamps set contributes 0.
-  function countDocumentsGenerated(apps) {
-    var count = 0;
-    apps.forEach(function (app) {
-      count += collectGeneratedTimestamps(app).length;
-    });
-    return count;
-  }
-
-  // Same events, but only those genuinely timestamped within the last 7
-  // days — real recent activity, not a rolling guess. Timestamps are
-  // ISO strings (see utils.formatDate's own callers); Date.parse returns
-  // NaN for anything malformed, which correctly never counts as "recent".
-  function countRecentDocumentEvents(apps) {
-    var cutoff = Date.now() - WEEK_MS;
-    var count = 0;
-    apps.forEach(function (app) {
-      collectGeneratedTimestamps(app).forEach(function (stamp) {
-        var t = Date.parse(stamp);
-        if (!isNaN(t) && t >= cutoff) count += 1;
-      });
-    });
-    return count;
-  }
-
-  // Total minus the statuses that mean the work is effectively out of
-  // staff's hands (submitted onward) — every value here comes straight out
-  // of KhannaState.getStats()'s own real per-status counts.
-  function countActiveApplications(stats) {
-    var closed = 0;
-    CLOSED_STATUSES.forEach(function (s) {
-      closed += stats[s] || 0;
-    });
-    return (stats.total || 0) - closed;
-  }
-
   function applicantLabel(app) {
     var name = app.applicant && app.applicant.fullName;
     return name && name.trim() ? name : "Untitled applicant";
@@ -113,10 +53,6 @@
     var container = utils.qs("[data-dashboard-stats]");
     if (!container) return;
     var stats = global.KhannaState.getStats();
-    var apps = global.KhannaState.getApplications();
-    stats.documentsGenerated = countDocumentsGenerated(apps);
-    stats.documentsThisWeek = countRecentDocumentEvents(apps);
-    stats.active = countActiveApplications(stats);
     container.innerHTML = STAT_CARDS.map(function (card) {
       return (
         '<div class="card stat-card">' +

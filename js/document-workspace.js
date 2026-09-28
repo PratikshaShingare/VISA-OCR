@@ -48,7 +48,44 @@
     return DOC_VIEWS.indexOf(view) !== -1;
   }
 
-  function barHtml() {
+  // Per-view button set for this shared bar. Most document pages keep all
+  // three actions (unchanged, original behaviour). Three pages asked for a
+  // reduced/relabeled set:
+  //  - upload-passport: uploading a passport must never pull in another
+  //    applicant's or application's saved data (project instruction), so
+  //    both pickers are hidden — only "start fresh" stays.
+  //  - hotel-blocking: same picker removal, no relabeling.
+  //  - cover-letter: both pickers hidden here too — replaced by its own
+  //    page-level "Use Existing Details" control (Passport / Hotel
+  //    Blocking) plus a manual name-entry field, added in cover-letter.js
+  //    itself rather than this shared bar — and its create-button label
+  //    reads "Create Different Cover Letter" instead of the generic text.
+  var VIEW_BUTTON_CONFIG = {
+    "upload-passport": { showApplicantPicker: false, showApplicationPicker: false, createLabelActive: null },
+    "hotel-blocking": { showApplicantPicker: false, showApplicationPicker: false, createLabelActive: null },
+    "cover-letter": { showApplicantPicker: false, showApplicationPicker: false, createLabelActive: "Create Different Cover Letter" },
+  };
+
+  function configFor(view) {
+    return VIEW_BUTTON_CONFIG[view] || { showApplicantPicker: true, showApplicationPicker: true, createLabelActive: null };
+  }
+
+  function actionButtonsHtml(view, hasActiveApp) {
+    var cfg = configFor(view);
+    var html = "";
+    if (cfg.showApplicantPicker) {
+      html += '<button class="btn btn-secondary btn-sm" type="button" data-action="pick-doc-applicant">Use Existing Applicant</button>';
+    }
+    if (cfg.showApplicationPicker) {
+      html += '<button class="btn btn-secondary btn-sm" type="button" data-action="pick-doc-application">Use existing application</button>';
+    }
+    var createLabel = hasActiveApp ? (cfg.createLabelActive || "Start a different application") : "Create new application";
+    var createClass = hasActiveApp ? "btn-secondary" : "btn-primary";
+    html += '<button class="btn ' + createClass + ' btn-sm" type="button" data-action="create-doc-application">' + utils.escapeHtml(createLabel) + "</button>";
+    return html;
+  }
+
+  function barHtml(view) {
     var app = global.KhannaState.getActiveApplication();
     if (app) {
       var label = global.KhannaApplicationsList ? global.KhannaApplicationsList.applicantLabel(app) : "Untitled applicant";
@@ -60,9 +97,7 @@
         '<span class="badge ' + utils.statusBadgeClass(app.status) + '">' + utils.escapeHtml(app.status) + "</span>" +
         "</div>" +
         '<div class="doc-page-app-bar__actions">' +
-        '<button class="btn btn-secondary btn-sm" type="button" data-action="pick-doc-applicant">Use Existing Applicant</button>' +
-        '<button class="btn btn-secondary btn-sm" type="button" data-action="pick-doc-application">Use existing application</button>' +
-        '<button class="btn btn-secondary btn-sm" type="button" data-action="create-doc-application">Start a different application</button>' +
+        actionButtonsHtml(view, true) +
         "</div>" +
         "</div>"
       );
@@ -74,9 +109,7 @@
       '<span class="field-hint">Reuse a saved applicant, or create a fresh application to generate this document.</span>' +
       "</div>" +
       '<div class="doc-page-app-bar__actions">' +
-      '<button class="btn btn-secondary btn-sm" type="button" data-action="pick-doc-applicant">Use Existing Applicant</button>' +
-      '<button class="btn btn-secondary btn-sm" type="button" data-action="pick-doc-application">Use existing application</button>' +
-      '<button class="btn btn-primary btn-sm" type="button" data-action="create-doc-application">Create new application</button>' +
+      actionButtonsHtml(view, false) +
       "</div>" +
       "</div>"
     );
@@ -88,7 +121,7 @@
     var section = utils.qs('.view[data-view="' + view + '"]');
     if (!section) return;
     utils.qsa("[data-doc-page-app-bar]", section).forEach(function (bar) {
-      bar.innerHTML = barHtml();
+      bar.innerHTML = barHtml(view);
     });
   }
 

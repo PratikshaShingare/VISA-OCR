@@ -555,8 +555,14 @@ def parse_mrz_td3(line1: str, line2: str) -> Dict[str, Any]:
     if not dob_valid:
         warnings.append("Date of birth check digit failed — please verify manually.")
 
+    # "X" here (not the literal "Unspecified") so it matches the frontend
+    # review form's Sex <select> option value directly (passport-review-form.js's
+    # SEXES: "" / "M" / "F" / "X") — previously this returned "Unspecified",
+    # which had no matching <option value>, so the dropdown silently landed on
+    # blank instead of showing "Other / Unspecified" for a real ICAO
+    # unspecified-sex MRZ ("<").
     sex_raw = line2[20:21]
-    sex = sex_raw if sex_raw in ("M", "F") else ("Unspecified" if sex_raw == "<" else sex_raw)
+    sex = sex_raw if sex_raw in ("M", "F") else ("X" if sex_raw == "<" else sex_raw)
 
     expiry_raw = _coerce_numeric(line2[21:27])
     expiry_check_digit = _coerce_numeric(line2[27:28])

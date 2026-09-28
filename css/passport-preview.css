@@ -145,6 +145,14 @@
   margin-bottom: var(--space-5);
 }
 
+/* Requested explicitly: the ghost-styled "Replace file" button otherwise
+   has a fully transparent border (see .btn-ghost in components.css) and
+   can read as plain text next to the bordered buttons around it. Scoped to
+   this one button rather than changing .btn-ghost globally. */
+.passport-review__replace-btn {
+  border-color: var(--color-border-strong);
+}
+
 .passport-review__status {
   font-size: 0.82rem;
   color: var(--color-text-muted);

@@ -44,6 +44,23 @@
 
   var REGIONS = ["Europe", "Japan", "Singapore"];
 
+  // Displayed labels only — per explicit instruction, the region picker no
+  // longer names the destination country/region directly on its buttons.
+  // The underlying values above (region selection, backend dispatch key,
+  // and reference-template directory names in cover_letter_engine.py) are
+  // completely unchanged; only what staff SEE on the button changes here.
+  // Each existing region folder is in practice already the one real
+  // template usable for every country in that group (e.g. "Europe" already
+  // covers every Schengen destination with the same fixed wording) — there
+  // is no separate per-country template to point to, so the "Countries"
+  // list names the group each format is actually built for rather than
+  // inventing additional countries no real template exists for.
+  var REGION_FORMAT_LABELS = {
+    Europe: "Format 1 (Countries — Schengen Europe)",
+    Japan: "Format 2 (Countries — Japan)",
+    Singapore: "Format 3 (Countries — Singapore)",
+  };
+
   // Document-first redesign (Phase 2): dual-mount. In the wizard this still
   // resolves to the sub-root authorization.js's own mountSkeleton() creates
   // inside its "Cover Letter" tab (unchanged — authorization.js still
@@ -99,10 +116,20 @@
     if (!region) return false;
 
     var selected = selectedPeople(app);
-    var applicantSelected = selected.some(function (p) {
+    var manualName = (state.manualApplicantName || "").trim();
+    // A manually typed applicant name (for generating a cover letter
+    // without using this application's saved passport/hotel details — see
+    // the field above the checklist) fills the applicant's own slot in
+    // place of a checked-off, core-fields-complete applicant row. Every
+    // OTHER selected person (real travellers/companions) still has to have
+    // a name and passport number on file exactly as before — this never
+    // relaxes that for anyone but the applicant.
+    var applicantSelected = manualName || selected.some(function (p) {
       return p.isApplicant;
     });
-    if (!applicantSelected || !selected.every(auth.personHasCoreFields)) return false;
+    var companionsToCheck = manualName ? selected.filter(function (p) { return !p.isApplicant; }) : selected;
+    if (!applicantSelected || !companionsToCheck.every(auth.personHasCoreFields)) return false;
+    var effectiveCount = (manualName ? 1 : 0) + companionsToCheck.length;
 
     var commonOk =
       !!(state.recipientText && state.recipientText.trim()) &&
@@ -115,7 +142,7 @@
     if (!commonOk) return false;
 
     if (region === "Europe") {
-      if (selected.length !== 2) return false;
+      if (effectiveCount !== 2) return false;
       var e = state.europe || {};
       return [
         "cityCountryOfResidence",
@@ -132,13 +159,13 @@
     }
 
     if (region === "Japan") {
-      if (selected.length !== 2) return false;
+      if (effectiveCount !== 2) return false;
       var j = state.japan || {};
       return !!(j.applicantEmployerOccupation && j.applicantEmployerOccupation.trim()) && !!(j.companionOccupation && j.companionOccupation.trim());
     }
 
     if (region === "Singapore") {
-      if (selected.length < 1) return false;
+      if (effectiveCount < 1) return false;
       var s = state.singapore || {};
       return !!(s.hotelName && s.hotelName.trim()) && !!(s.hotelAddress && s.hotelAddress.trim());
     }
@@ -152,7 +179,7 @@
 
   function regionSelectorHtml(region) {
     return (
-      '<div class="cover-region-select" role="radiogroup" aria-label="Cover letter region">' +
+      '<div class="cover-region-select" role="radiogroup" aria-label="Cover letter format">' +
       REGIONS.map(function (r) {
         return (
           '<button type="button" class="cover-region-btn' +
@@ -162,7 +189,7 @@
           '" aria-pressed="' +
           (region === r ? "true" : "false") +
           '">' +
-          r +
+          utils.escapeHtml(REGION_FORMAT_LABELS[r] || r) +
           "</button>"
         );
       }).join("") +
@@ -182,11 +209,34 @@
     }
     var state = coverState(app);
     var selectedIds = state.selectedPersonIds || [];
+    var manualName = (state.manualApplicantName || "").trim();
     var maxCount = maxPeopleFor(region);
+    // When a manual applicant name is in use it fills the applicant's own
+    // slot instead of a checklist selection (see the "Applicant name" field
+    // above this list and buildPayload()/isReady() below), so the applicant
+    // row here is shown but locked unchecked — only companions/travellers
+    // stay selectable, and the region's people cap is reduced by one slot
+    // to account for the manual applicant already occupying it.
+    // While a manual name is in use, the applicant is never itself in
+    // selectedIds (see the manual-name change handler in mountSkeleton(),
+    // which clears it), so selectedIds.length here already only counts real
+    // companion/traveller selections — comparing it against a cap reduced
+    // by one slot reproduces exactly the original single-cap comparison
+    // below, just leaving room for the manual applicant's own slot.
+    var effectiveMax = manualName && maxCount ? Math.max(0, maxCount - 1) : maxCount;
     return people
       .map(function (p) {
+        if (manualName && p.isApplicant) {
+          return (
+            '<label class="auth-person-row is-disabled">' +
+            '<input type="checkbox" disabled />' +
+            '<span class="auth-person-row__name">' + utils.escapeHtml(auth.personDisplayName(p)) + "</span>" +
+            '<span class="auth-person-row__meta">Using the manually entered applicant name below instead.</span>' +
+            "</label>"
+          );
+        }
         var checked = selectedIds.indexOf(p.id) !== -1;
-        var atMax = !!maxCount && !checked && selectedIds.length >= maxCount;
+        var atMax = !!effectiveMax && !checked && selectedIds.length >= effectiveMax;
         var incomplete = !auth.personHasCoreFields(p);
         return (
           '<label class="auth-person-row' + (atMax ? " is-disabled" : "") + '">' +
@@ -406,9 +456,52 @@
     );
   }
 
+  // "Use Existing Details ▾" (replaces the removed "Use Existing
+  // Applicant"/"Use existing application" buttons for this page — see
+  // document-workspace.js's VIEW_BUTTON_CONFIG). Unlike those, which pulled
+  // in a DIFFERENT application/profile entirely, this pulls the CURRENT
+  // application's own already-saved Passport and/or Hotel Blocking details
+  // into this cover letter — "Hotels Details and the name will be added
+  // from either passport or hotel blocking or from both" (explicit
+  // instruction). Reuses the same .profile-menu__dropdown/__item styling
+  // as the header's own "New Application" menu (app.js) rather than
+  // inventing a second dropdown look.
+  function useExistingDetailsHtml() {
+    return (
+      '<div class="cover-use-existing" data-cover-use-existing>' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-cover-use-existing-toggle aria-haspopup="true" aria-expanded="false">' +
+      "Use Existing Details " +
+      '<span aria-hidden="true">&#9662;</span>' +
+      "</button>" +
+      '<div class="profile-menu__dropdown" data-cover-use-existing-dropdown>' +
+      '<button type="button" class="profile-menu__item" data-cover-use-existing-option="passport">Passport</button>' +
+      '<button type="button" class="profile-menu__item" data-cover-use-existing-option="hotel-blocking">Hotel Blocking</button>' +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  // "Enter name of the applicant if the name is not taken from any existing
+  // details" (explicit instruction) — lets staff generate a cover letter
+  // for a name that was never run through Upload Passport at all. See
+  // checklistHtml()/isReady()/buildPayload() above for how this overrides
+  // the applicant's checklist slot the moment it has a value.
+  function manualApplicantNameHtml(state) {
+    return (
+      '<div class="field-grid">' +
+      fieldRowHtml("top", "manualApplicantName", "Applicant name (optional — only if not using an existing applicant)", state.manualApplicantName, false, {
+        placeholder: "e.g. Mr. John Doe",
+      }) +
+      "</div>" +
+      '<p class="field-hint">Fill this in to generate a cover letter for a name not yet saved as this application’s applicant. Leave it blank to use whoever is selected in the checklist below.</p>'
+    );
+  }
+
   function regionBodyHtml(app, state, region) {
     var selected = selectedPeople(app);
-    var body = '<div class="auth-person-list" data-cover-checklist>' + checklistHtml(app, region) + "</div>";
+    var body = useExistingDetailsHtml();
+    body += manualApplicantNameHtml(state);
+    body += '<div class="auth-person-list" data-cover-checklist>' + checklistHtml(app, region) + "</div>";
     body += commonFieldsHtml(state, region);
     if (region === "Europe") body += europeFieldsHtml(state);
     else if (region === "Japan") body += japanFieldsHtml(state);
@@ -438,6 +531,7 @@
     var auth = authHelpers();
     var state = coverState(app);
     var region = state.region;
+    var manualName = (state.manualApplicantName || "").trim();
     var selected = auth.orderPeopleForLetter(selectedPeople(app));
     var occupations = (state.singapore && state.singapore.occupations) || {};
 
@@ -458,7 +552,29 @@
       };
     });
 
-    var applicantName = [app.applicant.firstName, app.applicant.lastName].filter(Boolean).join(" ") || "Application";
+    // Manual applicant name (used instead of this application's own saved
+    // passport data — see the field above the checklist): stands in for
+    // the applicant row only. Every field besides the name itself is left
+    // blank rather than guessed, matching the OCR principle elsewhere in
+    // this app of never fabricating a value nobody actually entered.
+    if (manualName) {
+      people = [{
+        id: "manual-applicant",
+        salutation: "",
+        fullName: manualName,
+        passportNumber: "",
+        placeOfIssue: "",
+        passportIssueDate: "",
+        relationToApplicant: "",
+        sex: "",
+        phone: "",
+        email: "",
+        isApplicant: true,
+        occupation: "",
+      }].concat(people);
+    }
+
+    var applicantName = manualName || [app.applicant.firstName, app.applicant.lastName].filter(Boolean).join(" ") || "Application";
 
     var payload = {
       region: region,
@@ -596,6 +712,87 @@
       if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
     });
 
+    // "Use Existing Details ▾" — open/close (same is-open + outside-click +
+    // Escape pattern as app.js's own header "New Application" menu, kept
+    // local here rather than shared since the trigger/dropdown pair is
+    // different and renderCard() rebuilds this markup on every region/
+    // person change, so the listeners below re-query the DOM at click time
+    // instead of caching element references that would go stale.
+    utils.on(r, "click", "[data-cover-use-existing-toggle]", function (e, target) {
+      e.stopPropagation();
+      var dd = utils.qs("[data-cover-use-existing-dropdown]", r);
+      if (!dd) return;
+      var willOpen = !dd.classList.contains("is-open");
+      dd.classList.toggle("is-open", willOpen);
+      target.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    });
+    document.addEventListener("click", function (e) {
+      var wrap = utils.qs("[data-cover-use-existing]", r);
+      if (!wrap || wrap.contains(e.target)) return;
+      var dd = utils.qs("[data-cover-use-existing-dropdown]", r);
+      var toggle = utils.qs("[data-cover-use-existing-toggle]", r);
+      if (dd) dd.classList.remove("is-open");
+      if (toggle) toggle.setAttribute("aria-expanded", "false");
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape") return;
+      var dd = utils.qs("[data-cover-use-existing-dropdown]", r);
+      var toggle = utils.qs("[data-cover-use-existing-toggle]", r);
+      if (dd) dd.classList.remove("is-open");
+      if (toggle) toggle.setAttribute("aria-expanded", "false");
+    });
+
+    utils.on(r, "click", "[data-cover-use-existing-option='passport']", function () {
+      var current = getApp();
+      if (!current) return;
+      var state = coverState(current);
+      var ids = (state.selectedPersonIds || []).slice();
+      if (ids.indexOf("applicant") === -1) ids.push("applicant");
+      // Real passport data takes precedence over a manual name the moment
+      // staff explicitly ask to use it.
+      global.KhannaState.updateApplication(
+        current.id,
+        { coverLetter: { selectedPersonIds: ids, manualApplicantName: "" } },
+        null
+      );
+      renderCard();
+    });
+
+    utils.on(r, "click", "[data-cover-use-existing-option='hotel-blocking']", function () {
+      var current = getApp();
+      if (!current) return;
+      var state = coverState(current);
+      var region = state.region;
+      var hotel = (current.hotels || [])[0];
+      if (!hotel) {
+        showError("No hotel has been saved yet on this application's Hotel Blocking page.");
+        return;
+      }
+      if (region === "Singapore") {
+        global.KhannaState.updateApplication(
+          current.id,
+          { coverLetter: { singapore: { hotelName: hotel.hotelName || "", hotelAddress: hotel.address || "" } } },
+          null
+        );
+      } else if (region === "Japan") {
+        var hotels = (current.hotels || []).map(function (h) {
+          return {
+            id: utils.generateId("CLH"),
+            name: h.hotelName || "",
+            checkIn: h.checkIn || "",
+            checkOut: h.checkOut || "",
+            contactNo: h.phone || "",
+          };
+        });
+        global.KhannaState.updateApplication(current.id, { coverLetter: { japan: { hotels: hotels } } }, null);
+      } else {
+        showError("This format doesn't include hotel details in its reference template.");
+        return;
+      }
+      showError("");
+      renderCard();
+    });
+
     utils.on(r, "change", "[data-cover-person]", function (e, target) {
       var current = getApp();
       if (!current) return;
@@ -638,7 +835,28 @@
         patch.coverLetter[scope] = {};
         patch.coverLetter[scope][key] = target.value;
       }
+      var isManualNameField = key === "manualApplicantName";
+      if (isManualNameField && target.value.trim()) {
+        // The manual name takes the applicant's own slot (see checklistHtml()
+        // above and buildPayload() below) — drop the applicant out of
+        // selectedPersonIds so the checklist and the generated letter never
+        // try to use both at once.
+        // getSelectablePeople() (authorization.js) always gives the
+        // applicant the fixed id "applicant" (travellers use their own real
+        // ids) — see toPersonRow() there.
+        var state = coverState(current);
+        var ids = (state.selectedPersonIds || []).filter(function (id) {
+          return id !== "applicant";
+        });
+        patch.coverLetter.selectedPersonIds = ids;
+      }
       global.KhannaState.updateApplication(current.id, patch, null);
+      // This one field is an exception to "never rebuild the card on a
+      // plain field edit" (see file header) — filling or clearing it changes
+      // who counts as selected (the Singapore occupation list and the
+      // Europe/Japan people cap both key off that), the same class of
+      // "changes this panel's own shape" action as a checklist toggle.
+      if (isManualNameField) renderCard();
       if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
     });
 

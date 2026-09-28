@@ -62,3 +62,19 @@
 .cover-hotel-row__remove {
   color: var(--color-danger, #c0392b);
 }
+
+/* ---------------- "Use Existing Details" dropdown ----------------
+   Reuses .profile-menu__dropdown/.profile-menu__item (components.css) for
+   the menu itself — only this wrapper and the left-alignment override are
+   new (that shared dropdown normally right-aligns under a header menu). */
+.cover-use-existing {
+  position: relative;
+  display: inline-block;
+  margin-bottom: var(--space-4);
+}
+
+.cover-use-existing .profile-menu__dropdown {
+  left: 0;
+  right: auto;
+  min-width: 200px;
+}

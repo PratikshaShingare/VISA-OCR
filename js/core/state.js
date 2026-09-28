@@ -133,7 +133,12 @@
       city: "",
       confirmationNumber: "",
       leadGuestName: "",
-      noOfGuests: "",
+      // Split from a single "noOfGuests" field on explicit request, so the
+      // generated Hotel Voucher can print a real "2 Adult(s), 2 Child(s)"
+      // combined count (see hotel_voucher_engine.py's _format_guest_counts()
+      // on the backend) instead of one undifferentiated number.
+      noOfAdults: "",
+      noOfChildren: "",
       noOfRooms: "",
       roomType: "",
       checkIn: "",

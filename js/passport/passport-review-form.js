@@ -24,12 +24,18 @@
     { value: "X", label: "Other / Unspecified" },
   ];
 
+  // Middle Name and Full Name were removed from this form on explicit
+  // request — "Given Name" (still applicant.firstName under the hood, so
+  // every other consumer of that path keeps working) now holds the OCR's
+  // whole given-names string unsplit; applicant.fullName is still derived
+  // automatically at save time in passport-processing.js's savePerson()
+  // (from Given Name + Last Name) since other controllers — e.g.
+  // authorization.js's personHasCoreFields() — still key off it, it just no
+  // longer has its own input on this form.
   var PERSONAL_FIELDS = [
     { path: "applicant.salutation", label: "Salutation", type: "select", options: SALUTATIONS },
-    { path: "applicant.firstName", label: "First name" },
-    { path: "applicant.middleName", label: "Middle name" },
-    { path: "applicant.lastName", label: "Last name" },
-    { path: "applicant.fullName", label: "Full name (as printed in passport)" },
+    { path: "applicant.firstName", label: "Given Name" },
+    { path: "applicant.lastName", label: "Last Name" },
     { path: "applicant.dob", label: "Date of birth", type: "date" },
     { path: "applicant.sex", label: "Sex", type: "select", options: SEXES },
     { path: "applicant.nationality", label: "Nationality" },
@@ -210,23 +216,16 @@
     if (wrap) wrap.dataset.ocrTouched = "1";
   }
 
-  /** Splits MRZ givenNames into firstName/middleName, sharing that field's own confidence. */
+  /**
+   * Applies the OCR's full givenNames string onto the single "Given Name"
+   * field. Previously split into firstName/middleName across two form
+   * fields — Middle Name was removed from the form on request, so the
+   * whole given-names string (which may itself contain multiple words) now
+   * goes into applicant.firstName unsplit, sharing the OCR field's own
+   * confidence/source/needsReview exactly as returned.
+   */
   function applyGivenNames(container, ocrField) {
-    if (!ocrField || !ocrField.value) {
-      applyOcrField(container, "applicant.firstName", null);
-      applyOcrField(container, "applicant.middleName", null);
-      return;
-    }
-    var parts = ocrField.value.trim().split(/\s+/);
-    applyOcrField(container, "applicant.firstName", { value: parts[0], confidence: ocrField.confidence, source: ocrField.source, needsReview: ocrField.needsReview });
-    if (parts.length > 1) {
-      applyOcrField(container, "applicant.middleName", {
-        value: parts.slice(1).join(" "),
-        confidence: ocrField.confidence,
-        source: ocrField.source,
-        needsReview: ocrField.needsReview,
-      });
-    }
+    applyOcrField(container, "applicant.firstName", ocrField);
   }
 
   function renderMrzBadge(container, mrz) {
@@ -436,7 +435,6 @@
   function applyOcrResult(container, result) {
     var fields = result.fields || {};
     applyOcrField(container, "applicant.lastName", fields.surname);
-    applyOcrField(container, "applicant.fullName", fields.fullName);
     applyGivenNames(container, fields.givenNames);
     applyOcrField(container, "applicant.dob", fields.dateOfBirth);
     applyOcrField(container, "applicant.sex", fields.sex);

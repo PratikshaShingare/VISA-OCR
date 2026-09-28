@@ -57,7 +57,12 @@
     { key: "city", label: "City", required: true },
     { key: "confirmationNumber", label: "Booking confirmation number" },
     { key: "leadGuestName", label: "Lead guest name" },
-    { key: "noOfGuests", label: "No. of guests", type: "number" },
+    // Split from a single "No. of guests" field on explicit request — the
+    // generated voucher now prints a combined "2 Adult(s), 2 Child(s)"-style
+    // count (see hotel_voucher_engine.py's _format_guest_counts()) instead
+    // of one undifferentiated number.
+    { key: "noOfAdults", label: "No. of adults", type: "number" },
+    { key: "noOfChildren", label: "No. of children", type: "number" },
     { key: "noOfRooms", label: "No. of rooms", type: "number" },
     { key: "roomType", label: "Room type", placeholder: "e.g. Deluxe Double" },
     { key: "checkIn", label: "Check-in date", type: "date", required: true },
@@ -227,6 +232,61 @@
     global.KhannaState.updateHotel(appId, hotelId, { guestNames: names }, "Guest names updated");
   }
 
+  // "Upload Hotel Voucher" (explicit instruction): runs the new backend OCR
+  // module (backend/python/hotel_voucher_ocr.py) on a staff-uploaded
+  // hotel/OTA voucher and prefills whatever it could read into this
+  // hotel's own already-editable fields — nothing here is auto-verified
+  // (project rule 10, same as passport OCR): every field stays a plain,
+  // editable input, so an incorrect extraction is fixed the same way a
+  // manually-typed mistake would be. Only fields the backend actually
+  // returned a non-empty value for are touched — a field it couldn't find
+  // is left exactly as it was (blank, or whatever the user already typed),
+  // never overwritten with a blank.
+  function runHotelVoucherOcr(app, hotelId, file, r) {
+    var panel = utils.qs("[data-hotel-panel]", r);
+    var statusEl = utils.qs("[data-hotel-voucher-status]", panel);
+    if (statusEl) statusEl.textContent = "Extracting details from the voucher — this can take a few seconds...";
+
+    api.processHotelVoucher(file).then(
+      function (result) {
+        var hotel = global.KhannaState.getHotel(app.id, hotelId);
+        if (!hotel) return; // panel was closed / hotel removed while this was in flight
+        var fields = result.fields || {};
+        var patch = {};
+        Object.keys(fields).forEach(function (key) {
+          var value = fields[key];
+          if (value !== null && value !== undefined && String(value).trim() !== "") {
+            patch[key] = value;
+          }
+        });
+        if (result.guestNames && result.guestNames.length) {
+          patch.guestNames = result.guestNames;
+        }
+        if (Object.keys(patch).length === 0) {
+          if (statusEl) {
+            statusEl.textContent = "No recognizable details were found on this file — please enter them manually below.";
+          }
+          return;
+        }
+        global.KhannaState.updateHotel(app.id, hotelId, patch, "Hotel voucher details extracted");
+        var updated = global.KhannaState.getHotel(app.id, hotelId);
+        HOTEL_FIELDS.forEach(function (f) {
+          var el = utils.qs('[data-hotel-field="' + f.key + '"]', panel);
+          if (el) el.value = updated[f.key] || "";
+        });
+        renderGuestNames(updated, r);
+        if (statusEl) {
+          statusEl.textContent =
+            (result.warnings && result.warnings[0]) ||
+            "Extracted — please verify every field against the voucher before saving.";
+        }
+      },
+      function (err) {
+        if (statusEl) statusEl.textContent = (err && err.message) || "Could not read the hotel voucher.";
+      }
+    );
+  }
+
   function openPanel(hotelId, r) {
     r = r || root();
     var app = getApp();
@@ -246,6 +306,12 @@
       "<h3>Editing: " + utils.escapeHtml(hotelLabel(hotel)) + "</h3>" +
       '<button class="btn btn-ghost btn-sm" type="button" data-action="close-hotel-panel">Close</button>' +
       "</div>" +
+      '<div class="hotel-voucher-upload" data-hotel-voucher-upload>' +
+      '<input type="file" accept="image/jpeg,image/png,image/webp,image/bmp,application/pdf" data-hotel-voucher-file-input hidden />' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-hotel-voucher-browse>Upload Hotel Voucher</button>' +
+      '<span class="hotel-voucher-upload__status" data-hotel-voucher-status></span>' +
+      "</div>" +
+      '<p class="field-hint">Extracts whatever this voucher prints into the fields below — every field stays fully editable, so fix anything the extraction gets wrong before saving.</p>' +
       '<div class="field-grid">' + HOTEL_FIELDS.map(fieldRowHtml).join("") + "</div>" +
       '<div class="hotel-panel__guests">' +
       "<label>Guest names on the voucher</label>" +
@@ -421,6 +487,23 @@
 
     utils.on(r, "click", "[data-action='close-hotel-panel']", function () {
       closePanel(r);
+    });
+
+    utils.on(r, "click", "[data-hotel-voucher-browse]", function (e) {
+      e.stopPropagation();
+      var panel = utils.qs("[data-hotel-panel]", r);
+      var input = utils.qs("[data-hotel-voucher-file-input]", panel);
+      if (input) input.click();
+    });
+
+    // Auto-runs on selection — same "no separate Run button" pattern as
+    // Upload Passport (js/passport/passport-processing.js), on request.
+    utils.on(r, "change", "[data-hotel-voucher-file-input]", function (e, target) {
+      var app = getApp();
+      var activeId = getActiveHotelId(r);
+      var file = target.files && target.files[0];
+      if (!app || !activeId || !file) return;
+      runHotelVoucherOcr(app, activeId, file, r);
     });
 
     utils.on(r, "click", "[data-action='add-guest-name']", function () {

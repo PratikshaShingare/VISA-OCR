@@ -20,3 +20,7 @@ requests>=2.31
 # app.py's load_dotenv() call and .env.example. No effect on Vercel, which
 # has no .env file and injects real environment variables directly.
 python-dotenv>=1.0
+# hotel_voucher_ocr.py: parses the many real-world date formats a
+# third-party hotel voucher can print (DD/MM/YYYY, "12 Jan 2026", ...) into
+# the ISO shape the Hotel Blocking form's date inputs expect.
+python-dateutil>=2.8

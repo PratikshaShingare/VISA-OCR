@@ -108,11 +108,10 @@
         '<div class="passport-preview" data-passport-preview></div>' +
         '<div class="passport-review">' +
         '<div class="passport-review__actions">' +
-        '<button type="button" class="btn btn-primary btn-sm" data-passport-run-ocr>Run OCR</button>' +
         '<button type="button" class="btn btn-secondary btn-sm" data-passport-run-ocr-openrouter ' +
         'title="Testing path — calls an OpenRouter vision model instead of the Tesseract/Google Vision pipeline above. Single image only.">' +
         "Run OCR (OpenRouter — testing)</button>" +
-        '<button type="button" class="btn btn-ghost btn-sm" data-passport-replace>Replace file</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm passport-review__replace-btn" data-passport-replace>Replace file</button>' +
         '<span class="passport-review__status" data-passport-status></span>' +
         "</div>" +
         reviewForm.skeletonHtml(instanceId) +
@@ -171,7 +170,7 @@
       } else if (cached && cached.originalDataUrl && session.totalPages === 1) {
         imageSrc = cached.originalDataUrl;
       } else if (session.file) {
-        placeholderLabel = "Page not previewed until OCR runs — click Run OCR below.";
+        placeholderLabel = "Processing passport — preview will appear automatically...";
       } else if (session.imageRef) {
         // Resuming a draft: the saved fields below are real (they came from
         // KhannaState), but the raw image itself was only ever kept in this
@@ -209,8 +208,16 @@
             session.rotationByPage[session.currentPageIndex] = next;
             renderPreview(r);
           },
-          onFlipPage: function () {
-            session.currentPageIndex = (session.currentPageIndex + 1) % session.totalPages;
+          onPrevPage: function () {
+            if (session.currentPageIndex <= 0) return;
+            session.currentPageIndex -= 1;
+            renderPreview(r);
+            var cachedResult = session.resultByPage[session.currentPageIndex];
+            if (cachedResult) reviewForm.applyOcrResult(r, cachedResult);
+          },
+          onNextPage: function () {
+            if (session.currentPageIndex >= session.totalPages - 1) return;
+            session.currentPageIndex += 1;
             renderPreview(r);
             var cachedResult = session.resultByPage[session.currentPageIndex];
             if (cachedResult) reviewForm.applyOcrResult(r, cachedResult);
@@ -219,7 +226,13 @@
       );
     }
 
+    // Also hides/shows the upload dropzone: once a file is selected (or a
+    // saved draft with a passport already on file is resumed) the "upload
+    // passport / browse file" controls have no reason to stay visible —
+    // "Replace file" (bindEvents() below) is the only way back to them.
     function showWorkspace(r) {
+      var dropzone = utils.qs("[data-passport-dropzone]", r);
+      if (dropzone) dropzone.hidden = true;
       utils.qs("[data-passport-workspace]", r).hidden = false;
       var filenameEl = utils.qs("[data-passport-filename]", r);
       if (filenameEl && session.file) {
@@ -251,6 +264,12 @@
           renderPreview(r);
         };
         reader.readAsDataURL(file);
+        // No manual "Run OCR" button anymore — extraction starts the moment
+        // a file is selected (project instruction: "it should automatically
+        // run it and extract data from passport"). runOcr() only needs
+        // session.file, not the FileReader result above, so it can start in
+        // parallel rather than waiting on it.
+        runOcr(r);
       } else {
         setStatus(r, "Reading page count...");
         api.getPageCount(file).then(
@@ -258,6 +277,7 @@
             session.totalPages = res.totalPages || 1;
             setStatus(r, "");
             renderPreview(r);
+            runOcr(r);
           },
           function (err) {
             setStatus(r, "");
@@ -344,6 +364,20 @@
       var values = reviewForm.readValues(r);
       var lastResult = session ? session.resultByPage[session.currentPageIndex] : null;
 
+      // The "Full name" field was removed from the review form itself (the
+      // user only edits Given Name / Last Name now), but several other
+      // controllers still key off applicant.fullName as the one field that
+      // marks a person as usable — e.g. authorization.js's
+      // personHasCoreFields(), which gates who shows up in Cover
+      // Letter/Authorization/Invitation Letter checklists. Deriving it here
+      // keeps that working without resurrecting a field the user asked to
+      // remove from the UI.
+      values.applicant.fullName = [values.applicant.firstName, values.applicant.lastName]
+        .filter(function (part) {
+          return part && part.trim();
+        })
+        .join(" ");
+
       var personPatch = Object.assign({}, values.applicant, {
         passport: {
           current: Object.assign({}, values.current, {
@@ -372,6 +406,7 @@
       if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
       updateContinueToDocumentVisibility(r);
       setStatus(r, "Saved.");
+      if (global.KhannaToast) global.KhannaToast.show("Passport details saved", { type: "success" });
     }
 
     function bindEvents(r) {
@@ -416,13 +451,11 @@
       utils.on(r, "click", "[data-passport-replace]", function () {
         session = freshSession();
         utils.qs("[data-passport-workspace]", r).hidden = true;
+        dropzone.hidden = false;
         var filenameEl = utils.qs("[data-passport-filename]", r);
         if (filenameEl) filenameEl.hidden = true;
         fileInput.value = "";
-      });
-
-      utils.on(r, "click", "[data-passport-run-ocr]", function () {
-        runOcr(r);
+        renderPreview(r);
       });
 
       utils.on(r, "click", "[data-passport-run-ocr-openrouter]", function () {
@@ -452,6 +485,18 @@
       if (hasSavedPassport) {
         session.imageRef = person.passport.imageRef;
         showWorkspace(r);
+      } else {
+        // Switching to an application with nothing saved yet (e.g. "Create
+        // new application") must reset the dropzone/workspace visibility —
+        // otherwise a dropzone hidden by a PREVIOUS application's uploaded
+        // file would stay hidden here with no file selected and no way to
+        // reach "Browse file" again.
+        var dropzoneEl = utils.qs("[data-passport-dropzone]", r);
+        if (dropzoneEl) dropzoneEl.hidden = false;
+        var workspaceEl = utils.qs("[data-passport-workspace]", r);
+        if (workspaceEl) workspaceEl.hidden = true;
+        var filenameEl = utils.qs("[data-passport-filename]", r);
+        if (filenameEl) filenameEl.hidden = true;
       }
       renderPreview(r);
       updateContinueToDocumentVisibility(r);

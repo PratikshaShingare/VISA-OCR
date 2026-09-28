@@ -51,6 +51,7 @@ import cover_letter_engine
 import data_model
 import docx_utils
 import hotel_voucher_engine
+import hotel_voucher_ocr
 import invitation_letter_engine
 import ocr_providers
 import ocr_runner
@@ -219,6 +220,57 @@ async def page_count(file: UploadFile = File(...)):
             pass
 
 
+@app.post("/api/hotel-voucher/process")
+async def process_hotel_voucher_upload(
+    file: UploadFile = File(...),
+    page_index: int = Form(0),
+):
+    """Hotel Blocking's "Upload Hotel Voucher" — extracts whatever fields
+    hotel_voucher_ocr.py can find on a staff-uploaded hotel/OTA voucher
+    (image or PDF) so the Hotel Blocking form doesn't have to be retyped by
+    hand. Mirrors /api/passport/process's own request/error shape exactly
+    (same upload-size/type limits, same clean-error-not-a-stack-trace
+    handling) — this is a sibling endpoint, not a variant of that one, since
+    hotel vouchers share nothing with passport MRZ/bio-data parsing beyond
+    the underlying image pipeline (see hotel_voucher_ocr.py's own docstring)."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, f"Unsupported file type '{ext}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}")
+
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "File too large (max 25MB).")
+    if not contents:
+        raise HTTPException(400, "Uploaded file is empty.")
+
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+
+    try:
+        result = hotel_voucher_ocr.process_hotel_voucher_file(tmp_path, page_index=page_index)
+    except IndexError as e:
+        raise HTTPException(400, str(e))
+    except pytesseract.pytesseract.TesseractNotFoundError:
+        status = ocr_runner.get_ocr_engine_status()
+        raise HTTPException(
+            503,
+            "The Tesseract OCR engine isn't available on this machine "
+            f"(looked for it at '{status.get('path')}'). {status.get('hint', '')}",
+        )
+    except ocr_providers.OCRProviderError as e:
+        raise HTTPException(503, f"OCR is currently unavailable: {e}")
+    except Exception as e:  # noqa: BLE001 — surface as a clean 500, never a raw stack trace to the UI
+        raise HTTPException(500, f"Hotel voucher processing failed: {e}")
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    return result
+
+
 PREVIEW_CONVERTIBLE_EXTENSIONS = {".docx"}
 MAX_PREVIEW_UPLOAD_BYTES = 25 * 1024 * 1024  # 25MB — same cap as a passport upload
 
@@ -363,7 +415,12 @@ class HotelItem(BaseModel):
     city: str = ""
     confirmationNumber: str = ""
     leadGuestName: str = ""
-    noOfGuests: str = ""
+    # Split from a single "noOfGuests" field on explicit request, so the
+    # generated voucher can print a real "2 Adult(s), 2 Child(s)"-style
+    # combined count instead of one undifferentiated number (see
+    # hotel_voucher_engine.py's _format_guest_counts()).
+    noOfAdults: str = ""
+    noOfChildren: str = ""
     noOfRooms: str = ""
     roomType: str = ""
     checkIn: str = ""
