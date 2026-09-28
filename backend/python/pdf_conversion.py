@@ -26,6 +26,7 @@ CLOUDCONVERT_API_KEY is read here, server-side only.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -225,3 +226,45 @@ def convert_docx_bytes_to_pdf(docx_bytes: bytes, base_name: str = "document") ->
     if use_cloud:
         return convert_via_cloudconvert(docx_bytes, base_name=base_name)
     return convert_via_local_libreoffice(docx_bytes, base_name=base_name)
+
+
+def get_pdf_conversion_status() -> dict:
+    """Real, live status of whichever PDF-conversion path is actually active
+    in THIS running process — surfaced on /api/health (project rule 9: never
+    fake status) so a mismatched/missing env var on a live deployment (e.g.
+    Vercel) can be confirmed from the deployment itself, without needing to
+    generate a document first, and without ever printing the key's value
+    (project rule 12 — secrets are never exposed, not even masked/partial)."""
+    choice = os.environ.get("PDF_CONVERSION_PROVIDER", "auto").strip().lower()
+    has_cloudconvert_key = bool(os.environ.get("CLOUDCONVERT_API_KEY", "").strip())
+    use_cloud = choice == "cloudconvert" or (choice == "auto" and has_cloudconvert_key)
+
+    if use_cloud:
+        return {
+            "provider": "cloudconvert",
+            "available": has_cloudconvert_key,
+            "pdfConversionProviderEnv": choice,
+            "hasCloudConvertKey": has_cloudconvert_key,
+            "note": (
+                "Reflects whether CLOUDCONVERT_API_KEY is present in THIS "
+                "running deployment, not a live call to CloudConvert (that "
+                "would spend real conversion credits on every health check)."
+            ),
+        }
+
+    soffice_path = shutil.which("soffice")
+    return {
+        "provider": "local",
+        "available": bool(soffice_path),
+        "pdfConversionProviderEnv": choice,
+        "hasCloudConvertKey": has_cloudconvert_key,
+        "sofficePath": soffice_path,
+        "note": (
+            "No CLOUDCONVERT_API_KEY is visible to this running deployment, "
+            "so it's falling back to local LibreOffice — which is not "
+            "installed on Vercel. If you set CLOUDCONVERT_API_KEY in Vercel "
+            "and this still says hasCloudConvertKey: false after a fresh "
+            "redeploy, the key was set on a different Vercel project than "
+            "the one actually serving this domain."
+        ),
+    }

@@ -56,6 +56,7 @@ import invitation_letter_engine
 import ocr_providers
 import ocr_runner
 import openrouter_ocr
+import pdf_conversion
 import required_document_letter_engine
 import visa_requirements_data
 
@@ -103,6 +104,12 @@ def health():
         # without needing to upload a passport first just to find out
         # (project rule 9 — never fake status).
         "ocrEngine": ocr_runner.get_ocr_engine_status(),
+        # Same honesty rule applied to PDF conversion: confirms whether
+        # CLOUDCONVERT_API_KEY is actually visible to THIS running
+        # deployment (never the key's value — project rule 12), so a
+        # mismatched Vercel project/env-var scope shows up here immediately
+        # instead of only after a staff member tries to generate a document.
+        "pdfConversion": pdf_conversion.get_pdf_conversion_status(),
     }
 
 

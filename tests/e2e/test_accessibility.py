@@ -55,7 +55,9 @@ async def main():
         checks.check("A keyboard-focused element gets a real visible outline (:focus-visible)", outline_style not in ("none", ""), outline_style)
 
         # ---- New application, step 1: label/for wiring + keyboard reachability ----
-        await page.click("[data-action='new-application']")
+        # Scoped to a visible match — three buttons now share this
+        # data-action and one (the profile-menu item) is hidden by default.
+        await page.locator("[data-action='new-application']:visible").first.click()
         await page.wait_for_timeout(300)
         await page.evaluate("location.hash = '#/new-application/1'")
         await page.wait_for_timeout(300)

@@ -35,6 +35,8 @@ from _common import (
     ensure_fixtures,
     fill_ocr_person,
     fresh_load_and_login,
+    generate_and_download,
+    generate_and_download_docx,
 )
 
 checks = Checks()
@@ -54,7 +56,12 @@ async def main():
         checks.check("Logged in (header shows account)", await page.locator("[data-profile-toggle]").count() == 1)
 
         # ---------- New application ----------
-        await page.click("[data-action='new-application']")
+        # Three buttons now share this data-action (profile-menu item, plus
+        # one each on Dashboard and Applications) — the menu one is hidden
+        # until that dropdown is opened, so an unscoped click can resolve to
+        # a hidden element and time out. Matches the :visible-scoped pattern
+        # already used in test_device_emulation.py.
+        await page.locator("[data-action='new-application']:visible").first.click()
         await page.wait_for_timeout(300)
         app_id = await page.evaluate("KhannaState.getActiveApplicationId()")
         checks.check("New application created with an id", bool(app_id))
@@ -157,7 +164,11 @@ async def main():
             await page.fill("#hf-city", city)
             await page.fill("#hf-confirmationNumber", "CONF-" + name[:4].upper())
             await page.fill("#hf-leadGuestName", "Rohan Mehta")
-            await page.fill("#hf-noOfGuests", "3")
+            # Split from a single "No. of guests" field on explicit product
+            # request (see HOTEL_FIELDS in js/hotels.js) — the voucher now
+            # prints a combined "2 Adult(s), 1 Child(s)"-style count.
+            await page.fill("#hf-noOfAdults", "2")
+            await page.fill("#hf-noOfChildren", "1")
             await page.fill("#hf-noOfRooms", "2")
             await page.fill("#hf-roomType", "Deluxe")
             await page.fill("#hf-checkIn", checkin)
@@ -176,11 +187,9 @@ async def main():
             str([(h.get("hotelName"), h.get("city")) for h in hotels_saved]),
         )
 
-        gen_disabled = await page.get_attribute("[data-action='generate-voucher'][data-format='docx']", "disabled")
+        gen_disabled = await page.get_attribute("[data-action='generate-voucher']", "disabled")
         checks.check("Step 5: Generate voucher enabled with 2 complete hotels", gen_disabled is None)
-        async with page.expect_download() as dl_info:
-            await page.click("[data-action='generate-voucher'][data-format='docx']")
-        dl = await dl_info.value
+        dl = await generate_and_download_docx(page, "[data-action='generate-voucher']", "[data-voucher-preview]")
         checks.check("Step 5: Hotel Voucher (.docx) real download triggered", dl.suggested_filename.endswith(".docx"), dl.suggested_filename)
         cont_disabled_5 = await page.get_attribute("[data-wizard-continue]", "disabled")
         checks.check("Step 5: Continue enabled once both hotels complete", cont_disabled_5 is None)
@@ -197,11 +206,11 @@ async def main():
         await page.fill("#auth-passport-collectorName", "Mr. Suresh Patil")
         await page.locator("#auth-passport-collectorName").blur()
         await page.wait_for_timeout(300)
-        pa_disabled = await page.get_attribute("[data-action='generate-authorization'][data-group='passport'][data-format='docx']", "disabled")
+        pa_disabled = await page.get_attribute("[data-action='generate-authorization'][data-group='passport']", "disabled")
         checks.check("Step 6: Passport Authorization Generate enabled", pa_disabled is None)
-        async with page.expect_download() as dl_info:
-            await page.click("[data-action='generate-authorization'][data-group='passport'][data-format='docx']")
-        dl = await dl_info.value
+        dl = await generate_and_download_docx(
+            page, "[data-action='generate-authorization'][data-group='passport']", "[data-doc-preview='passport']"
+        )
         checks.check("Step 6: Passport Authorization real download triggered", dl.suggested_filename.endswith(".docx"), dl.suggested_filename)
 
         company_checks = page.locator('[data-auth-checklist="company"] input[type=checkbox]')
@@ -211,11 +220,11 @@ async def main():
         await page.fill("#auth-company-recipientText", "The Consulate General of Germany, Mumbai")
         await page.locator("#auth-company-recipientText").blur()
         await page.wait_for_timeout(300)
-        ca_disabled = await page.get_attribute("[data-action='generate-authorization'][data-group='company'][data-format='docx']", "disabled")
+        ca_disabled = await page.get_attribute("[data-action='generate-authorization'][data-group='company']", "disabled")
         checks.check("Step 6: Company Authorization Generate enabled (3 people)", ca_disabled is None)
-        async with page.expect_download() as dl_info:
-            await page.click("[data-action='generate-authorization'][data-group='company'][data-format='docx']")
-        dl = await dl_info.value
+        dl = await generate_and_download_docx(
+            page, "[data-action='generate-authorization'][data-group='company']", "[data-doc-preview='company']"
+        )
         checks.check("Step 6: Company Authorization real download triggered", dl.suggested_filename.endswith(".docx"), dl.suggested_filename)
 
         await page.click("[data-auth-tab='cover']")
@@ -245,11 +254,9 @@ async def main():
             await page.fill(sel, val)
         await page.locator("#cover-europe-companionEmploymentStartYear").blur()
         await page.wait_for_timeout(300)
-        cover_gen_disabled = await page.get_attribute("[data-action='generate-cover-letter'][data-format='docx']", "disabled")
+        cover_gen_disabled = await page.get_attribute("[data-action='generate-cover-letter']", "disabled")
         checks.check("Step 6: Europe Cover Letter Generate enabled", cover_gen_disabled is None)
-        async with page.expect_download() as dl_info:
-            await page.click("[data-action='generate-cover-letter'][data-format='docx']")
-        dl = await dl_info.value
+        dl = await generate_and_download_docx(page, "[data-action='generate-cover-letter']", "[data-doc-preview='']")
         checks.check("Step 6: Cover Letter real download triggered", dl.suggested_filename.endswith(".docx"), dl.suggested_filename)
 
         cont_disabled_6 = await page.get_attribute("[data-wizard-continue]", "disabled")
@@ -287,9 +294,7 @@ async def main():
         await page.wait_for_timeout(200)
         await page.set_input_files('[data-signature-file-input="invitation"]', FAKE_SIGNATURE_PNG)
         await page.wait_for_timeout(200)
-        async with page.expect_download() as dl_info:
-            await page.click("[data-action='generate-invitation'][data-format='docx']")
-        dl = await dl_info.value
+        dl = await generate_and_download_docx(page, "[data-action='generate-invitation']", "[data-invitation-preview]")
         checks.check("Step 7: Invitation Letter real download triggered", dl.suggested_filename.endswith(".docx"), dl.suggested_filename)
 
         initors_checks = page.locator("[data-initors-checklist] input[type=checkbox]")
@@ -330,9 +335,12 @@ async def main():
         await page.wait_for_timeout(200)
         for idx, pid in enumerate(person_ids):
             fmt = "docx" if idx == 0 else "pdf"
-            async with page.expect_download() as dl_info:
-                await page.click(f'[data-action="generate-initors"][data-person-id="{pid}"][data-format="{fmt}"]')
-            dl = await dl_info.value
+            dl = await generate_and_download(
+                page,
+                f'[data-action="generate-initors"][data-person-id="{pid}"]',
+                f'[data-initors-preview="{pid}"]',
+                fmt=fmt,
+            )
             err = (await page.locator(f'[data-initors-error="{pid}"]').inner_text()).strip()
             voice = "wife" if idx == 0 else "husband"
             checks.check(f"Step 7: Initors letter for person {idx + 1} ({voice}-voice template) generated, no error", err == "", err)

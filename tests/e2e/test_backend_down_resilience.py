@@ -40,6 +40,47 @@ async def _expect_honest_failure(page, generate_selector: str, error_selector: s
     checks.check(f"{generate_selector}: button re-enabled after the failure (not stuck disabled)", btn_disabled is None)
 
     btn_text_after = (await page.locator(button_selector).inner_text()).strip()
+    checks.check(
+        f"{generate_selector}: button text reverted to its normal label (not stuck on 'Generating…')",
+        btn_text_after == original_text,
+        btn_text_after,
+    )
+
+
+async def _expect_honest_failure_in_viewer(page, generate_selector: str, preview_scope: str, button_selector: str | None = None):
+    """Same honest-failure contract as _expect_honest_failure(), but for the
+    3 document types that now go through the shared document-viewer
+    component (js/document-viewer.js): since the document-first redesign,
+    a loadPdf() failure is caught INSIDE DocumentViewerInstance.refresh()
+    itself (so the per-feature [data-voucher-error]/[data-auth-error=...]/
+    [data-cover-error] divs this test used to check are never populated by
+    a backend-down failure anymore — those still exist but are for
+    pre-generation validation messages only), and surfaces instead as the
+    viewer's own `[data-dv='status']` text via _setPdfUnavailable(). Button
+    disabled/text-revert behaviour is unaffected and still checked the same
+    way, via hotels.js/authorization.js/cover-letter.js's own .finally()."""
+    button_selector = button_selector or generate_selector
+    original_text = (await page.locator(button_selector).inner_text()).strip()
+    await page.click(generate_selector)
+    status_sel = f"{preview_scope} [data-dv='status']"
+    for _ in range(20):
+        status_text = (await page.inner_text(status_sel)).strip()
+        if status_text != "Generating document…":
+            break
+        await page.wait_for_timeout(300)
+    # The status text (set inside refresh()'s own internal .catch()) and the
+    # button's re-enable (set in the CALLER's outer .finally(), one promise
+    # tick later) are both real and both happen, but not in the same tick —
+    # a short settle avoids reading the button between the two.
+    await page.wait_for_timeout(150)
+
+    honest = any(word in status_text.lower() for word in ("reach", "backend", "connect", "unavailable"))
+    checks.check(f"{generate_selector}: an honest backend-unreachable message is shown", honest, status_text)
+
+    btn_disabled = await page.get_attribute(button_selector, "disabled")
+    checks.check(f"{generate_selector}: button re-enabled after the failure (not stuck disabled)", btn_disabled is None)
+
+    btn_text_after = (await page.locator(button_selector).inner_text()).strip()
     checks.check(f"{generate_selector}: button text reverted to its normal label (not stuck on 'Generating…')", btn_text_after == original_text, btn_text_after)
 
 
@@ -56,7 +97,9 @@ async def main():
         await page.fill("[data-login-form] input[type='password']", STAFF_PASSWORD)
         await page.click("[data-login-form] button[type='submit']")
         await page.wait_for_timeout(300)
-        await page.click("[data-action='new-application']")
+        # Scoped to a visible match — three buttons now share this
+        # data-action and one (the profile-menu item) is hidden by default.
+        await page.locator("[data-action='new-application']:visible").first.click()
         await page.wait_for_timeout(300)
 
         # Seed enough state directly (rather than re-running real OCR,
@@ -94,10 +137,10 @@ async def main():
         await page.wait_for_timeout(200)
         await page.click("[data-action='close-hotel-panel']")
         await page.wait_for_timeout(200)
-        await _expect_honest_failure(
+        await _expect_honest_failure_in_viewer(
             page,
-            "[data-action='generate-voucher'][data-format='docx']",
-            "[data-voucher-error]",
+            "[data-action='generate-voucher']",
+            "[data-voucher-preview]",
         )
 
         # ---- Passport Authorization (Step 6) ----
@@ -108,10 +151,10 @@ async def main():
         await page.fill("#auth-passport-collectorName", "Ms. Test Collector")
         await page.locator("#auth-passport-collectorName").blur()
         await page.wait_for_timeout(200)
-        await _expect_honest_failure(
+        await _expect_honest_failure_in_viewer(
             page,
-            "[data-action='generate-authorization'][data-group='passport'][data-format='docx']",
-            "[data-auth-error='passport']",
+            "[data-action='generate-authorization'][data-group='passport']",
+            "[data-doc-preview='passport']",
         )
 
         # ---- Europe Cover Letter (Step 6) ----
@@ -140,10 +183,10 @@ async def main():
             await page.fill(sel, val)
         await page.locator("#cover-europe-companionEmploymentStartYear").blur()
         await page.wait_for_timeout(200)
-        await _expect_honest_failure(
+        await _expect_honest_failure_in_viewer(
             page,
-            "[data-action='generate-cover-letter'][data-format='docx']",
-            "[data-cover-error]",
+            "[data-action='generate-cover-letter']",
+            "[data-doc-preview='']",
         )
 
         # ---- Admin Excel export ----
