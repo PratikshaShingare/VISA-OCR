@@ -102,12 +102,201 @@
       (fileName ? "Replace signature" : "Upload signature (optional)") +
       "</button>" +
       (fileName
-        ? '<span class="signature-upload__filename">' + utils.escapeHtml(fileName) + "</span>" +
+        ? '<span class="signature-upload__meta">' +
+          '<span class="signature-upload__filename">' + utils.escapeHtml(fileName) + "</span>" +
           '<button type="button" class="btn-icon" data-action="remove-signature" data-scope="' + utils.escapeHtml(scope) + '" aria-label="Remove signature">' +
-          '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>'
-        : '<span class="field-hint">A wet or scanned signature image, optional — left blank, the letter’s own signature line stays exactly as blank as the reference template leaves it.</span>') +
+          '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>' +
+          "</span>"
+        : '<span class="field-hint">Optional signature image.</span>') +
       "</div>"
     );
+  }
+
+  /* ---------------------------------------------------------------------
+   * "Use Existing Details ▾" (standalone Invitation Letter page only) —
+   * replaces the removed "Use Existing Application"/"Use Existing
+   * Applicant" buttons (see document-workspace.js's VIEW_BUTTON_CONFIG),
+   * same two-box dropdown as the Cover Letter page: the kind of detail on
+   * the left (Passport / Hotel Blocking), a short scrollable list of saved
+   * ones on the right. One dropdown sits in each of this page's two cards
+   * and only ever changes that card (`which` = "invitation" | "initors").
+   * The saved lists themselves come from js/saved-details.js, shared with
+   * the Cover Letter.
+   *
+   *  - Passport: this letter's people are the active application's own
+   *    applicant/travellers, so a passport saved on ANOTHER application (or
+   *    in the saved-profile pool) is first added to the active application
+   *    as a traveller — exactly what "Use Existing Traveller" already does —
+   *    then ticked in this card. The source is only copied, never changed.
+   *  - Hotel Blocking: fills the trip dates, accommodation (and, for the
+   *    couple's letter, the destination country) from the saved hotel
+   *    blocking. Return date is never invented — a hotel booking doesn't
+   *    say when someone flies home — so it is named in the status line.
+   * ------------------------------------------------------------------- */
+
+  function isStandalonePage() {
+    var r = root();
+    return !!(r && r.hasAttribute("data-invitation-letter-page-root"));
+  }
+
+  function savedDetails() {
+    return global.KhannaSavedDetails;
+  }
+
+  // An application's blank applicant placeholder (no name, no passport) is
+  // never listed as an "Unnamed" checkbox row — same as the Cover Letter.
+  function peopleWithDetails(people) {
+    return people.filter(function (p) { return savedDetails().hasNameOrPassport(p); });
+  }
+
+  function noPeopleHintHtml() {
+    return isStandalonePage()
+      ? '<p class="field-hint">No people on this application yet — choose “Use Existing Details” → Passport above, or add them on Upload Passport / Travellers.</p>'
+      : '<p class="field-hint">Add the applicant and/or travellers in earlier steps first.</p>';
+  }
+
+  function useExistingHtml(which) {
+    if (!isStandalonePage()) return "";
+    return (
+      '<div class="cover-use-existing" data-inv-use-existing="' + which + '">' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-inv-use-existing-toggle aria-haspopup="true" aria-expanded="false">' +
+      "Use Existing Details " +
+      '<span aria-hidden="true">&#9662;</span>' +
+      "</button>" +
+      '<div class="cover-existing-panel" data-inv-use-existing-dropdown>' +
+      '<div class="cover-existing-menu" role="menu">' +
+      '<button type="button" class="cover-existing-menu__item" role="menuitem" data-inv-use-existing-option="passport">Passport <span aria-hidden="true">&#9656;</span></button>' +
+      '<button type="button" class="cover-existing-menu__item" role="menuitem" data-inv-use-existing-option="hotel-blocking">Hotel Blocking <span aria-hidden="true">&#9656;</span></button>' +
+      "</div>" +
+      '<div class="cover-existing-list" data-inv-existing-list hidden></div>' +
+      "</div>" +
+      "</div>" +
+      '<div class="cover-existing-status" data-inv-existing-status role="status" aria-live="polite" hidden></div>'
+    );
+  }
+
+  function closeUseExistingMenus() {
+    var r = root();
+    if (!r) return;
+    utils.qsa("[data-inv-use-existing-dropdown]", r).forEach(function (dd) { dd.classList.remove("is-open"); });
+    utils.qsa("[data-inv-use-existing-toggle]", r).forEach(function (t) { t.setAttribute("aria-expanded", "false"); });
+  }
+
+  function cardFor(which) {
+    return utils.qs(which === "invitation" ? "[data-invitation-card]" : "[data-initors-card]", root());
+  }
+
+  function setExistingStatus(which, message, isWarning) {
+    var box = utils.qs("[data-inv-existing-status]", cardFor(which));
+    if (!box) return;
+    box.hidden = !message;
+    box.classList.toggle("is-warning", !!isWarning);
+    box.textContent = message || "";
+  }
+
+  function rerenderCard(which) {
+    if (which === "invitation") renderInvitationCard();
+    else renderInitorsCard();
+  }
+
+  // Where each card keeps its ticked people.
+  function selectionConfig(which) {
+    return which === "invitation"
+      ? { section: "invitation", idsKey: "selectedInviteeIds", state: invitationState }
+      : { section: "initorsLetters", idsKey: "selectedPersonIds", state: initorsState };
+  }
+
+  function samePassportPerson(person, src) {
+    return savedDetails().samePassportPerson(person, src);
+  }
+
+  function addSavedPersonAsTraveller(app, src) {
+    return savedDetails().addSavedPersonAsTraveller(app, src);
+  }
+
+  function usePassportFromSource(which, key) {
+    var app = getApp();
+    var auth = authHelpers();
+    if (!app || !auth) return;
+    var src = savedDetails().passportSources().filter(function (s) { return s.key === key; })[0];
+    if (!src) return;
+    var cfg = selectionConfig(which);
+    var ids = (cfg.state(app)[cfg.idsKey] || []).slice();
+    var name = auth.personDisplayName(src.row);
+
+    var existing = auth.getSelectablePeople(app).filter(function (p) { return samePassportPerson(p, src); })[0];
+    if (existing && ids.indexOf(existing.id) !== -1) {
+      rerenderCard(which);
+      setExistingStatus(which, name + " is already selected on this letter.", true);
+      return;
+    }
+    if (ids.length >= 2) {
+      rerenderCard(which);
+      setExistingStatus(which, "This letter takes exactly 2 people. Untick one below before adding another.", true);
+      return;
+    }
+
+    var id = existing ? existing.id : addSavedPersonAsTraveller(app, src);
+    ids.push(id);
+    var patch = {};
+    patch[cfg.section] = {};
+    patch[cfg.section][cfg.idsKey] = ids;
+    global.KhannaState.updateApplication(app.id, patch, null);
+    rerenderCard(which);
+    setExistingStatus(
+      which,
+      "Selected " + name + " (from " + src.appLabel + ")." +
+        (existing ? "" : " They were also added to this application as a traveller.") +
+        (src.row.passportNumber ? "" : " No passport number is saved for this person — add it on their passport page before generating."),
+      !src.row.passportNumber
+    );
+    if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
+  }
+
+  // "at Hotel A, Paris and Hotel B, Rome" — reads naturally after the
+  // templates' own "They will be staying" / "We will be staying".
+  function accommodationFromHotels(hotels) {
+    if (!hotels.length || !hotels.every(function (h) { return h.hotelName; })) return "";
+    var parts = hotels.map(function (h) { return h.hotelName + (h.city ? ", " + h.city : ""); });
+    var text = parts.length > 1 ? parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1] : parts[0];
+    return "at " + text;
+  }
+
+  function useHotelBlockingFromSource(which, appId) {
+    var app = getApp();
+    var src = global.KhannaState.getApplication(appId);
+    if (!app || !src) return;
+    var hotels = savedDetails().usableHotels(src);
+    if (!hotels.length) {
+      setExistingStatus(which, "That hotel blocking has no hotel details to use.", true);
+      return;
+    }
+    var span = savedDetails().hotelDateSpan(hotels);
+    var accommodation = accommodationFromHotels(hotels);
+    var country = (hotels[0].country || "").trim();
+    var filled = [];
+    var missing = [];
+    var fields = {};
+    if (span.start) { fields.travelStartDate = span.start; filled.push("travel start date"); } else missing.push("travel start date");
+    if (span.end) { fields.travelEndDate = span.end; filled.push("travel end date"); } else missing.push("travel end date");
+    if (accommodation) { fields.accommodationDetails = accommodation; filled.push("accommodation"); } else missing.push("accommodation");
+    if (which === "initors") {
+      if (country) { fields.country = country; filled.push("destination country"); } else missing.push("destination country");
+    }
+    missing.push("return date");
+
+    var cfg = selectionConfig(which);
+    var patch = {};
+    patch[cfg.section] = fields;
+    global.KhannaState.updateApplication(app.id, patch, null);
+    rerenderCard(which);
+    setExistingStatus(
+      which,
+      "Filled " + (filled.join(", ") || "nothing") + " from " + savedDetails().appLabel(src) + "’s hotel blocking. " +
+        "Not available there — fill in manually: " + missing.join(", ") + ".",
+      true
+    );
+    if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
   }
 
   /* ---------------------------------------------------------------------
@@ -170,10 +359,8 @@
 
   function inviteeChecklistHtml(app) {
     var auth = authHelpers();
-    var people = auth ? auth.getSelectablePeople(app) : [];
-    if (!people.length) {
-      return '<p class="field-hint">Add the applicant and/or travellers in earlier steps first.</p>';
-    }
+    var people = peopleWithDetails(auth ? auth.getSelectablePeople(app) : []);
+    if (!people.length) return noPeopleHintHtml();
     var state = invitationState(app);
     var selectedIds = state.selectedInviteeIds || [];
     return people
@@ -221,10 +408,10 @@
       fieldRowHtml("invitation-field", "inviter", "fullAddress", "Full address (one line)", inv.fullAddress, true, {
         placeholder: "Used in the letter's opening paragraph",
       }) +
-      fieldRowHtml("invitation-field", "inviter", "country", "Country (of the consulate)", inv.country, true, {
-        placeholder: "e.g. Ireland",
-      }) +
-      fieldRowHtml("invitation-field", "inviter", "cityCountry", "City, country (of the consulate)", inv.cityCountry, true, {
+      // The consulate is picked by country (searchable list); its city/country
+      // line starts as Mumbai, India and stays editable (js/consulate.js).
+      global.KhannaConsulate.comboHtml({ key: "inviter-country", id: "inv-inviter-country", label: "Consulate country", value: inv.country, required: true }) +
+      fieldRowHtml("invitation-field", "inviter", "cityCountry", "Address of Consulate (city, country)", inv.cityCountry, true, {
         placeholder: "e.g. Mumbai, India",
       }) +
       fieldRowHtml("invitation-field", "inviter", "studyingOrWorking", "Studying or working", inv.studyingOrWorking, true, {
@@ -254,6 +441,99 @@
       }) +
       "</div>"
     );
+  }
+
+  /* ---------------------------------------------------------------------
+   * Invitation Letter — editable preview. A FIXED 15-key field set (see
+   * invitation_letter_engine.INVITATION_EDITABLE_FIELD_KEYS on the backend)
+   * covering every one of this letter's generated-content paragraphs —
+   * never the fixed "From,"/"To,"/"Subject:"/"Respected Sir/Madam,"/
+   * "Thank you!"/"Yours Sincerely," lines, and never the blank signature
+   * slot. Staff edit them directly on the real preview page (Edit button,
+   * js/document-viewer.js); edits are kept in app.invitation.editedFields.
+   * ------------------------------------------------------------------- */
+
+  var INVITATION_EDITABLE_FIELDS = [
+    { key: "date", label: "Letter date" },
+    { key: "inviterNameLine", label: "Inviter name line ('From,')" },
+    { key: "inviterAddressLine1", label: "Inviter address line 1" },
+    { key: "inviterAddressLine2", label: "Inviter address line 2" },
+    { key: "inviterCityPostcode", label: "Inviter city, postcode" },
+    { key: "inviterCountry", label: "Consulate country line" },
+    { key: "inviterCityCountry", label: "Consulate city, country line" },
+    { key: "inviterDetails", label: "Inviter's own residency/occupation sentence" },
+    { key: "inviteesDetails", label: "Invitees' passport & travel-dates sentence" },
+    { key: "purposeStatement", label: "Purpose-of-visit sentence" },
+    { key: "accommodationAndReturn", label: "Accommodation & return-date sentence" },
+    { key: "fundingArrangement", label: "Funding-arrangement sentence" },
+    { key: "signOffName", label: "Sign-off name" },
+    { key: "phone", label: "Phone line" },
+    { key: "email", label: "Email line" },
+  ];
+
+  function invitationComposePayload(app) {
+    var invitees = selectedInvitees(app);
+    var state = invitationState(app);
+    var inv = state.inviter || {};
+    return {
+      inviter: {
+        fullName: inv.fullName || "",
+        addressLine1: inv.addressLine1 || "",
+        addressLine2: inv.addressLine2 || "",
+        cityPostcode: inv.cityPostcode || "",
+        country: inv.country || "",
+        cityCountry: inv.cityCountry || "",
+        passportNumber: inv.passportNumber || "",
+        fullAddress: inv.fullAddress || "",
+        studyingOrWorking: inv.studyingOrWorking || "",
+        universityOrCompany: inv.universityOrCompany || "",
+        phone: inv.phone || "",
+        email: inv.email || "",
+      },
+      invitees: invitees.map(function (p) {
+        return {
+          fullName: p.fullName || "",
+          passportNumber: p.passportNumber || "",
+          placeOfIssue: p.placeOfIssue || "",
+          passportIssueDate: p.passportIssueDate || "",
+        };
+      }),
+      travelStartDate: state.travelStartDate || "",
+      travelEndDate: state.travelEndDate || "",
+      purpose: state.purpose || "",
+      accommodationDetails: state.accommodationDetails || "",
+      returnDate: state.returnDate || "",
+      fundingArrangement: state.fundingArrangement || "",
+    };
+  }
+
+  var INVITATION_FIELD_LABELS = {};
+  INVITATION_EDITABLE_FIELDS.forEach(function (f) {
+    INVITATION_FIELD_LABELS[f.key] = f.label.toLowerCase();
+  });
+
+  function makeInvitationEditor() {
+    return global.KhannaPreviewEditor.createForDocument({
+      getEditedFields: function () {
+        var currentApp = getApp();
+        return currentApp ? invitationState(currentApp).editedFields : null;
+      },
+      // The auto-generated wording each value would have WITHOUT edits,
+      // from the real generator.
+      composeFields: function () {
+        return api.composeInvitationFields(invitationComposePayload(getApp())).then(function (res) {
+          return (res && res.fields) || {};
+        });
+      },
+      onFieldChange: function (key, html) {
+        var currentApp = getApp();
+        if (!currentApp) return;
+        var patch = { invitation: { editedFields: {} } };
+        patch.invitation.editedFields[key] = html; // null clears the override
+        global.KhannaState.updateApplication(currentApp.id, patch, null);
+      },
+      fieldLabel: function (key) { return INVITATION_FIELD_LABELS[key] || key; },
+    });
   }
 
   function invitationGenerateBarHtml(ready, generatedAt) {
@@ -300,12 +580,13 @@
 
   function renderInvitationCard() {
     var app = getApp();
-    var box = utils.qs("[data-invitation-card]", root());
+    var r = root();
+    var box = utils.qs("[data-invitation-card]", r);
     if (!app || !box) return;
     var state = invitationState(app);
     box.innerHTML =
       "<h3>Invitation Letter</h3>" +
-      "<p>Written by a person already living abroad (the inviter), inviting exactly two of this application's own people — matches the real reference template's fixed “my Parents” wording.</p>" +
+      useExistingHtml("invitation") +
       '<h4 class="cover-subheading">Who is being invited</h4>' +
       '<div class="auth-person-list" data-invitation-invitee-checklist>' + inviteeChecklistHtml(app) + "</div>" +
       '<h4 class="cover-subheading">The inviter (not part of this application)</h4>' +
@@ -335,47 +616,22 @@
    * ------------------------------------------------------------------- */
 
   function buildInvitationPayload(app, format) {
-    var invitees = selectedInvitees(app);
     var state = invitationState(app);
     var inv = state.inviter || {};
-    return {
-      inviter: {
-        fullName: inv.fullName || "",
-        addressLine1: inv.addressLine1 || "",
-        addressLine2: inv.addressLine2 || "",
-        cityPostcode: inv.cityPostcode || "",
-        country: inv.country || "",
-        cityCountry: inv.cityCountry || "",
-        passportNumber: inv.passportNumber || "",
-        fullAddress: inv.fullAddress || "",
-        studyingOrWorking: inv.studyingOrWorking || "",
-        universityOrCompany: inv.universityOrCompany || "",
-        phone: inv.phone || "",
-        email: inv.email || "",
-      },
-      invitees: invitees.map(function (p) {
-        return {
-          fullName: p.fullName || "",
-          passportNumber: p.passportNumber || "",
-          placeOfIssue: p.placeOfIssue || "",
-          passportIssueDate: p.passportIssueDate || "",
-        };
-      }),
-      travelStartDate: state.travelStartDate || "",
-      travelEndDate: state.travelEndDate || "",
-      purpose: state.purpose || "",
-      accommodationDetails: state.accommodationDetails || "",
-      returnDate: state.returnDate || "",
-      fundingArrangement: state.fundingArrangement || "",
-      format: format,
-      // Unlike every other document endpoint in this app, this letter is
-      // written in the INVITER's own voice, not the main applicant's — so
-      // the downloaded filename uses the inviter's own name (falling back
-      // to the backend's own generic "Invitation_Letter" suffix, exactly
-      // like every other endpoint's own applicantName-omitted fallback,
-      // when it's still blank).
-      applicantName: inv.fullName || null,
-    };
+    var payload = invitationComposePayload(app);
+    payload.format = format;
+    // Unlike every other document endpoint in this app, this letter is
+    // written in the INVITER's own voice, not the main applicant's — so
+    // the downloaded filename uses the inviter's own name (falling back
+    // to the backend's own generic "Invitation_Letter" suffix, exactly
+    // like every other endpoint's own applicantName-omitted fallback,
+    // when it's still blank).
+    payload.applicantName = inv.fullName || null;
+    // Frontend rework, Phase 4: the staff member's own Word-like edits
+    // (see INVITATION_EDITABLE_FIELDS above) — null/undefined means "no
+    // edits — every field auto-generates as normal".
+    payload.editedFields = state.editedFields || undefined;
+    return payload;
   }
 
   function invitationSignatureFile(app) {
@@ -397,9 +653,10 @@
     if (!handle) {
       handle = global.KhannaDocumentViewer.mount(previewBox, {
         title: "Invitation Letter",
+        editor: makeInvitationEditor(),
         loadPdf: function () {
           var a = getApp();
-          return api.downloadInvitationLetter(buildInvitationPayload(a, "pdf"), invitationSignatureFile(a));
+          return api.previewWithLayout(api.downloadInvitationLetter, buildInvitationPayload(a, "pdf"), invitationSignatureFile(a));
         },
         loadDocx: function () {
           var a = getApp();
@@ -422,6 +679,9 @@
     handle
       .refresh()
       .then(function () {
+        // Previewing from the Dashboard's View icon only re-displays a
+        // document — it must not change "Last generated" / "Updated" dates.
+        if (global.KhannaRouter && global.KhannaRouter.isPreviewMode()) return;
         var ts = new Date().toISOString();
         global.KhannaState.updateApplication(app.id, { invitation: { generatedAt: ts } }, "Invitation Letter generated");
       })
@@ -522,10 +782,8 @@
 
   function initorsPersonChecklistHtml(app) {
     var auth = authHelpers();
-    var people = auth ? auth.getSelectablePeople(app) : [];
-    if (!people.length) {
-      return '<p class="field-hint">Add the applicant and/or travellers in earlier steps first.</p>';
-    }
+    var people = peopleWithDetails(auth ? auth.getSelectablePeople(app) : []);
+    if (!people.length) return noPeopleHintHtml();
     var state = initorsState(app);
     var selectedIds = state.selectedPersonIds || [];
     return people
@@ -639,7 +897,7 @@
       '<div class="hotel-panel__header"><h4 class="initors-person-section__title">' +
       utils.escapeHtml(auth.personDisplayName(person)) +
       "’s Covering Letter</h4></div>" +
-      '<p class="initors-person-section__subtitle">' + voiceNote + " Signed and submitted separately from their spouse's own letter.</p>" +
+      '<p class="initors-person-section__subtitle">' + voiceNote + "</p>" +
       sexNote +
       '<div class="field-grid">' +
       personFieldRowHtml(person.id, "occupation", "Occupation / business details", entry.occupation, true, {
@@ -671,13 +929,13 @@
     var state = initorsState(app);
     var selected = selectedInitorsPeople(app);
     box.innerHTML =
-      "<h3>Initors Covering Letter</h3>" +
-      "<p>For a married couple travelling together, invited by the same person abroad — each spouse signs and submits their own letter, matching the two real reference templates on file (the same letter, written once in each spouse's own voice).</p>" +
+      "<h3>Inviter Covering Letter</h3>" +
+      useExistingHtml("initors") +
       '<h4 class="cover-subheading">The couple</h4>' +
       '<div class="auth-person-list" data-initors-checklist>' + initorsPersonChecklistHtml(app) + "</div>" +
       (selected.length === 2
         ? initorsCommonFieldsHtml(state) + selected.map(function (p) { return personSectionHtml(app, p); }).join("")
-        : '<p class="field-hint">Select exactly 2 people above (a married couple travelling together) to continue.</p>');
+        : '<p class="field-hint">Select exactly 2 people above to continue.</p>');
   }
 
   /* ---------------------------------------------------------------------
@@ -724,6 +982,9 @@
       otherCommitments: state.otherCommitments || "",
       invitationSupportingDocuments: state.invitationSupportingDocuments || "",
       format: format,
+      // The staff member's hand edits of this person's letter (whole-document
+      // blocks, made on the preview page); absent = nothing edited.
+      editedFields: nonEmptyEdits(subjectEntry.editedFields),
       // This is the SUBJECT's own individual letter, not the main
       // application's — the filename should say whose letter it is, same
       // reasoning as the Invitation Letter's own applicantName override
@@ -756,6 +1017,36 @@
     return cached ? cached.file : null;
   }
 
+  function nonEmptyEdits(map) {
+    var out = {};
+    Object.keys(map || {}).forEach(function (k) {
+      if (map[k] != null) out[k] = map[k];
+    });
+    return Object.keys(out).length ? out : undefined;
+  }
+
+  // Editable preview of one person's Inviter Covering Letter: every paragraph
+  // of the page is a whole-document block (backend document_blocks.py), kept
+  // in app.initorsLetters.perPerson[personId].editedFields.
+  function makeInitorsEditor(personId) {
+    return global.KhannaPreviewEditor.createForDocument({
+      getEditedFields: function () {
+        var a = getApp();
+        return a ? perPersonEntry(a, personId).editedFields || null : null;
+      },
+      composeFields: function () { return {}; },
+      onFieldChange: function (key, html) {
+        var a = getApp();
+        if (!a) return;
+        var patch = { initorsLetters: { perPerson: {} } };
+        patch.initorsLetters.perPerson[personId] = { editedFields: {} };
+        patch.initorsLetters.perPerson[personId].editedFields[key] = html; // null clears the override
+        global.KhannaState.updateApplication(a.id, patch, null);
+      },
+      fieldLabel: function () { return "text"; },
+    });
+  }
+
   function generateInitors(personId, btn) {
     var app = getApp();
     if (!app) return;
@@ -778,14 +1069,17 @@
     var handle = initorsViewerHandles.get(previewBox);
     if (!handle) {
       handle = global.KhannaDocumentViewer.mount(previewBox, {
-        title: (subject.fullName || "Traveller") + "’s Initors Covering Letter",
+        editor: makeInitorsEditor(personId),
+        title: (subject.fullName || "Traveller") + "’s Inviter Covering Letter",
         loadPdf: function () {
           var a = getApp();
           var sel = selectedInitorsPeople(a);
           var subj = sel.find(function (p) { return p.id === personId; });
           var sp = sel.find(function (p) { return p.id !== personId; });
           if (!subj || !sp) return Promise.reject(new Error("Select exactly 2 people to continue."));
-          return api.downloadInitorsCoveringLetter(buildInitorsPayload(a, subj, sp, "pdf"), initorsSignatureFile(a, personId));
+          return api.previewWithLayout(
+            api.downloadInitorsCoveringLetter, buildInitorsPayload(a, subj, sp, "pdf"), initorsSignatureFile(a, personId)
+          );
         },
         loadDocx: function () {
           var a = getApp();
@@ -812,13 +1106,16 @@
     handle
       .refresh()
       .then(function () {
+        // Previewing from the Dashboard's View icon only re-displays a
+        // document — it must not change "Last generated" / "Updated" dates.
+        if (global.KhannaRouter && global.KhannaRouter.isPreviewMode()) return;
         var ts = new Date().toISOString();
         var patch = { initorsLetters: { perPerson: {} } };
         patch.initorsLetters.perPerson[personId] = { generatedAt: ts };
         global.KhannaState.updateApplication(
           app.id,
           patch,
-          "Initors Covering Letter generated for " + (subject.fullName || "traveller")
+          "Inviter Covering Letter generated for " + (subject.fullName || "traveller")
         );
       })
       .catch(function (err) {
@@ -878,12 +1175,65 @@
       '<div class="view-header">' +
       '<div class="view-header__text">' +
       "<h2>Invitation Letter</h2>" +
-      "<p>Both letter types below are generated straight from the real Khanna Travels &amp; Holidays reference formats — nothing here is a recreation.</p>" +
       "</div>" +
       "</div>" +
       '<div class="card" data-invitation-card></div>' +
       '<div data-invitation-preview style="margin-top:var(--space-4);"></div>' +
       '<div class="card" data-initors-card></div>';
+
+    // "Use Existing Details ▾" — same open/close, outside-click and Escape
+    // behaviour as the Cover Letter's. Queries happen at click time because
+    // each card rebuilds this markup whenever its people change.
+    utils.on(r, "click", "[data-inv-use-existing-toggle]", function (e, target) {
+      e.stopPropagation();
+      var wrap = target.closest("[data-inv-use-existing]");
+      var dd = wrap && utils.qs("[data-inv-use-existing-dropdown]", wrap);
+      if (!dd) return;
+      var willOpen = !dd.classList.contains("is-open");
+      closeUseExistingMenus();
+      dd.classList.toggle("is-open", willOpen);
+      if (willOpen) {
+        dd.classList.remove("has-list");
+        var list = utils.qs("[data-inv-existing-list]", wrap);
+        if (list) list.hidden = true;
+        utils.qsa("[data-inv-use-existing-option]", wrap).forEach(function (b) { b.classList.remove("is-active"); });
+      }
+      target.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    });
+
+    utils.on(r, "click", "[data-inv-use-existing-option]", function (e, target) {
+      e.stopPropagation();
+      var wrap = target.closest("[data-inv-use-existing]");
+      var list = wrap && utils.qs("[data-inv-existing-list]", wrap);
+      if (!list) return;
+      utils.qsa("[data-inv-use-existing-option]", wrap).forEach(function (b) { b.classList.toggle("is-active", b === target); });
+      list.innerHTML = savedDetails().listHtml(target.getAttribute("data-inv-use-existing-option"), "data-inv-existing-pick");
+      list.hidden = false;
+      var dd = utils.qs("[data-inv-use-existing-dropdown]", wrap);
+      if (dd) dd.classList.add("has-list");
+    });
+
+    utils.on(r, "click", "[data-inv-existing-pick]", function (e, target) {
+      var wrap = target.closest("[data-inv-use-existing]");
+      var which = wrap && wrap.getAttribute("data-inv-use-existing");
+      if (!which) return;
+      showInvitationError("");
+      if (target.getAttribute("data-inv-existing-pick") === "passport") {
+        usePassportFromSource(which, target.getAttribute("data-passport-key"));
+      } else {
+        useHotelBlockingFromSource(which, target.getAttribute("data-app-id"));
+      }
+    });
+
+    document.addEventListener("click", function (e) {
+      var rr = root();
+      if (!rr || !rr.dataset.mounted) return;
+      if (e.target.closest && e.target.closest("[data-inv-use-existing]")) return;
+      closeUseExistingMenus();
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") closeUseExistingMenus();
+    });
 
     utils.on(r, "change", "[data-invitation-invitee]", function (e, target) {
       var app = getApp();
@@ -905,6 +1255,13 @@
       }
       global.KhannaState.updateApplication(app.id, { invitation: { selectedInviteeIds: ids } }, null);
       renderInvitationCard();
+      if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
+    });
+
+    global.KhannaConsulate.wire(r, function (key, country) {
+      var current = getApp();
+      if (!current || key !== "inviter-country") return;
+      global.KhannaState.updateApplication(current.id, { invitation: { inviter: { country: country } } }, null);
       if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
     });
 

@@ -1,0 +1,396 @@
+/* ==========================================================================
+   Editable document preview (js/preview-editor.js)
+   Overlays sit exactly on top of the real PDF's editable values. They are
+   invisible until hovered/focused/edited, so the PDF itself is always what
+   you see. Fixed template text (labels, headings, Hotel Policy) never gets
+   an overlay.
+   ========================================================================== */
+
+.pe-field {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 var(--pe-pad, 4px);
+  overflow: hidden;
+  line-height: 1.2;
+  color: #000;
+  cursor: text;
+  outline: none;
+  border-radius: 2px;
+}
+/* No input-box outlines on the page: the text is edited in place. A very
+   light tint on hover is the only hint that a block is clickable. */
+.pe-field:hover {
+  background: rgba(28, 95, 174, 0.07);
+}
+.pe-field:focus-visible {
+  background: rgba(28, 95, 174, 0.07);
+}
+/* An edited value not yet in the PDF: show the typed text over the stale one. */
+.pe-field.is-edited,
+.pe-field.is-active {
+  background: var(--pe-bg, #fff);
+  height: auto !important;
+  min-height: var(--pe-h, 24px);
+}
+.pe-field.is-edited {
+  overflow: visible;
+}
+.pe-field.is-active {
+  overflow: visible;
+  z-index: 3;
+}
+/* The app's global `p { color: muted; ... }` must not leak into the value. */
+.pe-field__text p,
+.pe-field .ql-editor p {
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  max-width: none;
+}
+.pe-field .ql-container {
+  font: inherit;
+  height: auto;
+  border: 0;
+}
+.pe-field .ql-editor {
+  padding: 0;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  line-height: inherit;
+  font-size: inherit;
+  font-family: inherit;
+  color: #000;
+}
+.pe-field--block {
+  justify-content: flex-start;
+}
+/* Lists / tables in a not-yet-regenerated value (outside the editor). */
+.pe-field__text ol,
+.pe-field__text ul {
+  margin: 0;
+  padding-left: 1.5em;
+  list-style: none;
+}
+.pe-field__text li[data-list="bullet"]::before { content: "\2022"; margin-left: -1.2em; margin-right: 0.5em; }
+.pe-field__text table,
+.pe-field .ql-editor table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+}
+.pe-field__text td,
+.pe-field .ql-editor td {
+  border: 1px solid #000;
+  padding: 2px 5px;
+  vertical-align: top;
+  min-width: 2em;
+}
+.pe-field .ql-editor ol,
+.pe-field .ql-editor ul {
+  padding-left: 0;
+}
+.pe-field .ql-editor li:not(.ql-direction-rtl) {
+  padding-left: 1.5em;
+}
+.pe-field .ql-editor.ql-blank::before {
+  left: 0;
+  right: 0;
+  font-style: normal;
+  color: rgba(0, 0, 0, 0.35);
+}
+
+/* ---- Word-style ribbon (js/editor-ribbon.js) ------------------------------ */
+.pe-ribbon {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1) 0 0;
+  border-top: 1px solid var(--color-border);
+}
+.pe-ribbon.is-disabled .pe-group:not(.pe-group--end) {
+  opacity: 0.55;
+}
+.pe-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+.pe-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1px;
+  padding-right: var(--space-2);
+  border-right: 1px solid var(--color-border);
+}
+.pe-group:last-child {
+  border-right: 0;
+}
+.pe-group--end {
+  margin-left: auto;
+}
+.pe-select {
+  height: 28px;
+  padding: 0 var(--space-1);
+  font-size: 0.78rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  max-width: 130px;
+}
+.pe-select--size {
+  max-width: 64px;
+}
+.pe-btn {
+  position: relative;
+  min-width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.pe-btn:hover:not(:disabled) {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+}
+.pe-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.pe-btn.is-on {
+  background: var(--color-primary-soft, rgba(28, 95, 174, 0.14));
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.pe-btn:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.pe-btn--text {
+  padding: 0 var(--space-2);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.pe-caret {
+  width: 10px;
+  height: 10px;
+}
+.pe-txt {
+  font-weight: 600;
+  display: inline-flex;
+  align-items: baseline;
+}
+.pe-txt sup,
+.pe-txt sub {
+  font-size: 0.6em;
+}
+.pe-split {
+  display: inline-flex;
+}
+.pe-split__main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.pe-split__arrow {
+  min-width: 14px;
+  padding: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.pe-glyph {
+  font-weight: 700;
+  line-height: 1;
+}
+.pe-glyph--color {
+  border-bottom: 4px solid #ff0000;
+  padding: 0 2px;
+}
+.pe-glyph--hl {
+  background: #ffff00;
+  color: #000;
+  font-size: 0.74rem;
+  padding: 2px 3px;
+  border-radius: 2px;
+}
+
+/* ---- popovers: palettes, menus, table grid -------------------------------- */
+.pe-pop {
+  position: fixed;
+  z-index: 1000;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  padding: var(--space-2);
+  font-size: 0.82rem;
+  max-width: calc(100vw - 16px);
+}
+.pe-pop__title {
+  font-weight: 600;
+  font-size: 0.78rem;
+  margin-bottom: var(--space-1);
+}
+.pe-pop__sub {
+  font-size: 0.74rem;
+  color: var(--color-text-muted);
+  margin: var(--space-2) 0 2px;
+}
+.pe-pop__sep {
+  height: 1px;
+  background: var(--color-border);
+  margin: var(--space-1) 0;
+}
+.pe-pop__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 5px var(--space-2);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  position: relative;
+}
+.pe-pop__item:hover,
+.pe-pop__item:focus-visible {
+  background: var(--color-primary-soft, rgba(28, 95, 174, 0.12));
+}
+.pe-pop__item--more input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+}
+.pe-pop--menu {
+  min-width: 230px;
+}
+.pe-check {
+  display: inline-block;
+  width: 1em;
+  text-align: center;
+}
+.pe-sw-grid {
+  display: grid;
+  gap: 3px;
+}
+.pe-sw-grid--5 { grid-template-columns: repeat(5, 22px); }
+.pe-sw-grid--10 { grid-template-columns: repeat(10, 20px); }
+.pe-sw {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.pe-sw-grid--5 .pe-sw { width: 22px; height: 22px; }
+.pe-sw:hover,
+.pe-sw:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.pe-sw--none {
+  background: #fff;
+  position: relative;
+  cursor: default;
+}
+.pe-sw--none::after,
+.pe-sw--auto::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top right, transparent 46%, #d00 47%, #d00 53%, transparent 54%);
+}
+.pe-sw--auto {
+  background: #000;
+  position: relative;
+  cursor: default;
+}
+.pe-sw--auto::after { display: none; }
+.pe-sw--more {
+  background: conic-gradient(#f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+  cursor: default;
+}
+.pe-pop--dialog {
+  min-width: 250px;
+}
+.pe-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+.pe-num {
+  width: 72px;
+  height: 26px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 0 var(--space-1);
+}
+.pe-pop__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+.pe-tgrid {
+  display: grid;
+  gap: 2px;
+}
+.pe-tcell {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+.pe-tcell.is-on {
+  background: var(--color-primary-soft, rgba(28, 95, 174, 0.25));
+  border-color: var(--color-primary);
+}
+
+@media (max-width: 575px) {
+  .pe-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
+  }
+  .pe-group {
+    flex-wrap: nowrap;
+    flex: none;
+  }
+  .pe-group--end {
+    margin-left: 0;
+  }
+  .pe-sw-grid--10 { grid-template-columns: repeat(10, 18px); }
+  .pe-tgrid { grid-template-columns: repeat(10, 16px) !important; }
+  .pe-tcell { width: 16px; height: 16px; }
+}

@@ -22,6 +22,7 @@ def test_auto_uses_local_when_no_cloudconvert_key_is_set(monkeypatch):
     monkeypatch.delenv("PDF_CONVERSION_PROVIDER", raising=False)
     monkeypatch.delenv("CLOUDCONVERT_API_KEY", raising=False)
     calls = []
+    monkeypatch.setattr(pdf_conversion, "_find_soffice", lambda: "/fake/soffice")
     monkeypatch.setattr(pdf_conversion, "convert_via_local_libreoffice", lambda b, base_name: calls.append("local") or b"LOCAL")
     monkeypatch.setattr(pdf_conversion, "convert_via_cloudconvert", lambda b, base_name: calls.append("cloud") or b"CLOUD")
 
@@ -34,6 +35,7 @@ def test_auto_uses_cloudconvert_once_an_api_key_is_present(monkeypatch):
     monkeypatch.delenv("PDF_CONVERSION_PROVIDER", raising=False)
     monkeypatch.setenv("CLOUDCONVERT_API_KEY", "fake-test-key")
     calls = []
+    monkeypatch.setattr(pdf_conversion, "_find_soffice", lambda: "/fake/soffice")
     monkeypatch.setattr(pdf_conversion, "convert_via_local_libreoffice", lambda b, base_name: calls.append("local") or b"LOCAL")
     monkeypatch.setattr(pdf_conversion, "convert_via_cloudconvert", lambda b, base_name: calls.append("cloud") or b"CLOUD")
 
@@ -46,6 +48,7 @@ def test_explicit_local_choice_is_honored_even_with_a_cloudconvert_key_set(monke
     monkeypatch.setenv("PDF_CONVERSION_PROVIDER", "local")
     monkeypatch.setenv("CLOUDCONVERT_API_KEY", "fake-test-key")
     calls = []
+    monkeypatch.setattr(pdf_conversion, "_find_soffice", lambda: "/fake/soffice")
     monkeypatch.setattr(pdf_conversion, "convert_via_local_libreoffice", lambda b, base_name: calls.append("local") or b"LOCAL")
     monkeypatch.setattr(pdf_conversion, "convert_via_cloudconvert", lambda b, base_name: calls.append("cloud") or b"CLOUD")
 
@@ -218,3 +221,55 @@ def test_cloudconvert_job_error_status_raises_with_the_real_task_message(monkeyp
 
     with pytest.raises(pdf_conversion.PdfConversionError, match="Input file is not a valid docx"):
         pdf_conversion.convert_via_cloudconvert(b"fake docx bytes", base_name="test")
+
+
+def test_without_libreoffice_a_windows_pc_with_word_converts_through_word(monkeypatch):
+    monkeypatch.delenv("PDF_CONVERSION_PROVIDER", raising=False)
+    monkeypatch.delenv("CLOUDCONVERT_API_KEY", raising=False)
+    calls = []
+    monkeypatch.setattr(pdf_conversion, "_find_soffice", lambda: None)
+    monkeypatch.setattr(pdf_conversion, "_word_is_installed", lambda: True)
+    monkeypatch.setattr(pdf_conversion, "convert_via_local_libreoffice", lambda b, base_name: calls.append("local") or b"LOCAL")
+    monkeypatch.setattr(pdf_conversion, "convert_via_word", lambda b, base_name: calls.append("word") or b"WORD")
+    assert pdf_conversion.convert_docx_bytes_to_pdf(b"x") == b"WORD"
+    assert calls == ["word"]
+
+
+def test_libreoffice_wins_over_word_when_both_exist(monkeypatch):
+    monkeypatch.delenv("PDF_CONVERSION_PROVIDER", raising=False)
+    monkeypatch.delenv("CLOUDCONVERT_API_KEY", raising=False)
+    calls = []
+    monkeypatch.setattr(pdf_conversion, "_find_soffice", lambda: "C:/LO/soffice.exe")
+    monkeypatch.setattr(pdf_conversion, "_word_is_installed", lambda: True)
+    monkeypatch.setattr(pdf_conversion, "convert_via_local_libreoffice", lambda b, base_name: calls.append("local") or b"LOCAL")
+    monkeypatch.setattr(pdf_conversion, "convert_via_word", lambda b, base_name: calls.append("word") or b"WORD")
+    pdf_conversion.convert_docx_bytes_to_pdf(b"x")
+    assert calls == ["local"]
+
+
+def test_neither_libreoffice_nor_word_gives_the_actionable_error(monkeypatch):
+    monkeypatch.delenv("PDF_CONVERSION_PROVIDER", raising=False)
+    monkeypatch.delenv("CLOUDCONVERT_API_KEY", raising=False)
+    monkeypatch.setattr(pdf_conversion, "_find_soffice", lambda: None)
+    monkeypatch.setattr(pdf_conversion, "_word_is_installed", lambda: False)
+    def _missing(*a, **k):
+        raise FileNotFoundError("soffice")
+    monkeypatch.setattr(pdf_conversion.subprocess, "run", _missing)
+    with pytest.raises(pdf_conversion.PdfConversionError, match="LibreOffice"):
+        pdf_conversion.convert_docx_bytes_to_pdf(b"x")
+
+
+def test_find_soffice_checks_the_standard_windows_install_folder(monkeypatch, tmp_path):
+    exe = tmp_path / "LibreOffice" / "program" / "soffice.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    monkeypatch.delenv("SOFFICE_PATH", raising=False)
+    monkeypatch.setattr(pdf_conversion.shutil, "which", lambda name: None)
+    monkeypatch.setattr(pdf_conversion, "_soffice_candidates", lambda: [str(exe)])
+    assert pdf_conversion._find_soffice() == str(exe)
+
+
+def test_word_converter_refuses_cleanly_off_windows(monkeypatch):
+    monkeypatch.setattr(pdf_conversion.sys, "platform", "linux")
+    with pytest.raises(pdf_conversion.PdfConversionError, match="Windows"):
+        pdf_conversion.convert_via_word(b"x")

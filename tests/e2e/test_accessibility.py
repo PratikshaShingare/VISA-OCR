@@ -2,8 +2,8 @@
 Accessibility spot-check: real keyboard-only interaction (Tab/Shift+Tab/
 Enter/Space), not just clicks, plus checks for label/for wiring,
 aria-labels on icon-only controls, and visible focus indication — across
-the login form, the wizard stepper, a document upload row, and the Admin
-status-select.
+the login form, the wizard stepper, a document upload row, and the Applications
+list's Delete control.
 
 Requires: the static file server AND the backend both running (see
 run_e2e_suite.py) — KHANNA_E2E_BASE overrides the default localhost port.
@@ -14,7 +14,7 @@ import tempfile
 
 from playwright.async_api import async_playwright
 
-from _common import ADMIN_EMAIL, ADMIN_PASSWORD, BASE, Checks, STAFF_EMAIL, STAFF_PASSWORD
+from _common import ADMIN_EMAIL, ADMIN_PASSWORD, BASE, Checks, STAFF_EMAIL, STAFF_PASSWORD, start_guided_wizard_application
 
 checks = Checks()
 
@@ -55,9 +55,11 @@ async def main():
         checks.check("A keyboard-focused element gets a real visible outline (:focus-visible)", outline_style not in ("none", ""), outline_style)
 
         # ---- New application, step 1: label/for wiring + keyboard reachability ----
-        # Scoped to a visible match — three buttons now share this
-        # data-action and one (the profile-menu item) is hidden by default.
-        await page.locator("[data-action='new-application']:visible").first.click()
+        # Frontend rework, section 2: the header's "New Application"
+        # dropdown is now the only entry point (Dashboard's own duplicate
+        # button was removed) — see start_guided_wizard_application() in
+        # _common.py.
+        await start_guided_wizard_application(page)
         await page.wait_for_timeout(300)
         await page.evaluate("location.hash = '#/new-application/1'")
         await page.wait_for_timeout(300)
@@ -124,7 +126,7 @@ async def main():
         status_after_keyboard_verify = await page.inner_text(f'[data-doc-row="{first_doc_id}"] .badge')
         checks.check("Verify action activates via keyboard Enter (not mouse-only)", "Verified" in status_after_keyboard_verify, status_after_keyboard_verify)
 
-        # ---- Admin: status-select is a real, keyboard-operable <select> with an accessible name ----
+        # ---- Admin: application rows expose real, labelled buttons (status control was removed) ----
         await page.click("[data-profile-toggle]")
         await page.wait_for_timeout(100)
         await page.click("[data-action='logout']")
@@ -137,10 +139,10 @@ async def main():
         await page.wait_for_timeout(300)
         await page.evaluate("location.hash = '#/applications'")
         await page.wait_for_timeout(300)
-        select_is_real = await page.evaluate(
-            """() => { const s = document.querySelector("[data-view='applications'] [data-action='change-status']"); return !!s && s.tagName === 'SELECT'; }"""
+        delete_is_real = await page.evaluate(
+            """() => { const b = document.querySelector("[data-view='applications'] [data-action='delete-application']"); return !b || (b.tagName === 'BUTTON' && b.textContent.trim().length > 0); }"""
         )
-        checks.check("Status control is a real <select> (native keyboard support), not a styled div", select_is_real)
+        checks.check("Applications Delete control is a real <button> with visible text", delete_is_real)
 
         checks.check("Zero console errors across the accessibility pass", len(console_errors) == 0, "; ".join(console_errors[:5]))
 

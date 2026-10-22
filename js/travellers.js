@@ -79,7 +79,6 @@
         '<div class="empty-state">' +
         '<svg class="icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>' +
         "<h3>No accompanying travellers</h3>" +
-        "<p>If the applicant is travelling alone, you can continue to the next step. Otherwise, add each accompanying traveller here — spouse, children, or anyone else on the same application.</p>" +
         "</div>";
     } else {
       listEl.innerHTML = travellers.map(cardHtml).join("");
@@ -176,7 +175,6 @@
       '<div class="view-header">' +
       '<div class="view-header__text">' +
       "<h2>Accompanying travellers</h2>" +
-      "<p>Anyone travelling with the applicant on this same application. Each traveller gets their own passport upload and OCR review, just like the applicant.</p>" +
       "</div>" +
       '<div class="view-header__actions">' +
       '<button class="btn btn-secondary btn-sm" type="button" data-action="use-existing-traveller">' +

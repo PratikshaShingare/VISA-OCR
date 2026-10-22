@@ -115,7 +115,7 @@
         '<div class="empty-state">' +
         '<svg class="icon" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2Z"/></svg>' +
         "<h3>No checklist yet</h3>" +
-        "<p>Set a destination and visa category on the Travel &amp; Checklist step first — the document list here is built from that checklist.</p>" +
+        "<p>Set a destination and visa category on the Travel &amp; Checklist step first.</p>" +
         '<button class="btn btn-secondary btn-sm" type="button" data-action="go-to-travel-step">Go to Travel &amp; Checklist</button>' +
         "</div>";
       return;
@@ -183,7 +183,6 @@
       '<div class="view-header">' +
       '<div class="view-header__text">' +
       "<h2>Document collection &amp; verification</h2>" +
-      "<p>Upload each document from the checklist, then verify it against the original before moving on. Uploaded is not the same as verified — final verification always stays with staff.</p>" +
       "</div>" +
       "</div>" +
       '<div data-documents-list></div>';

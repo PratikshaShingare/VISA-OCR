@@ -13,9 +13,9 @@ echo.
 
 where python >nul 2>&1
 if %errorlevel%==0 (
-    python -m http.server 8766
+    python serve_nocache.py 8766
 ) else (
-    py -m http.server 8766
+    py serve_nocache.py 8766
 )
 
 echo.

@@ -65,6 +65,7 @@ from typing import Optional
 from docx import Document
 from docx.table import Table
 
+import document_blocks
 import docx_utils
 import letter_shared
 
@@ -110,34 +111,27 @@ def _phone_or_dash(phone: Optional[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def generate_europe_cover_letter_docx(
-    applicant: dict,
-    companion: dict,
-    fields: dict,
-    date_override: Optional[str] = None,
-) -> bytes:
-    """`fields` keys used: recipientText, destinationCountry,
-    travelStartDate, travelEndDate, cityCountryOfResidence,
-    numberOfNights, applicantEmploymentStatus, applicantJobTitle,
+def compose_europe_body_paragraphs(applicant: dict, companion: dict, fields: dict) -> list:
+    """Composes the Europe Cover Letter's three free-composed body
+    paragraphs (template indices 8-10) as plain {"text", "align"} blocks.
+    Shared by the real DOCX generator below AND the Phase 4 'compose body
+    text for editing' endpoint (app.py), so the exact same real wording
+    seeds the Word-like editor as ends up in the generated document —
+    never a second, hand-duplicated copy of this business logic (project
+    rule 15).
+
+    All three resolve to JUSTIFY alignment in the real reference
+    template — paragraph 8 directly (`w:jc w:val="both"`), paragraphs 9
+    and 10 by inheriting it from their own 'Body Text' paragraph style
+    (confirmed by direct inspection of the template's styles.xml, not
+    guessed) — so all three are reported here as "justify".
+
+    `fields` keys used: travelStartDate, travelEndDate,
+    cityCountryOfResidence, applicantEmploymentStatus, applicantJobTitle,
     applicantEmployerName, companionJobTitle, companionEmployerName,
-    companionEmploymentStartYear, nextCountry, nextTravelStartDate,
-    nextTravelEndDate, nextNumberOfNights, fundingArrangement."""
-    if not applicant or not companion:
-        raise ValueError(
-            "The Europe Cover Letter is written for the applicant plus exactly one "
-            "companion (matching the reference template's own fixed wording) — "
-            "please select both."
-        )
-
-    document = _load_template(EUROPE_TEMPLATE_PATH, "Europe Cover Letter")
-    paragraphs = document.paragraphs
-
-    docx_utils.apply_token_map_to_paragraph(paragraphs[0], {"[Date]": letter_shared.format_letter_date(date_override)})
-    docx_utils.set_paragraph_text(paragraphs[3], (fields.get("recipientText") or "").strip() or "—")
-    docx_utils.apply_token_map_to_paragraph(
-        paragraphs[5], {"[Destination Country]": fields.get("destinationCountry") or "—"}
-    )
-
+    companionEmploymentStartYear, destinationCountry, nextCountry,
+    nextTravelStartDate, nextTravelEndDate, nextNumberOfNights,
+    numberOfNights."""
     relation_with_name = f"{_relation_word_or_fallback(companion.get('relationToApplicant'), companion.get('sex'))}, {companion.get('fullName') or '—'}"
     relation_bare = _relation_word_or_fallback(companion.get("relationToApplicant"), companion.get("sex"))
 
@@ -148,7 +142,6 @@ def generate_europe_cover_letter_docx(
         f"my {relation_with_name} from {fields.get('travelStartDate') or '—'} to "
         f"{fields.get('travelEndDate') or '—'} for the purpose of Tourism."
     )
-    docx_utils.set_paragraph_text(paragraphs[8], para8)
 
     para9 = (
         f"I and my {relation_with_name} reside in {fields.get('cityCountryOfResidence') or '—'} along with our "
@@ -159,7 +152,6 @@ def generate_europe_cover_letter_docx(
         f"currently as {fields.get('companionJobTitle') or '—'}. Kindly find our relevant documents for your "
         "reference."
     )
-    docx_utils.set_paragraph_text(paragraphs[9], para9)
 
     destination = fields.get("destinationCountry") or "—"
     next_country = (fields.get("nextCountry") or "").strip()
@@ -179,27 +171,148 @@ def generate_europe_cover_letter_docx(
         "We will return back to India after the end of our visit as we need to rejoin and look after our work "
         "and personal commitments."
     )
-    docx_utils.set_paragraph_text(paragraphs[10], para10)
 
+    return [
+        {"text": para8, "align": "justify"},
+        {"text": para9, "align": "justify"},
+        {"text": para10, "align": "justify"},
+    ]
+
+
+def compose_europe_body_html(applicant: dict, companion: dict, fields: dict) -> str:
+    """HTML seed for the Phase 4 Quill body editor — the exact same real
+    wording `compose_europe_body_paragraphs` returns (and therefore the
+    same wording the real generator writes when nothing has been edited
+    yet), wrapped as Quill-compatible `<p>` blocks with its own
+    `ql-align-justify` class so the editor shows/preserves the template's
+    real justified alignment by default. Text is HTML-escaped since
+    applicant/companion names are real, uncontrolled data."""
+    import html as _html
+
+    parts = []
+    for block in compose_europe_body_paragraphs(applicant, companion, fields):
+        cls = ' class="ql-align-justify"' if block["align"] == "justify" else ""
+        parts.append(f"<p{cls}>{_html.escape(block['text'])}</p>")
+    return "".join(parts)
+
+
+def generate_europe_cover_letter_docx(
+    applicant: dict,
+    companion: dict,
+    fields: dict,
+    date_override: Optional[str] = None,
+    edited_body_html: Optional[str] = None,
+    _shader: Optional["docx_utils.ProbeShader"] = None,
+    edited_blocks: Optional[dict] = None,
+) -> bytes:
+    """`fields` keys used: recipientText, destinationCountry,
+    travelStartDate, travelEndDate, cityCountryOfResidence,
+    numberOfNights, applicantEmploymentStatus, applicantJobTitle,
+    applicantEmployerName, companionJobTitle, companionEmployerName,
+    companionEmploymentStartYear, nextCountry, nextTravelStartDate,
+    nextTravelEndDate, nextNumberOfNights, fundingArrangement.
+
+    `edited_body_html` — Phase 4 proof of concept: when given (not None),
+    real HTML from the staff member's own Quill edits to the letter's
+    three free-composed body paragraphs (template indices 8-10) —
+    everything else in the letter (header/footer/margins/fonts, every
+    other paragraph, the signature block) is produced by this exact same
+    unmodified code path regardless (project rule 5 — Document Template
+    Rule). When None (the normal/default path), the body is composed
+    automatically via `compose_europe_body_paragraphs`, unchanged from
+    before Phase 4."""
+    if not applicant or not companion:
+        raise ValueError(
+            "The Europe Cover Letter is written for the applicant plus exactly one "
+            "companion (matching the reference template's own fixed wording) — "
+            "please select both."
+        )
+
+    document = _load_template(EUROPE_TEMPLATE_PATH, "Europe Cover Letter")
+    paragraphs = document.paragraphs
+
+    docx_utils.apply_token_map_to_paragraph(paragraphs[0], {"[Date]": letter_shared.format_letter_date(date_override)})
+    docx_utils.set_paragraph_text(paragraphs[3], (fields.get("recipientText") or "").strip() or "—")
     docx_utils.apply_token_map_to_paragraph(
-        paragraphs[11], {"[Funding Arrangement]": fields.get("fundingArrangement") or "—"}
+        paragraphs[5], {"[Destination Country]": fields.get("destinationCountry") or "—"}
     )
 
-    docx_utils.apply_token_map_to_paragraph(paragraphs[17], {"[Applicant Full Name]": letter_shared.display_name(applicant)})
-    docx_utils.apply_token_map_to_paragraph(paragraphs[18], {"[Phone Number]": _phone_or_dash(applicant.get("phone"))})
-    docx_utils.apply_token_map_to_paragraph(paragraphs[19], {"[Email Address]": (applicant.get("email") or "").strip() or "—"})
+    # Every paragraph AFTER the editable 8-10 body range is captured into
+    # a stable Python reference BEFORE that range is touched below:
+    # docx_utils.replace_paragraph_range_with_html inserts/removes real
+    # paragraph elements, and python-docx's `document.paragraphs` is a
+    # live view whose indices shift the moment that happens — re-indexing
+    # into `paragraphs[11]`/`[17]`/`[18]`/`[19]` AFTER that call could
+    # silently grab the wrong paragraph if the edited body ends up with a
+    # different paragraph count than the original 3 (see that helper's
+    # own docstring).
+    funding_paragraph = paragraphs[11]
+    signature_name_paragraph = paragraphs[17]
+    signature_phone_paragraph = paragraphs[18]
+    signature_email_paragraph = paragraphs[19]
 
+    if _shader is not None:  # layout probe only — the three body paragraphs read back as one block
+        for body_index in (8, 9, 10):
+            _shader.shade("body", paragraphs[body_index])
+
+    if edited_body_html is not None:
+        docx_utils.replace_paragraph_range_with_html(document, paragraphs[8], paragraphs[10], edited_body_html)
+    else:
+        body_blocks = compose_europe_body_paragraphs(applicant, companion, fields)
+        docx_utils.set_paragraph_text(paragraphs[8], body_blocks[0]["text"])
+        docx_utils.set_paragraph_text(paragraphs[9], body_blocks[1]["text"])
+        docx_utils.set_paragraph_text(paragraphs[10], body_blocks[2]["text"])
+
+    docx_utils.apply_token_map_to_paragraph(
+        funding_paragraph, {"[Funding Arrangement]": fields.get("fundingArrangement") or "—"}
+    )
+
+    docx_utils.apply_token_map_to_paragraph(signature_name_paragraph, {"[Applicant Full Name]": letter_shared.display_name(applicant)})
+    docx_utils.apply_token_map_to_paragraph(signature_phone_paragraph, {"[Phone Number]": _phone_or_dash(applicant.get("phone"))})
+    docx_utils.apply_token_map_to_paragraph(signature_email_paragraph, {"[Email Address]": (applicant.get("email") or "").strip() or "—"})
+
+    document_blocks.finalize(document, edited_blocks, _shader)
     buf = io.BytesIO()
     document.save(buf)
     return buf.getvalue()
 
 
-def generate_europe_cover_letter_pdf(applicant: dict, companion: dict, fields: dict, date_override: Optional[str] = None) -> bytes:
-    docx_bytes = generate_europe_cover_letter_docx(applicant, companion, fields, date_override)
+def generate_europe_cover_letter_pdf(
+    applicant: dict,
+    companion: dict,
+    fields: dict,
+    date_override: Optional[str] = None,
+    edited_body_html: Optional[str] = None,
+    edited_blocks: Optional[dict] = None,
+) -> bytes:
+    docx_bytes = generate_europe_cover_letter_docx(
+        applicant, companion, fields, date_override, edited_body_html, edited_blocks=edited_blocks
+    )
     try:
         return docx_utils.convert_docx_bytes_to_pdf(docx_bytes, base_name="europe_cover_letter")
     except docx_utils.DocxBuildError as e:
         raise CoverLetterError(str(e))
+
+
+def compute_europe_field_layout(
+    applicant: dict,
+    companion: dict,
+    fields: dict,
+    date_override: Optional[str] = None,
+    edited_body_html: Optional[str] = None,
+    edited_blocks: Optional[dict] = None,
+) -> dict:
+    """Page + rectangle + font of the editable body of the Europe Cover
+    Letter, for the editable preview (see docx_utils.ProbeShader)."""
+    shader = docx_utils.ProbeShader()
+    probe = generate_europe_cover_letter_docx(
+        applicant, companion, fields, date_override, edited_body_html, _shader=shader, edited_blocks=edited_blocks
+    )
+    try:
+        pdf = docx_utils.convert_docx_bytes_to_pdf(probe, base_name="europe_cover_letter_layout")
+    except docx_utils.DocxBuildError as e:
+        raise CoverLetterError(str(e))
+    return shader.layout_from_pdf(pdf)
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +372,8 @@ def generate_japan_cover_letter_docx(
     fields: dict,
     hotels: list[dict],
     date_override: Optional[str] = None,
+    edited_blocks: Optional[dict] = None,
+    _shader: Optional["docx_utils.ProbeShader"] = None,
 ) -> bytes:
     """`fields` keys used: destinationCountry, travelStartDate,
     travelEndDate, applicantEmployerOccupation, companionOccupation,
@@ -316,19 +431,40 @@ def generate_japan_cover_letter_docx(
 
     _fill_japan_hotel_table(document, hotels)
 
+    document_blocks.finalize(document, edited_blocks, _shader)
     buf = io.BytesIO()
     document.save(buf)
     return buf.getvalue()
 
 
 def generate_japan_cover_letter_pdf(
-    applicant: dict, companion: dict, fields: dict, hotels: list[dict], date_override: Optional[str] = None
+    applicant: dict, companion: dict, fields: dict, hotels: list[dict], date_override: Optional[str] = None,
+    edited_blocks: Optional[dict] = None,
 ) -> bytes:
-    docx_bytes = generate_japan_cover_letter_docx(applicant, companion, fields, hotels, date_override)
+    docx_bytes = generate_japan_cover_letter_docx(
+        applicant, companion, fields, hotels, date_override, edited_blocks=edited_blocks
+    )
     try:
         return docx_utils.convert_docx_bytes_to_pdf(docx_bytes, base_name="japan_cover_letter")
     except docx_utils.DocxBuildError as e:
         raise CoverLetterError(str(e))
+
+
+def compute_japan_field_layout(
+    applicant: dict, companion: dict, fields: dict, hotels: list[dict], date_override: Optional[str] = None,
+    edited_blocks: Optional[dict] = None,
+) -> dict:
+    """Where every block of the Japan Cover Letter sits on the page of the
+    real PDF, for the editable preview (see document_blocks)."""
+    shader = docx_utils.ProbeShader()
+    probe = generate_japan_cover_letter_docx(
+        applicant, companion, fields, hotels, date_override, edited_blocks=edited_blocks, _shader=shader
+    )
+    try:
+        pdf = docx_utils.convert_docx_bytes_to_pdf(probe, base_name="japan_cover_letter_layout")
+    except docx_utils.DocxBuildError as e:
+        raise CoverLetterError(str(e))
+    return shader.layout_from_pdf(pdf)
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +529,8 @@ def generate_singapore_cover_letter_docx(
     companions: list[dict],
     fields: dict,
     date_override: Optional[str] = None,
+    edited_blocks: Optional[dict] = None,
+    _shader: Optional["docx_utils.ProbeShader"] = None,
 ) -> bytes:
     """`fields` keys used: recipientText, travelStartDate, travelEndDate,
     fundingArrangement, hotelName, hotelAddress, occupations (a dict
@@ -436,16 +574,37 @@ def generate_singapore_cover_letter_docx(
 
     _fill_singapore_passenger_table(document, applicant, companions, fields.get("occupations") or {})
 
+    document_blocks.finalize(document, edited_blocks, _shader)
     buf = io.BytesIO()
     document.save(buf)
     return buf.getvalue()
 
 
 def generate_singapore_cover_letter_pdf(
-    applicant: dict, companions: list[dict], fields: dict, date_override: Optional[str] = None
+    applicant: dict, companions: list[dict], fields: dict, date_override: Optional[str] = None,
+    edited_blocks: Optional[dict] = None,
 ) -> bytes:
-    docx_bytes = generate_singapore_cover_letter_docx(applicant, companions, fields, date_override)
+    docx_bytes = generate_singapore_cover_letter_docx(
+        applicant, companions, fields, date_override, edited_blocks=edited_blocks
+    )
     try:
         return docx_utils.convert_docx_bytes_to_pdf(docx_bytes, base_name="singapore_cover_letter")
     except docx_utils.DocxBuildError as e:
         raise CoverLetterError(str(e))
+
+
+def compute_singapore_field_layout(
+    applicant: dict, companions: list[dict], fields: dict, date_override: Optional[str] = None,
+    edited_blocks: Optional[dict] = None,
+) -> dict:
+    """Where every block of the Singapore Cover Letter sits on the page of
+    the real PDF, for the editable preview (see document_blocks)."""
+    shader = docx_utils.ProbeShader()
+    probe = generate_singapore_cover_letter_docx(
+        applicant, companions, fields, date_override, edited_blocks=edited_blocks, _shader=shader
+    )
+    try:
+        pdf = docx_utils.convert_docx_bytes_to_pdf(probe, base_name="singapore_cover_letter_layout")
+    except docx_utils.DocxBuildError as e:
+        raise CoverLetterError(str(e))
+    return shader.layout_from_pdf(pdf)

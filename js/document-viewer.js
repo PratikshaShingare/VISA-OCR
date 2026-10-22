@@ -74,6 +74,12 @@
 
   var ZOOM_STEPS = [0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
+  // Must match css/document-viewer.css's own `.doc-viewer__body { max-height: 72vh }`
+  // — kept as one named constant so the "fit whole page, header AND footer,
+  // without scrolling" calculation below stays in sync with the actual CSS
+  // box it's fitting into, rather than drifting out of step with it later.
+  var BODY_MAX_HEIGHT_VH = 0.72;
+
   function nearestZoomIndex(scale) {
     var best = 0;
     var bestDiff = Infinity;
@@ -87,13 +93,22 @@
     return best;
   }
 
-  function shellHtml(title) {
+  function shellHtml(title, regenerateLabel) {
     return (
       '<div class="doc-viewer">' +
       '<div class="doc-viewer__toolbar">' +
       '<div class="doc-viewer__title" data-dv-title>' +
       utils.escapeHtml(title || "Document preview") +
       "</div>" +
+      // Edit toggle (top of the Preview section). Shown for every document;
+      // live only when the document has an editable layout, otherwise it is
+      // disabled with an honest reason in its tooltip.
+      '<button type="button" class="btn btn-secondary btn-sm doc-viewer__edit" data-dv="edit-toggle" aria-pressed="false" hidden>' +
+      '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4"/></svg>' +
+      '<span data-dv-label>Edit</span></button>' +
+      // Word-like formatting tools (js/preview-editor.js) — only filled and
+      // shown for documents mounted with an `editor` option.
+      '<div class="doc-viewer__format" data-dv="format-tools" hidden></div>' +
       '<div class="doc-viewer__group">' +
       '<button type="button" class="btn-icon" data-dv="zoom-out" aria-label="Zoom out" title="Zoom out">' +
       '<svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-3.5-3.5M8 11h6"/></svg>' +
@@ -124,15 +139,26 @@
       "</div>" +
       '<div class="doc-viewer__body" data-dv="body">' +
       '<div class="doc-viewer__status" data-dv="status">Generating document…</div>' +
+      '<div class="doc-viewer__page" data-dv="page" hidden>' +
       '<canvas class="doc-viewer__canvas" data-dv="canvas" hidden></canvas>' +
+      '<div class="doc-viewer__overlay" data-dv="overlay"></div>' +
+      "</div>" +
       "</div>" +
       '<div class="doc-viewer__actions">' +
       '<div class="doc-viewer__actions-left" data-dv="meta"></div>' +
       '<div class="doc-viewer__actions-right">' +
-      '<button type="button" class="btn btn-ghost btn-sm" data-dv="edit">Edit details</button>' +
-      '<button type="button" class="btn btn-secondary btn-sm" data-dv="regenerate" hidden>Regenerate</button>' +
-      '<button type="button" class="btn btn-secondary btn-sm" data-dv="download-docx" hidden>Download DOCX</button>' +
-      '<button type="button" class="btn btn-primary btn-sm" data-dv="download-pdf">Download PDF</button>' +
+      // Client-requested exact 3-button set: Preview / Download as Docx /
+      // Download as PDF. "Preview" replaces the old separate "Edit
+      // details" + "Regenerate" pair — every real caller's own
+      // onRegenerate is a no-op today (it exists only so refresh() runs
+      // again against the CURRENT form state), so "re-show the current
+      // preview" is exactly what "Preview" means here; "Edit details"
+      // (scroll back up to the form) is dropped to keep the count at
+      // exactly 3, since the Word-like editable-fields section already
+      // sits directly above this button on every document page.
+      '<button type="button" class="btn btn-secondary btn-sm" data-dv="regenerate">' + utils.escapeHtml(regenerateLabel || "Preview") + "</button>" +
+      '<button type="button" class="btn btn-secondary btn-sm" data-dv="download-docx" hidden>Download as Docx</button>' +
+      '<button type="button" class="btn btn-primary btn-sm" data-dv="download-pdf">Download as PDF</button>' +
       "</div>" +
       "</div>" +
       "</div>"
@@ -154,10 +180,17 @@
     this.destroyed = false;
     this._renderToken = 0;
 
-    container.innerHTML = shellHtml(this.options.title);
+    container.innerHTML = shellHtml(this.options.title, this.options.regenerateLabel);
     this.el = container.querySelector(".doc-viewer");
     this.statusEl = this.el.querySelector("[data-dv='status']");
     this.canvasEl = this.el.querySelector("[data-dv='canvas']");
+    this.pageEl = this.el.querySelector("[data-dv='page']");
+    this.overlayEl = this.el.querySelector("[data-dv='overlay']");
+    this.formatToolsEl = this.el.querySelector("[data-dv='format-tools']");
+    this.editBtn = this.el.querySelector("[data-dv='edit-toggle']");
+    this.editLabelEl = this.el.querySelector("[data-dv-label]");
+    this.editing = false;
+    this.lastResult = null;
     this.bodyEl = this.el.querySelector("[data-dv='body']");
     this.pageLabelEl = this.el.querySelector("[data-dv='page-label']");
     this.zoomLabelEl = this.el.querySelector("[data-dv='zoom-label']");
@@ -179,11 +212,21 @@
     if (typeof this.options.loadDocx === "function") {
       this.docxBtn.hidden = false;
     }
-    if (typeof this.options.onRegenerate === "function") {
-      this.regenerateBtn.hidden = false;
-    }
+    // "Preview" (the regenerate button, relabeled) is always shown now —
+    // it just re-runs refresh() against the current form state, which
+    // works with or without an onRegenerate hook (see _regenerate()).
 
     this._bindEvents();
+    // Optional in-preview editing layer (see js/preview-editor.js). The
+    // viewer stays document-agnostic: it only hands the editor its own
+    // toolbar/overlay elements and calls back on result / page render.
+    this.editor = this.options.editor || null;
+    if (this.editor) {
+      this.el.classList.add("has-format");
+      this.editor.attach(this);
+      this.formatToolsEl.hidden = true; // only shown while Edit is on
+    }
+    this._syncEditUi();
     // Deliberately does NOT auto-call refresh() here. mount() only builds
     // the shell (shown with its neutral "Generating…" status). Every
     // caller — a first mount or a cache-hit reuse of an existing handle —
@@ -234,8 +277,8 @@
         case "fullscreen":
           self._toggleFullscreen();
           break;
-        case "edit":
-          if (typeof self.options.onEdit === "function") self.options.onEdit();
+        case "edit-toggle":
+          self.setEditing(!self.editing);
           break;
         case "regenerate":
           self._regenerate();
@@ -281,6 +324,7 @@
     this.statusEl.classList.toggle("doc-viewer__status--error", level === "error");
     this.statusEl.classList.toggle("doc-viewer__status--warning", level === "warning");
     this.canvasEl.hidden = !!message;
+    this.pageEl.hidden = !!message;
   };
 
   // Root-cause fix: PDF conversion can genuinely be unavailable in an
@@ -315,12 +359,15 @@
   DocumentViewerInstance.prototype.refresh = function () {
     var self = this;
     var token = ++this._renderToken;
+    this._loading = true; // keeps Edit mode on across a regeneration
     this._setStatus("Generating document…", false);
     this.docxBlob = null;
     this.pdfBlob = null;
     this._updatePdfButtonAvailability();
+    this._syncEditUi();
 
     if (typeof this.options.loadPdf !== "function") {
+      this._loading = false;
       this._setStatus("No preview available for this document.", true);
       return Promise.resolve();
     }
@@ -331,8 +378,13 @@
         var pdfjsLib = results[0];
         var result = results[1];
         self.pdfBlob = result.blob;
+        self.lastResult = result;
+        if (self.editor) self.editor.onResult(result);
         self.pdfFilename = result.filename || self.pdfFilename;
         self._updatePdfButtonAvailability();
+        self.options.editLayoutError = result.layoutError || "";
+        self._loading = false;
+        self._syncEditUi();
         return self.pdfBlob.arrayBuffer().then(function (buf) {
           if (token !== self._renderToken || self.destroyed) return;
           return pdfjsLib.getDocument({ data: buf }).promise.then(function (doc) {
@@ -342,6 +394,9 @@
             self.currentPage = 1;
             self._setStatus("", false);
             self._updateMeta();
+            if (typeof self.options.onRefreshed === "function") {
+              try { self.options.onRefreshed(result); } catch (e) { /* a caller's bookkeeping must never break the preview */ }
+            }
             return self._renderCurrentPage();
           });
         });
@@ -349,13 +404,63 @@
       .catch(function (err) {
         if (token !== self._renderToken || self.destroyed) return;
         self.pdfBlob = null;
+        self._loading = false;
         self._updatePdfButtonAvailability();
+        self._syncEditUi();
         self._setPdfUnavailable((err && err.message ? err.message : "Unknown error.").replace(/\.?$/, "."));
       });
   };
 
   DocumentViewerInstance.prototype._updateMeta = function () {
-    this.metaEl.textContent = "Last generated " + utils.formatDate(new Date().toISOString());
+    var hint = "";
+    if (this.editor && this.editor.hasLayout()) {
+      hint = this.editing
+        ? " · Click anywhere on the page's text to edit it — the whole letter is editable. Turn Edit off to see the finished page."
+        : " · Press Edit to change the wording right on the page.";
+    }
+    var edited = this.editor && this.editor.editedCount ? this.editor.editedCount() : 0;
+    var lost = this.editor && this.editor.unmatchedCount ? this.editor.unmatchedCount() : 0;
+    if (lost) hint += " · " + lost + (lost === 1 ? " edit no longer matches" : " edits no longer match") + " the regenerated text and " + (lost === 1 ? "was" : "were") + " left out (Reset all clears them)";
+    if (edited) hint += " · " + edited + (edited === 1 ? " value" : " values") + " edited by hand (Reset all, in Edit mode, restores the auto-generated wording)";
+    this.metaEl.textContent = "Last generated " + utils.formatDate(new Date().toISOString()) + hint;
+  };
+
+  // The Edit button: available once the current PDF has an editable layout.
+  DocumentViewerInstance.prototype._syncEditUi = function () {
+    var btn = this.editBtn;
+    var reason = this.options.editUnavailableReason || "";
+    if (!this.editor && !reason) {
+      btn.hidden = true;
+      return;
+    }
+    btn.hidden = false;
+    var ready = !!(this.editor && this.pdfBlob && this.editor.hasLayout());
+    if (!ready && this.editing && !this._loading) this.editing = false;
+    btn.disabled = !ready;
+    if (ready) btn.title = this.editing ? "Stop editing and show the finished page" : "Edit the wording directly on the page";
+    else if (!this.editor) btn.title = reason;
+    else if (!this.pdfBlob) btn.title = "Press Preview first — editing works on the generated page.";
+    else btn.title = this.options.editLayoutError || "Editing is not available for this preview right now.";
+    btn.setAttribute("aria-pressed", this.editing ? "true" : "false");
+    btn.classList.toggle("is-on", this.editing);
+    this.editLabelEl.textContent = this.editing ? "Done editing" : "Edit";
+    this.el.classList.toggle("is-editing", this.editing);
+    if (this.editor) this.formatToolsEl.hidden = !this.editing;
+  };
+
+  // Turning Edit off commits the open value and, if anything was changed
+  // that is not on the page yet, regenerates the real PDF so what is shown
+  // is exactly what will be downloaded.
+  DocumentViewerInstance.prototype.setEditing = function (on) {
+    if (!this.editor || on === this.editing) return Promise.resolve();
+    if (on && !(this.pdfBlob && this.editor.hasLayout())) return Promise.resolve();
+    var wasEditing = this.editing;
+    if (wasEditing) this.editor.commit();
+    this.editing = on;
+    this._syncEditUi();
+    this._updateMeta();
+    if (wasEditing && !on && this.editor.isDirty()) return this.refresh();
+    return Promise.resolve();
   };
 
   DocumentViewerInstance.prototype._renderCurrentPage = function () {
@@ -367,7 +472,19 @@
       var baseViewport = page.getViewport({ scale: 1 });
       var containerWidth = self.bodyEl.clientWidth - 32; /* padding allowance */
       if (self.fitMode) {
-        self.scale = Math.max(0.25, Math.min(3, containerWidth / baseViewport.width));
+        // Fit the WHOLE page — width AND height — rather than width only.
+        // A width-only fit let a full-length page (with its own real
+        // header and footer) render taller than the visible box, so the
+        // footer sat below the fold and needed scrolling to reach even
+        // though it was always genuinely present in the generated file.
+        // Fitting the whole page into view by default both surfaces the
+        // footer immediately and, as a side effect, renders at a more
+        // comfortable (smaller) default size than a width-only fit did —
+        // "Fit"/zoom controls still let staff zoom in for a closer read.
+        var heightBudget = Math.max(320, global.innerHeight * BODY_MAX_HEIGHT_VH) - 32;
+        var widthScale = containerWidth / baseViewport.width;
+        var heightScale = heightBudget / baseViewport.height;
+        self.scale = Math.max(0.25, Math.min(3, Math.min(widthScale, heightScale)));
       }
       var viewport = page.getViewport({ scale: self.scale * (global.devicePixelRatio || 1) });
       var canvas = self.canvasEl;
@@ -376,41 +493,94 @@
       canvas.style.width = viewport.width / (global.devicePixelRatio || 1) + "px";
       canvas.style.height = viewport.height / (global.devicePixelRatio || 1) + "px";
       canvas.hidden = false;
+      self.pageEl.hidden = false;
+      self.overlayEl.innerHTML = "";
       var ctx = canvas.getContext("2d");
       var renderTask = page.render({ canvasContext: ctx, viewport: viewport });
       self.pageLabelEl.textContent = "Page " + self.currentPage + " of " + self.numPages;
       self.zoomLabelEl.textContent = Math.round(self.scale * 100) + "%";
-      return renderTask.promise;
+      return renderTask.promise.then(function () {
+        if (token !== self._renderToken || self.destroyed) return;
+        if (self.editor) {
+          self.editor.onPageRendered({
+            viewer: self,
+            overlayEl: self.overlayEl,
+            canvasEl: canvas,
+            scale: self.scale,
+            pageNumber: self.currentPage,
+            result: self.lastResult,
+          });
+        }
+      });
     });
   };
 
+  // If the editable preview holds edits that are not in the displayed PDF yet,
+  // regenerate first — Print / Download must never hand over a document that
+  // differs from what the user edited on screen.
+  DocumentViewerInstance.prototype._freshen = function () {
+    if (this.editor && this.editor.isDirty()) return this.refresh();
+    return Promise.resolve();
+  };
+
+  // Prints the real generated PDF without depending on a browser PDF plug-in
+  // or on printing a blob: URL inside an iframe (which several browsers —
+  // and every file:// page — silently refuse): every page of the PDF is
+  // rasterised from the already-loaded pdf.js document into an <img>, laid
+  // out one per page in a hidden iframe, and that iframe's own print dialog
+  // is opened. Falls back to opening the PDF in a new tab if even that fails.
   DocumentViewerInstance.prototype._print = function () {
-    if (!this.pdfBlob) return;
-    var url = URL.createObjectURL(this.pdfBlob);
-    var iframe = document.createElement("iframe");
-    iframe.style.position = "fixed";
-    iframe.style.right = "0";
-    iframe.style.bottom = "0";
-    iframe.style.width = "0";
-    iframe.style.height = "0";
-    iframe.style.border = "0";
-    iframe.src = url;
-    document.body.appendChild(iframe);
-    iframe.onload = function () {
-      try {
-        iframe.contentWindow.focus();
-        iframe.contentWindow.print();
-      } catch (e) {
-        /* Some browsers block programmatic print from a cross-context
-           iframe; fall back to opening the PDF in a new tab so the user
-           can print from there instead of failing silently. */
-        global.open(url, "_blank");
+    var self = this;
+    return this._freshen().then(function () {
+      if (!self.pdfBlob || !self.pdfDoc) return;
+      var doc = self.pdfDoc;
+      var pagePromises = [];
+      var sizePt = null;
+      for (var n = 1; n <= doc.numPages; n++) {
+        pagePromises.push(
+          doc.getPage(n).then(function (page) {
+            var base = page.getViewport({ scale: 1 });
+            if (!sizePt) sizePt = { w: base.width, h: base.height };
+            var vp = page.getViewport({ scale: 2.2 });
+            var c = document.createElement("canvas");
+            c.width = vp.width;
+            c.height = vp.height;
+            return page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise.then(function () {
+              return c.toDataURL("image/jpeg", 0.92);
+            });
+          })
+        );
       }
-      setTimeout(function () {
-        iframe.remove();
-        URL.revokeObjectURL(url);
-      }, 60000);
-    };
+      return Promise.all(pagePromises).then(function (images) {
+        var iframe = document.createElement("iframe");
+        iframe.setAttribute("aria-hidden", "true");
+        iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
+        var html =
+          "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + utils.escapeHtml(self.pdfFilename || "Document") + "</title><style>" +
+          "@page{size:" + sizePt.w + "pt " + sizePt.h + "pt;margin:0}" +
+          "html,body{margin:0;padding:0}" +
+          "img{display:block;width:" + sizePt.w + "pt;height:" + sizePt.h + "pt;page-break-after:always;break-after:page}" +
+          "img:last-child{page-break-after:auto;break-after:auto}" +
+          "</style></head><body>" +
+          images.map(function (src) { return '<img alt="" src="' + src + '">'; }).join("") +
+          "</body></html>";
+        iframe.onload = function () {
+          var imgs = iframe.contentDocument ? Array.prototype.slice.call(iframe.contentDocument.images) : [];
+          Promise.all(imgs.map(function (im) { return im.decode ? im.decode().catch(function () {}) : Promise.resolve(); })).then(function () {
+            try {
+              iframe.contentWindow.focus();
+              iframe.contentWindow.print();
+            } catch (e) {
+              var url = URL.createObjectURL(self.pdfBlob);
+              global.open(url, "_blank");
+            }
+            setTimeout(function () { iframe.remove(); }, 60000);
+          });
+        };
+        document.body.appendChild(iframe);
+        iframe.srcdoc = html;
+      });
+    });
   };
 
   DocumentViewerInstance.prototype._toggleFullscreen = function () {
@@ -421,14 +591,19 @@
     }
   };
 
+  // "Preview" button handler — always refreshes against the current form
+  // state (calling an onRegenerate hook first if the caller passed one;
+  // every real caller's own hook is a no-op today, kept only so a future
+  // document type can run real pre-refresh logic if it ever needs to).
   DocumentViewerInstance.prototype._regenerate = function () {
     var self = this;
-    if (typeof this.options.onRegenerate !== "function") return Promise.resolve();
     var btn = this.regenerateBtn;
     var original = btn.textContent;
+    var hook = typeof this.options.onRegenerate === "function" ? this.options.onRegenerate : function () { return Promise.resolve(); };
+    if (this.editor) this.editor.commit(); // saves the value being typed, if any
     btn.disabled = true;
-    btn.textContent = "Regenerating…";
-    return Promise.resolve(this.options.onRegenerate())
+    btn.textContent = "Loading…";
+    return Promise.resolve(hook())
       .then(function () {
         return self.refresh();
       })
@@ -439,13 +614,23 @@
   };
 
   DocumentViewerInstance.prototype._downloadPdf = function () {
-    if (!this.pdfBlob) return;
-    utils.triggerFileDownload(this.pdfBlob, this.pdfFilename);
+    var self = this;
+    return this._freshen().then(function () {
+      if (!self.pdfBlob) return;
+      utils.triggerFileDownload(self.pdfBlob, self.pdfFilename);
+    });
   };
 
   DocumentViewerInstance.prototype._downloadDocx = function () {
     var self = this;
     if (typeof this.options.loadDocx !== "function") return;
+    return this._freshen().then(function () {
+      return self._downloadDocxNow();
+    });
+  };
+
+  DocumentViewerInstance.prototype._downloadDocxNow = function () {
+    var self = this;
     if (this.docxBlob) {
       utils.triggerFileDownload(this.docxBlob, this.docxFilename);
       return;
@@ -454,7 +639,7 @@
     var original = btn.textContent;
     btn.disabled = true;
     btn.textContent = "Preparing…";
-    this.options
+    return this.options
       .loadDocx()
       .then(function (result) {
         self.docxBlob = result.blob;
@@ -472,6 +657,7 @@
 
   DocumentViewerInstance.prototype.destroy = function () {
     this.destroyed = true;
+    if (this.editor) this.editor.commit();
     this.el.removeEventListener("click", this._onClick);
     global.removeEventListener("resize", this._onResize);
     if (this.pdfDoc && this.pdfDoc.destroy) this.pdfDoc.destroy();

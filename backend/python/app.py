@@ -23,7 +23,7 @@ import os
 import re
 import tempfile
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Any, ClassVar, Literal, Optional
 
 from dotenv import load_dotenv
 
@@ -42,8 +42,8 @@ load_dotenv()
 import pytesseract
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, model_validator
 
 import admin_export_engine
 import authorization_letter_engine
@@ -53,6 +53,7 @@ import docx_utils
 import hotel_voucher_engine
 import hotel_voucher_ocr
 import invitation_letter_engine
+import letter_shared
 import ocr_providers
 import ocr_runner
 import openrouter_ocr
@@ -275,7 +276,9 @@ async def process_hotel_voucher_upload(
         except OSError:
             pass
 
-    return result
+    # Address / phone / city come from an online lookup by hotel name (Google
+    # Places when a key is configured, else OpenStreetMap); never raises.
+    return hotel_voucher_ocr.enrich_with_hotel_lookup(result)
 
 
 PREVIEW_CONVERTIBLE_EXTENSIONS = {".docx"}
@@ -385,13 +388,21 @@ async def _read_optional_signature(signature: Optional[UploadFile]) -> Optional[
     return contents or None
 
 
-def _stream_document(build_docx, build_pdf, fmt: str, error_types: tuple, applicant_name: Optional[str], suffix: str) -> StreamingResponse:
+def _stream_document(build_docx, build_pdf, fmt: str, error_types: tuple, applicant_name: Optional[str], suffix: str, build_layout=None):
     """Shared "generate + stream" plumbing for every document-download
     endpoint (Hotel Voucher, and now both Authorization Letters) — the same
     docx-or-pdf branching, error mapping and Content-Disposition filename
     logic, factored out in Phase 8 so a future document endpoint doesn't
-    duplicate it again (project rule 15)."""
+    duplicate it again (project rule 15).
+
+    `fmt == "layout"` (documents with an editable preview only) returns JSON
+    instead of a file: where each editable value sits on the page of the
+    real PDF — see docx_utils.ProbeShader."""
+    if fmt == "layout" and build_layout is None:
+        raise HTTPException(400, f"{suffix.replace('_', ' ')} has no editable preview layout.")
     try:
+        if fmt == "layout":
+            return JSONResponse(build_layout())
         if fmt == "pdf":
             content = build_pdf()
             media_type = "application/pdf"
@@ -415,7 +426,27 @@ def _stream_document(build_docx, build_pdf, fmt: str, error_types: tuple, applic
     )
 
 
-class HotelItem(BaseModel):
+class _DisplayNames(BaseModel):
+    """Base for every request model that carries people's names: whatever the
+    passport printed in capitals reaches the document engines in ordinary
+    capitalisation (letter_shared.person_display_name). The stored applicant
+    record itself is never touched — only what is written into a document."""
+
+    _NAME_FIELDS: ClassVar[tuple] = ("fullName",)
+
+    @model_validator(mode="after")
+    def _title_case_names(self):
+        for field in self._NAME_FIELDS:
+            value = getattr(self, field, None)
+            if isinstance(value, str):
+                setattr(self, field, letter_shared.person_display_name(value))
+            elif isinstance(value, list):
+                setattr(self, field, [letter_shared.person_display_name(v) if isinstance(v, str) else v for v in value])
+        return self
+
+
+class HotelItem(_DisplayNames):
+    _NAME_FIELDS: ClassVar[tuple] = ("leadGuestName", "guestNames")
     hotelName: str = ""
     phone: str = ""
     address: str = ""
@@ -433,6 +464,16 @@ class HotelItem(BaseModel):
     checkIn: str = ""
     checkOut: str = ""
     guestNames: list[str] = []
+    # Frontend rework, Phase 4 (Word-like body editor): a staff member's own
+    # edited wording for this ONE hotel's editable fields (see
+    # hotel_voucher_engine.compose_hotel_editable_fields for the key list),
+    # keyed by field name, real HTML from the shared Quill editor. None (the
+    # default) means "no edits — every field auto-generates as normal",
+    # matching the Europe Cover Letter's own editedBodyHtml=None contract;
+    # a field simply absent from the dict, OR explicitly null (the
+    # frontend's own "clear this one override" patch shape — see
+    # js/hotels.js), behaves the same as None for that one field.
+    editedFields: Optional[dict[str, Optional[str]]] = None
 
 
 class HotelVoucherRequest(BaseModel):
@@ -457,7 +498,76 @@ def hotel_voucher(payload: HotelVoucherRequest):
     )
 
 
-class AuthPerson(BaseModel):
+class HotelVoucherPreviewResponse(BaseModel):
+    filename: str
+    pdfBase64: str
+    # Page sizes + per-hotel {fieldKey: {page, rect, fontSize, bold, fontName}}
+    # for the editable preview (see hotel_voucher_engine.compute_field_layout).
+    # None when the position probe could not run — the PDF is still returned,
+    # so the preview itself never depends on the probe.
+    layout: Optional[dict] = None
+    layoutError: Optional[str] = None
+
+
+@app.post("/api/documents/hotel-voucher/preview", response_model=HotelVoucherPreviewResponse)
+def hotel_voucher_preview(payload: HotelVoucherRequest):
+    """The editable Hotel Voucher preview in ONE call: the real generated PDF
+    (the exact bytes the Download-as-PDF button hands over) plus where each
+    editable value sits on its page, so the browser can place editable
+    fields over the real document. The two conversions are independent
+    LibreOffice runs (each in its own profile — see pdf_conversion.py) and
+    run side by side."""
+    import base64
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not payload.hotels:
+        raise HTTPException(400, "At least one hotel is required.")
+    hotels = [h.model_dump() for h in payload.hotels]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pdf_future = pool.submit(hotel_voucher_engine.generate_hotel_voucher_pdf, hotels)
+        layout_future = pool.submit(hotel_voucher_engine.compute_field_layout, hotels)
+        try:
+            pdf_bytes = pdf_future.result()
+        except hotel_voucher_engine.HotelVoucherError as e:
+            raise HTTPException(500, str(e))
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(500, f"Hotel voucher generation failed: {e}")
+        layout = None
+        layout_error = None
+        try:
+            layout = layout_future.result()
+        except Exception as e:  # noqa: BLE001 — the preview still works without the editable layer
+            layout_error = f"Editable fields are unavailable: {e}"
+    return HotelVoucherPreviewResponse(
+        filename=_safe_filename(payload.applicantName, "Hotel_Voucher", "pdf"),
+        pdfBase64=base64.b64encode(pdf_bytes).decode("ascii"),
+        layout=layout,
+        layoutError=layout_error,
+    )
+
+
+class ComposeHotelFieldsRequest(BaseModel):
+    hotels: list[HotelItem]
+
+
+class ComposeHotelFieldsResponse(BaseModel):
+    fields: list[dict[str, str]]
+
+
+@app.post("/api/documents/hotel-voucher/compose-fields", response_model=ComposeHotelFieldsResponse)
+def compose_hotel_fields(payload: ComposeHotelFieldsRequest):
+    """Seeds the Word-like body editor for every hotel in one call — one
+    {fieldKey: html} dict per hotel, same order as `payload.hotels` — using
+    the SAME `compose_hotel_editable_fields()` the real generator's own
+    non-edited path is built from (project rule 15), so the editor always
+    opens showing exactly what a fresh generation would have produced."""
+    if not payload.hotels:
+        raise HTTPException(400, "At least one hotel is required.")
+    fields = [hotel_voucher_engine.compose_hotel_editable_fields(h.model_dump()) for h in payload.hotels]
+    return ComposeHotelFieldsResponse(fields=fields)
+
+
+class AuthPerson(_DisplayNames):
     salutation: str = ""
     fullName: str = ""
     passportNumber: str = ""
@@ -474,11 +584,18 @@ class PassportAuthorizationRequest(BaseModel):
     recipientAddress: str = ""
     collectorName: str = ""
     dateOverride: Optional[str] = None
-    format: Literal["docx", "pdf"] = "docx"
+    format: Literal["docx", "pdf", "layout"] = "docx"
     applicantName: Optional[str] = None
+    # Frontend rework, Phase 4 (Word-like body editor): a staff member's own
+    # edited wording for this letter's own editable fields (see
+    # authorization_letter_engine.compose_passport_editable_fields for the
+    # key set — deliberately NOT the signature/email block, which stays
+    # auto-only). None means "no edits — every field auto-generates as
+    # normal", same contract as the Europe Cover Letter's editedBodyHtml.
+    editedFields: Optional[dict[str, Optional[str]]] = None
 
 
-class CompanyAuthPerson(BaseModel):
+class CompanyAuthPerson(_DisplayNames):
     fullName: str = ""
     passportNumber: str = ""
 
@@ -487,8 +604,12 @@ class CompanyAuthorizationRequest(BaseModel):
     people: list[CompanyAuthPerson]
     recipientText: str = ""
     dateOverride: Optional[str] = None
-    format: Literal["docx", "pdf"] = "docx"
+    format: Literal["docx", "pdf", "layout"] = "docx"
     applicantName: Optional[str] = None
+    # Same contract as PassportAuthorizationRequest.editedFields above —
+    # see authorization_letter_engine.compose_company_editable_fields for
+    # the key set ("date", "recipient", "applicant_<index>" per person).
+    editedFields: Optional[dict[str, Optional[str]]] = None
 
 
 @app.post("/api/documents/passport-authorization")
@@ -499,16 +620,44 @@ def passport_authorization(payload: PassportAuthorizationRequest):
     people = [p.model_dump() for p in payload.people]
     return _stream_document(
         build_docx=lambda: authorization_letter_engine.generate_passport_authorization_docx(
-            people, payload.recipientCentreName, payload.recipientAddress, payload.collectorName, payload.dateOverride
+            people, payload.recipientCentreName, payload.recipientAddress, payload.collectorName,
+            payload.dateOverride, payload.editedFields
         ),
         build_pdf=lambda: authorization_letter_engine.generate_passport_authorization_pdf(
-            people, payload.recipientCentreName, payload.recipientAddress, payload.collectorName, payload.dateOverride
+            people, payload.recipientCentreName, payload.recipientAddress, payload.collectorName,
+            payload.dateOverride, payload.editedFields
         ),
         fmt=payload.format,
         error_types=(authorization_letter_engine.AuthorizationLetterError, docx_utils.DocxBuildError),
         applicant_name=payload.applicantName,
         suffix="Passport_Authorization",
+        build_layout=lambda: authorization_letter_engine.compute_passport_field_layout(
+            people, payload.recipientCentreName, payload.recipientAddress, payload.collectorName,
+            payload.dateOverride, payload.editedFields
+        ),
     )
+
+
+class ComposePassportFieldsRequest(BaseModel):
+    people: list[AuthPerson]
+    recipientCentreName: str = ""
+    recipientAddress: str = ""
+    collectorName: str = ""
+    dateOverride: Optional[str] = None
+
+
+@app.post("/api/documents/passport-authorization/compose-fields")
+def compose_passport_fields(payload: ComposePassportFieldsRequest):
+    if not payload.people:
+        raise HTTPException(400, "At least one traveller is required.")
+    people = [p.model_dump() for p in payload.people]
+    try:
+        fields = authorization_letter_engine.compose_passport_editable_fields(
+            people, payload.recipientCentreName, payload.recipientAddress, payload.collectorName, payload.dateOverride
+        )
+    except (authorization_letter_engine.AuthorizationLetterError, docx_utils.DocxBuildError) as e:
+        raise HTTPException(500, str(e))
+    return {"fields": fields}
 
 
 @app.post("/api/documents/company-authorization")
@@ -519,19 +668,37 @@ def company_authorization(payload: CompanyAuthorizationRequest):
     people = [p.model_dump() for p in payload.people]
     return _stream_document(
         build_docx=lambda: authorization_letter_engine.generate_company_authorization_docx(
-            people, payload.recipientText, payload.dateOverride
+            people, payload.recipientText, payload.dateOverride, payload.editedFields
         ),
         build_pdf=lambda: authorization_letter_engine.generate_company_authorization_pdf(
-            people, payload.recipientText, payload.dateOverride
+            people, payload.recipientText, payload.dateOverride, payload.editedFields
         ),
         fmt=payload.format,
         error_types=(authorization_letter_engine.AuthorizationLetterError, docx_utils.DocxBuildError),
         applicant_name=payload.applicantName,
         suffix="Company_Authorization",
+        build_layout=lambda: authorization_letter_engine.compute_company_field_layout(
+            people, payload.recipientText, payload.dateOverride, payload.editedFields
+        ),
     )
 
 
-class CoverLetterPerson(BaseModel):
+class ComposeCompanyFieldsRequest(BaseModel):
+    people: list[CompanyAuthPerson]
+    recipientText: str = ""
+    dateOverride: Optional[str] = None
+
+
+@app.post("/api/documents/company-authorization/compose-fields")
+def compose_company_fields(payload: ComposeCompanyFieldsRequest):
+    if not payload.people:
+        raise HTTPException(400, "At least one applicant is required.")
+    people = [p.model_dump() for p in payload.people]
+    fields = authorization_letter_engine.compose_company_editable_fields(people, payload.recipientText, payload.dateOverride)
+    return {"fields": fields}
+
+
+class CoverLetterPerson(_DisplayNames):
     id: str = ""
     salutation: str = ""
     fullName: str = ""
@@ -562,8 +729,18 @@ class CoverLetterRequest(BaseModel):
     travelEndDate: str = ""
     fundingArrangement: str = ""
     dateOverride: Optional[str] = None
-    format: Literal["docx", "pdf"] = "docx"
+    format: Literal["docx", "pdf", "layout"] = "docx"
     applicantName: Optional[str] = None
+    # Phase 4 proof of concept — Europe only. When given, real HTML from
+    # the staff member's own edits in the new "Word-like" body editor
+    # (js/cover-letter.js's Quill instance), replacing ONLY the letter's
+    # three free-composed body paragraphs; every other paragraph, and the
+    # header/footer/margins/fonts themselves, are unaffected (project
+    # rule 5). None (the default) keeps the existing auto-composed body,
+    # unchanged from before Phase 4. See cover_letter_engine.generate_europe_cover_letter_docx.
+    editedBodyHtml: Optional[str] = None
+    # Whole-document edits (any region): {"blk-…": html} — see document_blocks.py.
+    editedFields: Optional[dict[str, Optional[str]]] = None
     # Europe-only
     cityCountryOfResidence: str = ""
     numberOfNights: str = ""
@@ -641,15 +818,21 @@ def cover_letter(payload: CoverLetterRequest):
             )
             return _stream_document(
                 build_docx=lambda: cover_letter_engine.generate_europe_cover_letter_docx(
-                    applicant, companion, fields, payload.dateOverride
+                    applicant, companion, fields, payload.dateOverride, payload.editedBodyHtml,
+                    edited_blocks=payload.editedFields,
                 ),
                 build_pdf=lambda: cover_letter_engine.generate_europe_cover_letter_pdf(
-                    applicant, companion, fields, payload.dateOverride
+                    applicant, companion, fields, payload.dateOverride, payload.editedBodyHtml,
+                    edited_blocks=payload.editedFields,
                 ),
                 fmt=payload.format,
                 error_types=(cover_letter_engine.CoverLetterError, docx_utils.DocxBuildError),
                 applicant_name=payload.applicantName,
                 suffix="Europe_Cover_Letter",
+                build_layout=lambda: cover_letter_engine.compute_europe_field_layout(
+                    applicant, companion, fields, payload.dateOverride, payload.editedBodyHtml,
+                    edited_blocks=payload.editedFields,
+                ),
             )
 
         # Japan
@@ -661,15 +844,18 @@ def cover_letter(payload: CoverLetterRequest):
         hotels = [h.model_dump() for h in payload.hotels]
         return _stream_document(
             build_docx=lambda: cover_letter_engine.generate_japan_cover_letter_docx(
-                applicant, companion, fields, hotels, payload.dateOverride
+                applicant, companion, fields, hotels, payload.dateOverride, edited_blocks=payload.editedFields
             ),
             build_pdf=lambda: cover_letter_engine.generate_japan_cover_letter_pdf(
-                applicant, companion, fields, hotels, payload.dateOverride
+                applicant, companion, fields, hotels, payload.dateOverride, edited_blocks=payload.editedFields
             ),
             fmt=payload.format,
             error_types=(cover_letter_engine.CoverLetterError, docx_utils.DocxBuildError),
             applicant_name=payload.applicantName,
             suffix="Japan_Cover_Letter",
+            build_layout=lambda: cover_letter_engine.compute_japan_field_layout(
+                applicant, companion, fields, hotels, payload.dateOverride, edited_blocks=payload.editedFields
+            ),
         )
 
     # Singapore — applicant alone, or applicant + any number of companions
@@ -682,16 +868,83 @@ def cover_letter(payload: CoverLetterRequest):
     )
     return _stream_document(
         build_docx=lambda: cover_letter_engine.generate_singapore_cover_letter_docx(
-            applicant, companions, fields, payload.dateOverride
+            applicant, companions, fields, payload.dateOverride, edited_blocks=payload.editedFields
         ),
         build_pdf=lambda: cover_letter_engine.generate_singapore_cover_letter_pdf(
-            applicant, companions, fields, payload.dateOverride
+            applicant, companions, fields, payload.dateOverride, edited_blocks=payload.editedFields
         ),
         fmt=payload.format,
         error_types=(cover_letter_engine.CoverLetterError, docx_utils.DocxBuildError),
         applicant_name=payload.applicantName,
         suffix="Singapore_Cover_Letter",
+        build_layout=lambda: cover_letter_engine.compute_singapore_field_layout(
+            applicant, companions, fields, payload.dateOverride, edited_blocks=payload.editedFields
+        ),
     )
+
+
+class CoverLetterComposeBodyResponse(BaseModel):
+    html: str
+
+
+@app.post("/api/documents/cover-letter/compose-body", response_model=CoverLetterComposeBodyResponse)
+def cover_letter_compose_body(payload: CoverLetterRequest):
+    """Phase 4 proof of concept — seeds the new 'Word-like' Europe Cover
+    Letter body editor (js/cover-letter.js's Quill instance) with the
+    SAME real composed wording the actual generator would write
+    (cover_letter_engine.compose_europe_body_html), never a second,
+    hand-duplicated copy of that business logic (project rule 15). A
+    plain JSON endpoint, not a file download — `payload.format` and
+    `payload.editedBodyHtml` are ignored here.
+
+    Scoped to Europe only, matching the user's explicit "proof of
+    concept first, one document type" rollout choice — Japan and
+    Singapore have no equivalent free-composed body paragraphs to make
+    editable yet."""
+    if payload.region != "Europe":
+        raise HTTPException(
+            400,
+            "The editable Word-like body preview is currently a proof of concept for the "
+            "Europe Cover Letter only.",
+        )
+    if not payload.people:
+        raise HTTPException(400, "At least the applicant is required.")
+
+    people = [p.model_dump() for p in payload.people]
+    applicant, companions = _split_applicant_and_companions(people)
+    if len(companions) != 1:
+        raise HTTPException(
+            400,
+            "The Europe Cover Letter is written for the applicant plus exactly one companion "
+            f"(matching the reference template's own fixed wording) — {len(companions)} companion(s) were given.",
+        )
+    companion = companions[0]
+
+    fields = {
+        "recipientText": payload.recipientText,
+        "destinationCountry": payload.destinationCountry,
+        "travelStartDate": payload.travelStartDate,
+        "travelEndDate": payload.travelEndDate,
+        "fundingArrangement": payload.fundingArrangement,
+        "cityCountryOfResidence": payload.cityCountryOfResidence,
+        "numberOfNights": payload.numberOfNights,
+        "applicantEmploymentStatus": payload.applicantEmploymentStatus,
+        "applicantJobTitle": payload.applicantJobTitle,
+        "applicantEmployerName": payload.applicantEmployerName,
+        "companionJobTitle": payload.companionJobTitle,
+        "companionEmployerName": payload.companionEmployerName,
+        "companionEmploymentStartYear": payload.companionEmploymentStartYear,
+        "nextCountry": payload.nextCountry,
+        "nextTravelStartDate": payload.nextTravelStartDate,
+        "nextTravelEndDate": payload.nextTravelEndDate,
+        "nextNumberOfNights": payload.nextNumberOfNights,
+    }
+
+    try:
+        html = cover_letter_engine.compose_europe_body_html(applicant, companion, fields)
+    except cover_letter_engine.CoverLetterError as e:
+        raise HTTPException(500, str(e))
+    return CoverLetterComposeBodyResponse(html=html)
 
 
 # ---------------------------------------------------------------------------
@@ -708,7 +961,7 @@ def cover_letter(payload: CoverLetterRequest):
 # ---------------------------------------------------------------------------
 
 
-class InvitationLetterInviter(BaseModel):
+class InvitationLetterInviter(_DisplayNames):
     fullName: str = ""
     addressLine1: str = ""
     addressLine2: str = ""
@@ -723,7 +976,7 @@ class InvitationLetterInviter(BaseModel):
     email: str = ""
 
 
-class InvitationLetterInvitee(BaseModel):
+class InvitationLetterInvitee(_DisplayNames):
     fullName: str = ""
     passportNumber: str = ""
     placeOfIssue: str = ""
@@ -740,8 +993,13 @@ class InvitationLetterRequest(BaseModel):
     returnDate: str = ""
     fundingArrangement: str = ""
     dateOverride: Optional[str] = None
-    format: Literal["docx", "pdf"] = "docx"
+    format: Literal["docx", "pdf", "layout"] = "docx"
     applicantName: Optional[str] = None
+    # Frontend rework, Phase 4 (Word-like body editor): see
+    # PassportAuthorizationRequest.editedFields above for the full
+    # contract — see invitation_letter_engine.INVITATION_EDITABLE_FIELD_KEYS
+    # for this letter's own key set.
+    editedFields: Optional[dict[str, Optional[str]]] = None
 
 
 @app.post("/api/documents/invitation-letter")
@@ -768,19 +1026,53 @@ async def invitation_letter(
     }
     return _stream_document(
         build_docx=lambda: invitation_letter_engine.generate_invitation_letter_docx(
-            inviter, invitees, fields, signature_bytes, parsed.dateOverride
+            inviter, invitees, fields, signature_bytes, parsed.dateOverride, parsed.editedFields
         ),
         build_pdf=lambda: invitation_letter_engine.generate_invitation_letter_pdf(
-            inviter, invitees, fields, signature_bytes, parsed.dateOverride
+            inviter, invitees, fields, signature_bytes, parsed.dateOverride, parsed.editedFields
         ),
         fmt=parsed.format,
         error_types=(invitation_letter_engine.InvitationLetterError, docx_utils.DocxBuildError),
         applicant_name=parsed.applicantName,
         suffix="Invitation_Letter",
+        build_layout=lambda: invitation_letter_engine.compute_invitation_field_layout(
+            inviter, invitees, fields, signature_bytes, parsed.dateOverride, parsed.editedFields
+        ),
     )
 
 
-class InitorsSubject(BaseModel):
+class ComposeInvitationFieldsRequest(BaseModel):
+    inviter: InvitationLetterInviter
+    invitees: list[InvitationLetterInvitee]
+    travelStartDate: str = ""
+    travelEndDate: str = ""
+    purpose: str = ""
+    accommodationDetails: str = ""
+    returnDate: str = ""
+    fundingArrangement: str = ""
+    dateOverride: Optional[str] = None
+
+
+@app.post("/api/documents/invitation-letter/compose-fields")
+def compose_invitation_fields(payload: ComposeInvitationFieldsRequest):
+    inviter = payload.inviter.model_dump()
+    invitees = [i.model_dump() for i in payload.invitees]
+    fields = {
+        "travelStartDate": payload.travelStartDate,
+        "travelEndDate": payload.travelEndDate,
+        "purpose": payload.purpose,
+        "accommodationDetails": payload.accommodationDetails,
+        "returnDate": payload.returnDate,
+        "fundingArrangement": payload.fundingArrangement,
+    }
+    try:
+        fields_out = invitation_letter_engine.compose_invitation_editable_fields(inviter, invitees, fields, payload.dateOverride)
+    except (invitation_letter_engine.InvitationLetterError, docx_utils.DocxBuildError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    return {"fields": fields_out}
+
+
+class InitorsSubject(_DisplayNames):
     fullName: str = ""
     passportNumber: str = ""
     placeOfIssue: str = ""
@@ -792,7 +1084,7 @@ class InitorsSubject(BaseModel):
     relationWithInvitingPerson: str = ""
 
 
-class InitorsSpouse(BaseModel):
+class InitorsSpouse(_DisplayNames):
     fullName: str = ""
     passportNumber: str = ""
     placeOfIssue: str = ""
@@ -800,7 +1092,7 @@ class InitorsSpouse(BaseModel):
     occupation: str = ""
 
 
-class InitorsInvitingPerson(BaseModel):
+class InitorsInvitingPerson(_DisplayNames):
     fullName: str = ""
     passportNumber: str = ""
     countryOfResidence: str = ""
@@ -820,8 +1112,10 @@ class InitorsCoveringLetterRequest(BaseModel):
     otherCommitments: str = ""
     invitationSupportingDocuments: str = ""
     dateOverride: Optional[str] = None
-    format: Literal["docx", "pdf"] = "docx"
+    format: Literal["docx", "pdf", "layout"] = "docx"
     applicantName: Optional[str] = None
+    # Whole-document edits: {"blk-…": html} — see document_blocks.py.
+    editedFields: Optional[dict[str, Optional[str]]] = None
 
 
 @app.post("/api/documents/initors-covering-letter")
@@ -851,15 +1145,18 @@ async def initors_covering_letter(
     }
     return _stream_document(
         build_docx=lambda: invitation_letter_engine.generate_initors_covering_letter_docx(
-            subject, spouse, inviting_person, fields, signature_bytes, parsed.dateOverride
+            subject, spouse, inviting_person, fields, signature_bytes, parsed.dateOverride, parsed.editedFields
         ),
         build_pdf=lambda: invitation_letter_engine.generate_initors_covering_letter_pdf(
-            subject, spouse, inviting_person, fields, signature_bytes, parsed.dateOverride
+            subject, spouse, inviting_person, fields, signature_bytes, parsed.dateOverride, parsed.editedFields
         ),
         fmt=parsed.format,
         error_types=(invitation_letter_engine.InvitationLetterError, docx_utils.DocxBuildError),
         applicant_name=parsed.applicantName,
         suffix="Initors_Covering_Letter",
+        build_layout=lambda: invitation_letter_engine.compute_initors_field_layout(
+            subject, spouse, inviting_person, fields, signature_bytes, parsed.dateOverride, parsed.editedFields
+        ),
     )
 
 
@@ -946,8 +1243,21 @@ class RequiredDocumentLetterRequest(BaseModel):
     itrYears: str = ""
     processingTime: str = ""
     visaFees: str = ""
-    format: Literal["docx", "pdf"] = "docx"
+    # Hard copy / digital copy toggle (user's own explicit instruction):
+    # one choice for the WHOLE listed checklist, swapping the template's
+    # "Documents Required (Digital Copies):" heading to "(Hard Copies):"
+    # when requested — see required_document_letter_engine.VALID_COPY_TYPES.
+    copyType: Literal["Digital", "Hard"] = "Digital"
+    format: Literal["docx", "pdf", "layout"] = "docx"
     applicantName: Optional[str] = None
+    # Frontend rework, Phase 4 extension: the Word-like body editor's
+    # {fieldKey: html} override map. A key absent or explicit None means
+    # "auto-generate that field normally" — see required_document_letter_
+    # engine.py's REQUIRED_DOCUMENT_LETTER_EDITABLE_FIELD_KEYS docstring for
+    # this document type's own narrower "editing only" scope (project rule
+    # 5): the checkbox-driven document-selection mechanism itself is
+    # unchanged, only the generated wording becomes optionally editable.
+    editedFields: Optional[dict[str, Optional[str]]] = None
 
 
 @app.post("/api/documents/required-document-letter")
@@ -968,6 +1278,8 @@ def required_document_letter(payload: RequiredDocumentLetterRequest):
         itr_years=payload.itrYears,
         processing_time=payload.processingTime,
         visa_fees=payload.visaFees,
+        copy_type=payload.copyType,
+        edited_fields=payload.editedFields,
     )
     return _stream_document(
         build_docx=lambda: required_document_letter_engine.generate_required_document_letter_docx(**kwargs),
@@ -976,7 +1288,39 @@ def required_document_letter(payload: RequiredDocumentLetterRequest):
         error_types=(required_document_letter_engine.RequiredDocumentLetterError, docx_utils.DocxBuildError),
         applicant_name=payload.applicantName,
         suffix="Required_Document_Letter",
+        build_layout=lambda: required_document_letter_engine.compute_required_document_letter_field_layout(**kwargs),
     )
+
+
+class ComposeRequiredDocumentLetterFieldsRequest(BaseModel):
+    country: str
+    visaType: str
+    employmentStatus: str = "Other"
+    documentIds: list[str] = []
+    bankStatementDuration: str = ""
+    itrYears: str = ""
+    processingTime: str = ""
+    visaFees: str = ""
+    copyType: Literal["Digital", "Hard"] = "Digital"
+
+
+@app.post("/api/documents/required-document-letter/compose-fields")
+def compose_required_document_letter_fields(payload: ComposeRequiredDocumentLetterFieldsRequest):
+    try:
+        fields_out = required_document_letter_engine.compose_required_document_letter_editable_fields(
+            country=payload.country,
+            visa_type=payload.visaType,
+            employment_status=payload.employmentStatus,
+            document_ids=payload.documentIds,
+            bank_statement_duration=payload.bankStatementDuration,
+            itr_years=payload.itrYears,
+            processing_time=payload.processingTime,
+            visa_fees=payload.visaFees,
+            copy_type=payload.copyType,
+        )
+    except (required_document_letter_engine.RequiredDocumentLetterError, docx_utils.DocxBuildError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    return {"fields": fields_out}
 
 
 class AdminExportRequest(BaseModel):
@@ -994,7 +1338,7 @@ class AdminExportRequest(BaseModel):
 @app.post("/api/admin/export-excel")
 def admin_export_excel(payload: AdminExportRequest):
     """Phase 11 — Master Excel export. Builds a real, multi-sheet .xlsx
-    workbook (Applications / Travellers / Status Summary) from whatever
+    workbook (Applications / Travellers) from whatever
     Application records the frontend currently holds and streams it back —
     the same "frontend sends the data it already has, backend does the real
     work, no fabrication" shape as every document-generation endpoint

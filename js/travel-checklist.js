@@ -82,7 +82,6 @@
         '<div class="empty-state">' +
         '<svg class="icon" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>' +
         "<h3>Select a destination and visa category</h3>" +
-        "<p>The required and supporting document checklist appears here once both are set, and carries through to the Documents step.</p>" +
         "</div>";
       return;
     }
@@ -145,7 +144,6 @@
       '<div class="view-header">' +
       '<div class="view-header__text">' +
       "<h2>Travel details</h2>" +
-      "<p>Shared trip details for this application. The visa document checklist below updates automatically from the destination and visa category.</p>" +
       "</div>" +
       "</div>" +
       '<div class="card">' +

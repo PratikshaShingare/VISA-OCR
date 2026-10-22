@@ -28,8 +28,11 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
+import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -38,6 +41,104 @@ import requests
 class PdfConversionError(Exception):
     """Raised whenever a .docx genuinely cannot be converted to PDF — never
     swallowed to produce a fake/empty PDF (project rule 9)."""
+
+
+def _soffice_candidates() -> list[str]:
+    """Where LibreOffice's 'soffice' is normally installed when it is NOT on
+    PATH (the Windows installer never adds it to PATH, which is the usual
+    reason 'soffice' "is not installed" on a machine that has it)."""
+    candidates: list[str] = []
+    if sys.platform.startswith("win"):
+        for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"), r"C:\Program Files", r"C:\Program Files (x86)"):
+            if base:
+                candidates.append(os.path.join(base, "LibreOffice", "program", "soffice.exe"))
+    elif sys.platform == "darwin":
+        candidates.append("/Applications/LibreOffice.app/Contents/MacOS/soffice")
+    else:
+        candidates += ["/usr/bin/soffice", "/usr/lib/libreoffice/program/soffice", "/opt/libreoffice/program/soffice"]
+    return candidates
+
+
+def _find_soffice() -> Optional[str]:
+    """Path to LibreOffice: SOFFICE_PATH env var, then PATH, then the
+    standard install folders. None when it genuinely is not installed."""
+    configured = os.environ.get("SOFFICE_PATH", "").strip().strip('"')
+    if configured and os.path.isfile(configured):
+        return configured
+    on_path = shutil.which("soffice")
+    if on_path:
+        return on_path
+    for candidate in _soffice_candidates():
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+_WORD_PS_SCRIPT = r"""
+param([string]$InPath, [string]$OutPath)
+$ErrorActionPreference = 'Stop'
+$word = $null
+$doc = $null
+try {
+    $word = New-Object -ComObject Word.Application
+    $word.Visible = $false
+    $word.DisplayAlerts = 0
+    $doc = $word.Documents.Open($InPath)
+    # 17 = wdExportFormatPDF
+    $doc.ExportAsFixedFormat($OutPath, 17)
+} finally {
+    if ($doc -ne $null) { try { $doc.Close(0) } catch {} }
+    if ($word -ne $null) { try { $word.Quit(0) } catch {} }
+}
+"""
+
+# Word is one shared desktop application; serialise our own calls into it.
+_WORD_LOCK = threading.Lock()
+
+
+def _word_is_installed() -> bool:
+    """True on Windows when Microsoft Word is registered as a COM server."""
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        import winreg  # type: ignore
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r"Word.Application"))
+        return True
+    except Exception:
+        return False
+
+
+def convert_via_word(docx_bytes: bytes, base_name: str = "document") -> bytes:
+    """Real Microsoft Word conversion (Windows only, uses Word's own COM
+    automation through the PowerShell that ships with Windows — nothing to
+    pip-install). The PDF is Word's genuine "Save as PDF" of the generated
+    .docx, never a re-created layout (project rule 9). Used when LibreOffice
+    is not installed but Word is."""
+    if not sys.platform.startswith("win"):
+        raise PdfConversionError("Microsoft Word conversion is only available on Windows.")
+    with _WORD_LOCK, tempfile.TemporaryDirectory() as tmp_dir:
+        docx_path = os.path.join(tmp_dir, f"{base_name}.docx")
+        pdf_path = os.path.join(tmp_dir, f"{base_name}.pdf")
+        script_path = os.path.join(tmp_dir, "word_to_pdf.ps1")
+        with open(docx_path, "wb") as f:
+            f.write(docx_bytes)
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(_WORD_PS_SCRIPT)
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                 "-File", script_path, docx_path, pdf_path],
+                capture_output=True, text=True, timeout=120,
+            )
+        except FileNotFoundError:
+            raise PdfConversionError("PowerShell was not found, so Microsoft Word cannot be used for PDF export.")
+        except subprocess.TimeoutExpired:
+            raise PdfConversionError("PDF conversion with Microsoft Word timed out.")
+        if result.returncode != 0 or not os.path.isfile(pdf_path):
+            detail = (result.stderr or result.stdout or "unknown error").strip()[:400]
+            raise PdfConversionError(f"PDF conversion with Microsoft Word failed: {detail}")
+        with open(pdf_path, "rb") as f:
+            return f.read()
 
 
 def convert_via_local_libreoffice(docx_bytes: bytes, base_name: str = "document") -> bytes:
@@ -66,12 +167,14 @@ def convert_via_local_libreoffice(docx_bytes: bytes, base_name: str = "document"
 
         profile_dir = os.path.join(tmp_dir, "lo_profile")
         os.makedirs(profile_dir, exist_ok=True)
-        profile_uri = "file://" + profile_dir.replace(os.sep, "/")
+        # Path.as_uri() gives file:///C:/... on Windows and file:///tmp/... elsewhere.
+        profile_uri = Path(profile_dir).as_uri()
+        soffice = _find_soffice() or "soffice"
 
         try:
             result = subprocess.run(
                 [
-                    "soffice",
+                    soffice,
                     "--headless",
                     "--norestore",
                     f"-env:UserInstallation={profile_uri}",
@@ -87,9 +190,9 @@ def convert_via_local_libreoffice(docx_bytes: bytes, base_name: str = "document"
             )
         except FileNotFoundError:
             raise PdfConversionError(
-                "PDF export requires LibreOffice ('soffice') to be installed on "
-                "this machine. The Word (.docx) document can still be generated "
-                "and downloaded without it."
+                "PDF export needs LibreOffice (free, libreoffice.org) or Microsoft "
+                "Word installed on the machine running this backend. The Word "
+                "(.docx) document can still be generated and downloaded without it."
             )
         except subprocess.TimeoutExpired:
             raise PdfConversionError("PDF conversion timed out.")
@@ -213,7 +316,9 @@ def convert_docx_bytes_to_pdf(docx_bytes: bytes, base_name: str = "document") ->
     identically-named wrapper, so none of their call sites change).
     Dispatches on PDF_CONVERSION_PROVIDER:
       - "cloudconvert" -> always cloud, raises if no API key is set
-      - "local"        -> always local LibreOffice, raises if 'soffice' isn't installed
+      - "local"        -> local LibreOffice (or, on Windows without LibreOffice,
+                             Microsoft Word); raises if neither is installed
+      - "word"         -> always Microsoft Word (Windows only)
       - "auto" (default) -> cloud when CLOUDCONVERT_API_KEY is set (Vercel),
                              otherwise local (unchanged behaviour for anyone
                              already running this backend on their own
@@ -225,6 +330,12 @@ def convert_docx_bytes_to_pdf(docx_bytes: bytes, base_name: str = "document") ->
     use_cloud = choice == "cloudconvert" or (choice == "auto" and has_cloudconvert_key)
     if use_cloud:
         return convert_via_cloudconvert(docx_bytes, base_name=base_name)
+    if choice == "word":
+        return convert_via_word(docx_bytes, base_name=base_name)
+    # "local" / "auto" without a cloud key: LibreOffice when it is installed;
+    # on a Windows PC that only has Microsoft Word, Word does the conversion.
+    if _find_soffice() is None and _word_is_installed():
+        return convert_via_word(docx_bytes, base_name=base_name)
     return convert_via_local_libreoffice(docx_bytes, base_name=base_name)
 
 
@@ -252,7 +363,17 @@ def get_pdf_conversion_status() -> dict:
             ),
         }
 
-    soffice_path = shutil.which("soffice")
+    soffice_path = _find_soffice()
+    word_installed = _word_is_installed()
+    if not soffice_path and (word_installed or choice == "word"):
+        return {
+            "provider": "word",
+            "available": word_installed,
+            "pdfConversionProviderEnv": choice,
+            "hasCloudConvertKey": has_cloudconvert_key,
+            "sofficePath": None,
+            "note": "LibreOffice was not found; PDF export uses the installed Microsoft Word.",
+        }
     return {
         "provider": "local",
         "available": bool(soffice_path),

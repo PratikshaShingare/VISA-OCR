@@ -116,6 +116,75 @@ def test_invitation_letter_pdf(sample_applicant, sample_companion):
 
 
 # ---------------------------------------------------------------------------
+# Frontend rework, Phase 4: Word-like body editor editable fields
+# ---------------------------------------------------------------------------
+
+
+def test_compose_invitation_editable_fields_matches_the_real_generated_text(sample_applicant, sample_companion):
+    """Every composed field must be the exact text the real (non-edited)
+    generator would have produced — project rule 15's zero-drift-risk
+    guarantee, verified the same way the Authorization Letters' own
+    compose_*_editable_fields tests are."""
+    skip_if_missing(ile.INVITATION_LETTER_TEMPLATE_PATH)
+    fields = ile.compose_invitation_editable_fields(INVITER, [sample_applicant, sample_companion], INVITATION_FIELDS)
+    assert set(fields.keys()) == set(ile.INVITATION_EDITABLE_FIELD_KEYS)
+
+    docx_bytes = ile.generate_invitation_letter_docx(INVITER, [sample_applicant, sample_companion], INVITATION_FIELDS)
+    doc = Document(io.BytesIO(docx_bytes))
+    for key, idx in ile._INVITATION_FIELD_PARAGRAPH_INDEX.items():
+        composed_text = fields[key].removeprefix("<p>").removesuffix("</p>")
+        assert composed_text == doc.paragraphs[idx].text, f"field {key!r} drifted from the real generated paragraph"
+
+
+def test_invitation_letter_edited_field_replaces_only_that_paragraph(sample_applicant, sample_companion):
+    skip_if_missing(ile.INVITATION_LETTER_TEMPLATE_PATH)
+    edited = {"purposeStatement": "<p>Edited purpose sentence via the Word-like editor.</p>"}
+    docx_bytes = ile.generate_invitation_letter_docx(
+        INVITER, [sample_applicant, sample_companion], INVITATION_FIELDS, edited_fields=edited
+    )
+    text = _full_text(Document(io.BytesIO(docx_bytes)))
+    assert "Edited purpose sentence via the Word-like editor." in text
+    assert "It would be an incredibly special and proud moment" not in text
+    # Every OTHER field must still auto-generate normally.
+    assert INVITER["fullName"] in text
+    assert sample_applicant["fullName"] in text
+    assert INVITER["email"] in text
+
+
+def test_invitation_letter_edited_fields_before_and_after_the_signature_slot(sample_applicant, sample_companion):
+    """Fields both BEFORE (e.g. inviterDetails, paragraph 12) and AFTER
+    (e.g. signOffName/phone/email, paragraphs 21-23) the blank signature
+    slot (paragraph 20) must all still land correctly even when an
+    earlier edit changes the document's total paragraph count — the
+    stable-paragraph-reference regression this test guards against."""
+    skip_if_missing(ile.INVITATION_LETTER_TEMPLATE_PATH)
+    edited = {
+        "inviterDetails": "<p>Line one of a longer edit.</p><p>Line two of the same edit.</p>",
+        "phone": "<p>Phone No.: +44 7000 000000</p>",
+    }
+    docx_bytes = ile.generate_invitation_letter_docx(
+        INVITER, [sample_applicant, sample_companion], INVITATION_FIELDS, edited_fields=edited
+    )
+    text = _full_text(Document(io.BytesIO(docx_bytes)))
+    assert "Line one of a longer edit." in text
+    assert "Line two of the same edit." in text
+    assert "+44 7000 000000" in text
+    # Untouched fields after the edited/shifted range must still be correct.
+    assert INVITER["email"] in text
+    assert INVITER["fullName"] in text
+
+
+def test_invitation_letter_edited_field_survives_into_the_pdf(sample_applicant, sample_companion):
+    skip_if_missing(ile.INVITATION_LETTER_TEMPLATE_PATH)
+    skip_if_missing_binary("soffice")
+    edited = {"fundingArrangement": "<p>All costs are covered by the inviter alone.</p>"}
+    pdf_bytes = ile.generate_invitation_letter_pdf(
+        INVITER, [sample_applicant, sample_companion], INVITATION_FIELDS, edited_fields=edited
+    )
+    assert pdf_bytes[:5] == b"%PDF-"
+
+
+# ---------------------------------------------------------------------------
 # Initors Covering Letter
 # ---------------------------------------------------------------------------
 

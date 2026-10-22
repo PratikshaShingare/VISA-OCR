@@ -14,6 +14,16 @@
     return Array.prototype.slice.call((scope || document).querySelectorAll(selector));
   }
 
+  // Delegated listeners are remembered per element + event + selector, and
+  // registering the same one again REPLACES the earlier listener instead of
+  // stacking a second copy. Every page's mountSkeleton() wires its handlers
+  // on a root element that lives for the whole session (it only rebuilds the
+  // root's contents), so every re-mount — switching application, or going
+  // from "no application" to one — used to add another full set of
+  // listeners: one click on "Add hotel Manually" then added a hotel per
+  // stacked copy (3-5 hotels at once). `onReplaced` is a test hook only.
+  var delegatedListeners = new WeakMap();
+
   function on(el, event, selectorOrHandler, maybeHandler) {
     if (!el) return;
     if (typeof selectorOrHandler === "function") {
@@ -21,12 +31,24 @@
       return;
     }
     // Delegated listener: on(container, 'click', '.btn', handler)
-    el.addEventListener(event, function (e) {
+    var key = event + "\u0000" + selectorOrHandler;
+    var registry = delegatedListeners.get(el);
+    if (!registry) {
+      registry = {};
+      delegatedListeners.set(el, registry);
+    }
+    if (registry[key]) {
+      el.removeEventListener(event, registry[key]);
+      if (global.__khannaOnReplaced) global.__khannaOnReplaced.push(key);
+    }
+    var listener = function (e) {
       var target = e.target.closest(selectorOrHandler);
       if (target && el.contains(target)) {
         maybeHandler.call(target, e, target);
       }
-    });
+    };
+    registry[key] = listener;
+    el.addEventListener(event, listener);
   }
 
   function debounce(fn, wait) {
@@ -61,6 +83,25 @@
     var d = value instanceof Date ? value : new Date(value);
     if (isNaN(d.getTime())) return String(value);
     return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  }
+
+  // Today's date as YYYY-MM-DD in the user's own clock — the value date
+  // inputs use for `min` ("no dates in the past") and what stored ISO dates
+  // are compared against. Not toISOString(): that is UTC and can be a day off.
+  function todayIso() {
+    var d = new Date();
+    var m = String(d.getMonth() + 1).padStart(2, "0");
+    var day = String(d.getDate()).padStart(2, "0");
+    return d.getFullYear() + "-" + m + "-" + day;
+  }
+
+  // "19 Oct 2026, 3:42 pm" — the date plus the time, in the user's own clock.
+  function formatDateTime(value) {
+    if (!value) return "";
+    var d = value instanceof Date ? value : new Date(value);
+    if (isNaN(d.getTime())) return String(value);
+    var time = d.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true }).replace(/\s?(am|pm)/i, function (m) { return " " + m.trim().toLowerCase(); });
+    return formatDate(d) + ", " + time;
   }
 
   /**
@@ -175,6 +216,8 @@
     escapeHtml: escapeHtml,
     generateId: generateId,
     formatDate: formatDate,
+    todayIso: todayIso,
+    formatDateTime: formatDateTime,
     statusBadgeClass: statusBadgeClass,
     storage: storage,
     triggerFileDownload: triggerFileDownload,

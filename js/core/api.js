@@ -311,6 +311,48 @@
   }
 
   /**
+   * The editable Hotel Voucher preview in one call: the real generated PDF
+   * (as a Blob — the same bytes "Download as PDF" hands over) plus where each
+   * editable value sits on its page (see js/preview-editor.js).
+   * @returns {Promise<{blob: Blob, filename: string, layout: Object|null, layoutError: string|null}>}
+   */
+  function previewHotelVoucher(hotels, applicantName) {
+    return request(API_BASE_URL + "/api/documents/hotel-voucher/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hotels: hotels, format: "pdf", applicantName: applicantName || null }),
+    }).then(function (res) {
+      var bin = atob(res.pdfBase64);
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return {
+        blob: new Blob([bytes], { type: "application/pdf" }),
+        filename: res.filename || "Hotel_Voucher.pdf",
+        layout: res.layout || null,
+        layoutError: res.layoutError || null,
+      };
+    });
+  }
+
+  /**
+   * Frontend rework, Phase 4 (Word-like body editor extended to Hotel
+   * Blocking) — seeds every hotel's own compact editable fields (see
+   * hotel_voucher_engine.compose_hotel_editable_fields) in ONE call, using
+   * the SAME real formatting the generator itself would produce, never a
+   * second hand-guessed copy of it (project rule 15).
+   * @param {Array} hotels
+   * @returns {Promise<{fields: Array<Object>}>} one {fieldKey: html} dict
+   *   per hotel, same order as `hotels`.
+   */
+  function composeHotelFields(hotels) {
+    return request(API_BASE_URL + "/api/documents/hotel-voucher/compose-fields", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hotels: hotels }),
+    });
+  }
+
+  /**
    * Generates the Passport Authorization Letter (Phase 8) for 1-2
    * travellers — the backend enforces that limit itself (it matches the
    * two real reference templates on file), this is just the request shape.
@@ -353,6 +395,61 @@
       payload,
       (payload.region || "Cover_Letter") + "_Cover_Letter." + (payload.format || "docx")
     );
+  }
+
+  /**
+   * Phase 4 proof of concept — seeds the Europe Cover Letter's new
+   * "Word-like" body editor (js/cover-letter.js's Quill instance) with
+   * the real composed wording the actual generator would write for the
+   * given payload, never a second, hand-guessed copy of that wording. A
+   * plain JSON endpoint (unlike downloadCoverLetter above, this is not a
+   * file download) — `payload.format`/`payload.editedBodyHtml` are
+   * ignored by the backend here. Currently Europe-only; the backend
+   * rejects any other `payload.region` with a clear 400.
+   * @param {Object} payload same shape as downloadCoverLetter's payload
+   * @returns {Promise<{html: string}>}
+   */
+  function composeCoverLetterBody(payload) {
+    return request(API_BASE_URL + "/api/documents/cover-letter/compose-body", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /**
+   * Frontend rework, Phase 4 (Word-like body editor extended to the
+   * Passport Authorization Letter) — seeds the letter's editable fields
+   * ("date", "recipientCentre", "recipientAddress", "applicantSentence",
+   * "collectorSentence" — deliberately NOT signature/email, which stay
+   * auto-only, see authorization_letter_engine.compose_passport_editable_fields)
+   * with the SAME real wording the generator itself would produce, never a
+   * second hand-guessed copy (project rule 15).
+   * @param {Object} payload { people, recipientCentreName, recipientAddress, collectorName, dateOverride }
+   * @returns {Promise<{fields: Object}>}
+   */
+  function composePassportFields(payload) {
+    return request(API_BASE_URL + "/api/documents/passport-authorization/compose-fields", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /**
+   * Frontend rework, Phase 4 (Word-like body editor extended to the
+   * Company Authorization Letter) — seeds "date", "recipient", and
+   * "applicant_<index>" per applicant (see
+   * authorization_letter_engine.compose_company_editable_fields).
+   * @param {Object} payload { people, recipientText, dateOverride }
+   * @returns {Promise<{fields: Object}>}
+   */
+  function composeCompanyFields(payload) {
+    return request(API_BASE_URL + "/api/documents/company-authorization/compose-fields", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
   }
 
   /**
@@ -419,6 +516,23 @@
   }
 
   /**
+   * Frontend rework, Phase 4 (Word-like body editor extended to the
+   * Invitation Letter) — seeds every one of this letter's editable
+   * fields (see invitation_letter_engine.INVITATION_EDITABLE_FIELD_KEYS)
+   * with the SAME real wording the generator itself would produce.
+   * @param {Object} payload { inviter, invitees, travelStartDate, travelEndDate,
+   *   purpose, accommodationDetails, returnDate, fundingArrangement, dateOverride }
+   * @returns {Promise<{fields: Object}>}
+   */
+  function composeInvitationFields(payload) {
+    return request(API_BASE_URL + "/api/documents/invitation-letter/compose-fields", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /**
    * Generates ONE Initors Covering Letter (Phase 10) — for exactly one of
    * the two married travellers (`payload.subject`), naming the other as
    * `payload.spouse`, since each spouse signs and submits their own
@@ -436,7 +550,7 @@
       "/api/documents/initors-covering-letter",
       payload,
       signatureFile || null,
-      "Initors_Covering_Letter." + (payload.format || "docx")
+      "Inviter_Covering_Letter." + (payload.format || "docx")
     );
   }
 
@@ -512,7 +626,7 @@
    * frontend-side.
    * @param {Object} payload { country, visaType, employmentStatus,
    *   documentIds, bankStatementDuration, itrYears, processingTime,
-   *   visaFees, format, applicantName }
+   *   visaFees, copyType, format, applicantName }
    */
   function downloadRequiredDocumentLetter(payload) {
     return downloadDocumentFile(
@@ -522,24 +636,85 @@
     );
   }
 
+  /**
+   * Frontend rework, Phase 4 extension (Word-like body editor extended to
+   * the Checklist Letter) — seeds every one of this letter's 6 editable
+   * fields (see required_document_letter_engine.
+   * REQUIRED_DOCUMENT_LETTER_EDITABLE_FIELD_KEYS) with the SAME real
+   * wording the generator itself would produce. This document type's own
+   * narrower "editing only" scope means the checkbox-driven document
+   * selection UI is unchanged — only this composed wording becomes
+   * optionally editable.
+   * @param {Object} payload { country, visaType, employmentStatus,
+   *   documentIds, bankStatementDuration, itrYears, processingTime,
+   *   visaFees, copyType }
+   * @returns {Promise<{fields: Object}>}
+   */
+  function composeRequiredDocumentLetterFields(payload) {
+    return request(API_BASE_URL + "/api/documents/required-document-letter/compose-fields", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /**
+   * The editable preview of a single-document letter in one go: the real
+   * PDF (the exact bytes "Download as PDF" hands over) plus where each
+   * editable value sits on its page (`format: "layout"` on the same
+   * endpoint). The two requests run side by side. A layout failure never
+   * breaks the preview — the PDF still shows, Edit is just unavailable and
+   * says why.
+   * @param {Function} download one of the download*() functions above
+   * @param {Object} payload that function's usual payload
+   * @param {File|null} [signatureFile] only for the multipart Invitation Letter
+   * @returns {Promise<{blob, filename, layout, layoutError, hotelIds}>}
+   */
+  function previewWithLayout(download, payload, signatureFile) {
+    var pdf = download(Object.assign({}, payload, { format: "pdf" }), signatureFile || null);
+    var layout = download(Object.assign({}, payload, { format: "layout" }), signatureFile || null)
+      .then(function (res) { return res.blob.text(); })
+      .then(function (text) { return { layout: JSON.parse(text), layoutError: null }; })
+      .catch(function (err) {
+        return { layout: null, layoutError: "Editing is unavailable: " + ((err && err.message) || "could not read the page layout.") };
+      });
+    return Promise.all([pdf, layout]).then(function (results) {
+      return {
+        blob: results[0].blob,
+        filename: results[0].filename,
+        layout: results[1].layout,
+        layoutError: results[1].layoutError,
+        hotelIds: ["doc"],
+      };
+    });
+  }
+
   global.KhannaApi = {
     API_BASE_URL: API_BASE_URL,
+    previewWithLayout: previewWithLayout,
     checkHealth: checkHealth,
     getPageCount: getPageCount,
     processPassport: processPassport,
     processPassportOpenRouter: processPassportOpenRouter,
     previewConvertToPdf: previewConvertToPdf,
     downloadHotelVoucher: downloadHotelVoucher,
+    composeHotelFields: composeHotelFields,
+    previewHotelVoucher: previewHotelVoucher,
     processHotelVoucher: processHotelVoucher,
     downloadPassportAuthorization: downloadPassportAuthorization,
+    composePassportFields: composePassportFields,
     downloadCompanyAuthorization: downloadCompanyAuthorization,
+    composeCompanyFields: composeCompanyFields,
     downloadCoverLetter: downloadCoverLetter,
+    composeCoverLetterBody: composeCoverLetterBody,
     downloadInvitationLetter: downloadInvitationLetter,
+    composeInvitationFields: composeInvitationFields,
     downloadInitorsCoveringLetter: downloadInitorsCoveringLetter,
     exportApplicationsExcel: exportApplicationsExcel,
     getVisaCountries: getVisaCountries,
     getSuggestedDocuments: getSuggestedDocuments,
     lookupVisaRequirement: lookupVisaRequirement,
     downloadRequiredDocumentLetter: downloadRequiredDocumentLetter,
+    composeRequiredDocumentLetterFields: composeRequiredDocumentLetterFields,
   };
 })(window);

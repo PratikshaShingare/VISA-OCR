@@ -1,24 +1,31 @@
 /* ==========================================================================
    Khanna Travels & Holidays — "Use Existing Application" picker
-   Phase 3 of the document-first redesign. A single reusable modal that
+   Phase 3 of the document-first redesign. A single reusable component that
    lists every Application record and filters it live as the user types,
    matching against applicant name, application ID, passport number, email
    and destination — the exact five fields the redesign spec calls for.
+
+   Frontend rework (section 17): converted from a centered full-screen
+   modal to a small anchored popover directly under the "Use Existing
+   Application" button that opens it — "a compact dropdown/popover...
+   do NOT create a huge full-page selector". The search/filter/select logic
+   below is unchanged from the original modal version (project rule 15 — no
+   reason to rewrite working logic just to change how it's positioned).
 
    This is deliberately ONE shared component (project rule 15: no
    duplicated logic) rather than a bespoke search box per page. Any part of
    the app that needs to let someone resume an existing application calls:
 
-       global.KhannaApplicationPicker.open(function (app) {
+       global.KhannaApplicationPicker.open(anchorEl, function (app) {
          // do whatever "an application was chosen" means on this page
        });
 
-   The picker itself never decides what happens next — it only finds an
-   Application record and hands it back. Phase 2's document-workspace.js is
-   the first caller (it sets the chosen application active and re-renders
-   the current document controller in place); other callers are free to
-   navigate elsewhere instead, exactly like the existing "Open Full
-   Application" button in applications.js does today.
+   `anchorEl` is the button the popover opens beneath (also where focus
+   returns on close). The picker itself never decides what happens next —
+   it only finds an Application record and hands it back.
+   Document-workspace.js is the current caller (it sets the chosen
+   application active and re-renders the current document controller in
+   place).
 
    Reuses global.KhannaState (getApplications/getApplication) and
    global.KhannaApplicationsList.applicantLabel — no new "what's this
@@ -30,11 +37,12 @@
 
   var utils = global.KhannaUtils;
 
-  var overlayEl = null;
+  var popoverEl = null;
   var listEl = null;
   var searchInput = null;
   var currentOnSelect = null;
   var lastFocused = null;
+  var anchorEl = null;
 
   function applicantLabel(app) {
     return global.KhannaApplicationsList ? global.KhannaApplicationsList.applicantLabel(app) : "Untitled applicant";
@@ -75,7 +83,6 @@
       utils.escapeHtml(app.id) + '">' +
       '<span class="app-picker__result-main">' +
       "<strong>" + utils.escapeHtml(applicantLabel(app)) + "</strong>" +
-      '<span class="badge ' + utils.statusBadgeClass(app.status) + '">' + utils.escapeHtml(app.status) + "</span>" +
       "</span>" +
       '<span class="app-picker__result-meta">' + resultMetaHtml(app) + "</span>" +
       "</button>"
@@ -93,7 +100,7 @@
     var all = allApplications();
 
     if (all.length === 0) {
-      listEl.innerHTML = '<p class="app-picker__empty">No applications yet — create one instead.</p>';
+      listEl.innerHTML = '<p class="app-picker__empty">No applications yet.</p>';
       return;
     }
 
@@ -111,27 +118,57 @@
     listEl.innerHTML = matches.map(resultRowHtml).join("");
   }
 
+  function outsideClick(e) {
+    if (!popoverEl) return;
+    if (popoverEl.contains(e.target)) return;
+    if (anchorEl && anchorEl.contains(e.target)) return;
+    close();
+  }
+
   function close() {
-    if (!overlayEl) return;
-    overlayEl.setAttribute("hidden", "");
+    if (!popoverEl) return;
+    popoverEl.setAttribute("hidden", "");
+    if (anchorEl) anchorEl.setAttribute("aria-expanded", "false");
     currentOnSelect = null;
+    document.removeEventListener("click", outsideClick, true);
     var toFocus = lastFocused;
     lastFocused = null;
+    anchorEl = null;
     if (toFocus && typeof toFocus.focus === "function") toFocus.focus();
   }
 
   function isOpen() {
-    return !!overlayEl && !overlayEl.hasAttribute("hidden");
+    return !!popoverEl && !popoverEl.hasAttribute("hidden");
   }
 
-  function ensureModal() {
-    if (overlayEl) return;
+  // Positions the popover directly under its anchor button, flipping to
+  // align with the anchor's right edge instead of its left when there
+  // isn't room to the right (narrow viewports / a button near the edge of
+  // the screen) — kept as plain fixed-position math (not CSS anchoring,
+  // for wider browser support) since this only needs to run once per open.
+  function positionPopover() {
+    if (!popoverEl || !anchorEl) return;
+    var rect = anchorEl.getBoundingClientRect();
+    var popRect = popoverEl.getBoundingClientRect();
+    var margin = 8;
+    var left = rect.left;
+    if (left + popRect.width > window.innerWidth - margin) {
+      left = rect.right - popRect.width;
+    }
+    left = Math.max(margin, left);
+    var top = rect.bottom + 6;
+    popoverEl.style.left = left + "px";
+    popoverEl.style.top = top + "px";
+  }
+
+  function ensurePopover() {
+    if (popoverEl) return;
 
     var wrap = document.createElement("div");
-    wrap.className = "app-picker-overlay";
+    wrap.className = "app-picker-popover";
     wrap.setAttribute("hidden", "");
     wrap.innerHTML =
-      '<div class="app-picker" role="dialog" aria-modal="true" aria-labelledby="appPickerTitle">' +
+      '<div class="app-picker" role="dialog" aria-modal="false" aria-labelledby="appPickerTitle">' +
       '<div class="app-picker__header">' +
       '<h3 id="appPickerTitle">Use an existing application</h3>' +
       '<button type="button" class="btn-icon" data-action="close-app-picker" aria-label="Close">' +
@@ -146,19 +183,13 @@
       "</div>";
 
     document.body.appendChild(wrap);
-    overlayEl = wrap;
+    popoverEl = wrap;
     listEl = wrap.querySelector("[data-app-picker-results]");
     searchInput = wrap.querySelector("#appPickerSearch");
 
     searchInput.addEventListener("input", renderResults);
 
     utils.on(wrap, "click", "[data-action='close-app-picker']", close);
-
-    // Backdrop click closes — only when the click landed on the overlay
-    // itself, not something inside the card.
-    wrap.addEventListener("click", function (e) {
-      if (e.target === wrap) close();
-    });
 
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && isOpen()) close();
@@ -178,16 +209,41 @@
     global.KhannaState.subscribe(function () {
       if (isOpen()) renderResults();
     });
+
+    // Reposition on viewport resize while open (e.g. rotating a device, or
+    // resizing a desktop window) rather than leaving it pinned to a stale
+    // coordinate.
+    window.addEventListener("resize", function () {
+      if (isOpen()) positionPopover();
+    });
   }
 
-  function open(onSelect) {
-    ensureModal();
+  /**
+   * @param {HTMLElement} anchor - the button this popover opens beneath.
+   * @param {function} onSelect - called with the chosen Application record.
+   */
+  function open(anchor, onSelect) {
+    ensurePopover();
+    if (isOpen() && anchorEl === anchor) {
+      close();
+      return;
+    }
+    anchorEl = anchor;
     currentOnSelect = typeof onSelect === "function" ? onSelect : null;
     lastFocused = document.activeElement;
-    overlayEl.removeAttribute("hidden");
+    popoverEl.removeAttribute("hidden");
+    if (anchorEl) anchorEl.setAttribute("aria-expanded", "true");
     searchInput.value = "";
     renderResults();
+    positionPopover();
     searchInput.focus();
+    // Registered after this click's own event has finished bubbling —
+    // otherwise the very click that opens the popover would immediately
+    // close it again (it's a document-level listener with no wrap-relative
+    // check like the old backdrop click had).
+    setTimeout(function () {
+      document.addEventListener("click", outsideClick, true);
+    }, 0);
   }
 
   global.KhannaApplicationPicker = {

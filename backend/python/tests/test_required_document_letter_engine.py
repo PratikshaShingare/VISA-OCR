@@ -172,6 +172,77 @@ def test_generate_required_document_letter_pdf_produces_a_real_pdf():
 
 
 # ---------------------------------------------------------------------------
+# Hard copy / digital copy toggle — one choice for the WHOLE listed
+# checklist (user's own explicit instruction), not a per-document marker.
+# ---------------------------------------------------------------------------
+
+
+def test_copy_type_defaults_to_digital():
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    text = _full_text(rdl.generate_required_document_letter_docx(country="Nepal", visa_type="Tourist"))
+    assert "Documents Required (Digital Copies):" in text
+    assert "Hard Copies" not in text
+
+
+def test_copy_type_hard_swaps_only_the_heading_word():
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    text = _full_text(rdl.generate_required_document_letter_docx(
+        country="Nepal", visa_type="Tourist", document_ids=["passport_copy"], copy_type="Hard",
+    ))
+    assert "Documents Required (Hard Copies):" in text
+    assert "Digital Copies" not in text
+    # Nothing else about the heading or the rest of the letter should change.
+    assert "- Passport Copy (First and Last Page)" in text
+
+
+def test_copy_type_heading_stays_bold_when_swapped_to_hard():
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    docx_bytes = rdl.generate_required_document_letter_docx(country="Nepal", visa_type="Tourist", copy_type="Hard")
+    doc = Document(io.BytesIO(docx_bytes))
+    heading_para = next(p for p in doc.paragraphs if p.text.startswith("Documents Required"))
+    assert heading_para.runs[0].bold is True
+
+
+def test_rejects_unsupported_copy_type():
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    with pytest.raises(ValueError):
+        rdl.generate_required_document_letter_docx(country="Nepal", visa_type="Tourist", copy_type="Laminated")
+
+
+def test_signoff_block_matches_the_users_updated_reference():
+    """Sign-off wording/order was updated twice in direct response to
+    explicit user instruction, then corrected to match a real updated
+    reference .docx the user attached: Warm Regards, / Team Khanna
+    Holidays / +91 8657461001 / customercare@khannatravels.com — never
+    'Ms. Dhvani', and never the phone/email in front of the company name."""
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    text = _full_text(rdl.generate_required_document_letter_docx(country="Nepal", visa_type="Tourist"))
+    assert "Ms. Dhvani" not in text
+    assert "Warm Regards," in text
+    team_idx = text.index("Team Khanna Holidays")
+    phone_idx = text.index("+91 8657461001")
+    email_idx = text.index("customercare@khannatravels.com")
+    assert team_idx < phone_idx < email_idx
+
+
+def test_visa_fees_inclusion_line_matches_the_users_updated_reference():
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    text = _full_text(rdl.generate_required_document_letter_docx(country="Nepal", visa_type="Tourist"))
+    assert "(Inclusive of Visa Fees & Service Charges)" in text
+    assert "Biometrics" not in text
+
+
+def test_compose_required_document_letter_editable_fields_unaffected_by_copy_type():
+    """copy_type is a structural heading toggle, not one of the free-text
+    editable fields — composing fields with copy_type='Hard' must not add,
+    remove, or change any editable field's own key/wording."""
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    digital_fields = rdl.compose_required_document_letter_editable_fields(**COMMON_KWARGS, copy_type="Digital")
+    hard_fields = rdl.compose_required_document_letter_editable_fields(**COMMON_KWARGS, copy_type="Hard")
+    assert digital_fields == hard_fields
+
+
+# ---------------------------------------------------------------------------
 # visa_requirements_data.py's own rule engine (DOCUMENT_CATALOG /
 # resolve_suggested_document_ids / resolve_document_label) — the
 # "structured, data-driven configuration... not hundreds of if/else" the
@@ -227,3 +298,130 @@ def test_resolve_document_label_substitutes_dynamic_values():
 def test_resolve_document_label_rejects_unknown_id():
     with pytest.raises(KeyError):
         vrd.resolve_document_label("not_a_real_id")
+
+
+# ---------------------------------------------------------------------------
+# Frontend rework, Phase 4 extension: Word-like body editor editable fields.
+#
+# Checklist Letter's own narrower scope ("editing only, with all existing
+# design/functionality preserved") means the checkbox-driven document
+# selection mechanism is untouched — only the 6 generated-wording fields
+# (greetingSentence, countryLine, visaTypeLine, checklistItems,
+# processingTime, visaFees) become optionally editable, exactly mirroring
+# the Authorization Letters' / Invitation Letter's own edited_fields
+# contract: a key absent or None = auto-generate normally, a real HTML
+# string = apply the edit.
+# ---------------------------------------------------------------------------
+
+COMMON_KWARGS = dict(
+    country="Germany",
+    visa_type="Tourist",
+    employment_status="Employed",
+    document_ids=["passport_copy", "bank_statement"],
+    bank_statement_duration="6 Months",
+    itr_years="2 Years",
+    processing_time="15",
+    visa_fees="5,000",
+)
+
+
+def test_compose_required_document_letter_editable_fields_matches_the_real_generated_text():
+    """Every composed field must be the exact text the real (non-edited)
+    generator would have produced — project rule 15's zero-drift-risk
+    guarantee, verified the same way every other document type's own
+    compose_*_editable_fields tests are."""
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    fields = rdl.compose_required_document_letter_editable_fields(**COMMON_KWARGS)
+    assert set(fields.keys()) == set(rdl.REQUIRED_DOCUMENT_LETTER_EDITABLE_FIELD_KEYS)
+
+    docx_bytes = rdl.generate_required_document_letter_docx(**COMMON_KWARGS)
+    text = _full_text(docx_bytes)
+    assert "Germany" in fields["countryLine"] and "Germany" in text
+    assert "Tourist Visa" in fields["visaTypeLine"] and "Tourist Visa" in text
+    assert "Passport Copy" in fields["checklistItems"]
+    assert "Bank Statement of Last 6 Months" in fields["checklistItems"]
+    assert "15" in fields["processingTime"]
+    assert "5,000" in fields["visaFees"]
+
+
+def test_compose_required_document_letter_editable_fields_with_no_documents_selected():
+    """No documents ticked yet must still seed a mountable (empty) checklist
+    editor rather than raising or omitting the key."""
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    kwargs = dict(COMMON_KWARGS, document_ids=[])
+    fields = rdl.compose_required_document_letter_editable_fields(**kwargs)
+    assert fields["checklistItems"] == "<p></p>"
+
+
+def test_required_document_letter_edited_field_replaces_only_that_paragraph():
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    edited = {"greetingSentence": "<p>Edited greeting via the Word-like editor.</p>"}
+    docx_bytes = rdl.generate_required_document_letter_docx(**COMMON_KWARGS, edited_fields=edited)
+    text = _full_text(docx_bytes)
+    assert "Edited greeting via the Word-like editor." in text
+    assert "Thank you for your inquiry" not in text
+    # Every OTHER field must still auto-generate normally.
+    assert "Country: Germany" in text
+    assert "Passport Copy" in text
+
+
+def test_required_document_letter_edited_checklist_replaces_the_whole_bullet_range():
+    """checklistItems covers the WHOLE variable-length bullet range as one
+    field — editing it must replace every auto-generated bullet, not just
+    the first, and must not disturb the fixed fields around it."""
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    edited = {"checklistItems": "<p>Custom item one</p><p>Custom item two</p><p>Custom item three</p>"}
+    docx_bytes = rdl.generate_required_document_letter_docx(**COMMON_KWARGS, edited_fields=edited)
+    text = _full_text(docx_bytes)
+    assert "Custom item one" in text
+    assert "Custom item two" in text
+    assert "Custom item three" in text
+    assert "Passport Copy" not in text
+    # Fields before and after the (now different-length) checklist range
+    # must still land correctly — the stable-paragraph-reference regression
+    # every other document type's own tests guard against.
+    assert "Country: Germany" in text
+    assert "Processing Time: 15" in text
+    assert "Visa Fees" in text and "5,000" in text
+
+
+def test_required_document_letter_edited_checklist_with_no_documents_selected():
+    """A person can type checklist wording in even before ticking any
+    document checkboxes — editing must work even when the auto-generated
+    checklist would otherwise be empty (the template's own bullet paragraph
+    would normally be deleted outright in that case)."""
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    kwargs = dict(COMMON_KWARGS, document_ids=[])
+    edited = {"checklistItems": "<p>A manually typed checklist line.</p>"}
+    docx_bytes = rdl.generate_required_document_letter_docx(**kwargs, edited_fields=edited)
+    text = _full_text(docx_bytes)
+    assert "A manually typed checklist line." in text
+
+
+def test_required_document_letter_edited_fields_before_and_after_the_checklist():
+    """Fields both BEFORE (countryLine) and AFTER (processingTime,
+    visaFees) the variable-length checklist range must all still land
+    correctly even when the checklist edit changes the document's total
+    paragraph count."""
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    edited = {
+        "countryLine": "<p>Country: Edited Country</p>",
+        "checklistItems": "<p>Only one custom item now</p>",
+        "visaFees": "<p>Visa Fees: INR 9999 (edited)</p>",
+    }
+    docx_bytes = rdl.generate_required_document_letter_docx(**COMMON_KWARGS, edited_fields=edited)
+    text = _full_text(docx_bytes)
+    assert "Country: Edited Country" in text
+    assert "Only one custom item now" in text
+    assert "Visa Fees: INR 9999 (edited)" in text
+    # Untouched fixed lines must remain.
+    assert "Documents Required (Digital Copies):" in text
+    assert "Warm Regards," in text
+
+
+def test_required_document_letter_edited_field_survives_into_the_pdf():
+    skip_if_missing(rdl.TEMPLATE_PATH)
+    skip_if_missing_binary("soffice")
+    edited = {"processingTime": "<p>Processing Time: 3-4 Weeks (Subject to Consulate Approval)</p>"}
+    pdf_bytes = rdl.generate_required_document_letter_pdf(**COMMON_KWARGS, edited_fields=edited)
+    assert pdf_bytes[:5] == b"%PDF-"

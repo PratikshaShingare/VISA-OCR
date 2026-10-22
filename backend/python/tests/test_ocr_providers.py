@@ -43,6 +43,7 @@ def test_auto_selects_google_once_an_api_key_is_present(monkeypatch):
 
     provider = ocr_providers.get_ocr_provider()
     assert provider.name == "google"
+    assert isinstance(provider, ocr_providers.FallbackOCRProvider)
 
 
 def test_explicit_google_choice_without_a_key_raises_a_clear_error(monkeypatch):
@@ -135,3 +136,96 @@ def test_ocr_mean_confidence_and_text_uses_the_reconstructed_words(monkeypatch):
     mean_conf, text = provider.ocr_mean_confidence_and_text(None)
     assert text == "HI"
     assert mean_conf == 80.0
+
+
+class _FakeResponse:
+    def __init__(self, status, body):
+        self.status_code = status
+        self._body = body
+        self.text = str(body)
+
+    def json(self):
+        return self._body
+
+
+_INVALID_KEY_BODY = {
+    "error": {"code": 400, "message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT",
+              "details": [{"reason": "API_KEY_INVALID"}]}
+}
+
+
+def test_invalid_google_key_raises_an_auth_error_with_a_short_message(monkeypatch):
+    import numpy as np
+
+    monkeypatch.setattr(ocr_providers.requests, "post", lambda *a, **k: _FakeResponse(400, _INVALID_KEY_BODY))
+    provider = ocr_providers.GoogleVisionOCRProvider("bad-key")
+    with pytest.raises(ocr_providers.OCRProviderAuthError) as exc:
+        provider.ocr_text(np.zeros((10, 10), dtype="uint8"))
+    assert "API key not valid" in str(exc.value)
+    assert "details" not in str(exc.value)
+
+
+def test_other_google_400_errors_are_not_treated_as_a_bad_key(monkeypatch):
+    import numpy as np
+
+    body = {"error": {"code": 400, "message": "Bad image data.", "status": "INVALID_ARGUMENT"}}
+    monkeypatch.setattr(ocr_providers.requests, "post", lambda *a, **k: _FakeResponse(400, body))
+    provider = ocr_providers.GoogleVisionOCRProvider("good-key")
+    with pytest.raises(ocr_providers.OCRProviderError) as exc:
+        provider.ocr_text(np.zeros((10, 10), dtype="uint8"))
+    assert not isinstance(exc.value, ocr_providers.OCRProviderAuthError)
+
+
+class _StubProvider(ocr_providers.OCRProvider):
+    def __init__(self, name, text="", error=None):
+        self.name = name
+        self._text = text
+        self._error = error
+        self.calls = 0
+
+    def ocr_text(self, gray_image, config=""):
+        self.calls += 1
+        if self._error:
+            raise self._error
+        return self._text
+
+    def ocr_mean_confidence_and_text(self, gray_image, config=""):
+        return 77.0, self.ocr_text(gray_image, config)
+
+    def status(self):
+        return {"available": True, "provider": self.name}
+
+
+def test_fallback_switches_to_tesseract_after_an_auth_failure_and_stays_there():
+    primary = _StubProvider("google", error=ocr_providers.OCRProviderAuthError("API key not valid"))
+    secondary = _StubProvider("tesseract", text="local text")
+    fb = ocr_providers.FallbackOCRProvider(primary, lambda: secondary)
+
+    assert fb.name == "google"
+    assert fb.ocr_text(None) == "local text"
+    assert fb.name == "tesseract"
+    assert fb.ocr_text(None) == "local text"
+    assert primary.calls == 1  # Google is not retried on every call
+    st = fb.status()
+    assert st["provider"] == "tesseract"
+    assert "API key not valid" in st["warning"]
+
+
+def test_fallback_does_not_hide_transient_google_errors():
+    primary = _StubProvider("google", error=ocr_providers.OCRProviderError("Could not reach Google Cloud Vision"))
+    fb = ocr_providers.FallbackOCRProvider(primary, lambda: _StubProvider("tesseract", text="x"))
+    with pytest.raises(ocr_providers.OCRProviderError):
+        fb.ocr_text(None)
+    assert fb.fallback_reason is None
+
+
+def test_fallback_reports_clearly_when_tesseract_is_missing_too():
+    primary = _StubProvider("google", error=ocr_providers.OCRProviderAuthError("API key not valid"))
+
+    def boom():
+        raise RuntimeError("tesseract is not installed")
+
+    fb = ocr_providers.FallbackOCRProvider(primary, boom)
+    with pytest.raises(ocr_providers.OCRProviderError) as exc:
+        fb.ocr_text(None)
+    assert "GOOGLE_VISION_API_KEY" in str(exc.value) and "Tesseract" in str(exc.value)

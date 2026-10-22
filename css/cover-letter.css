@@ -78,3 +78,234 @@
   right: auto;
   min-width: 200px;
 }
+
+/* "Use Existing Details": two small boxes side by side — the kind of detail
+   on the left, a short scrollable list of saved passports / hotel blockings
+   on the right (stacked on narrow screens). */
+.cover-existing-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: 46;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.cover-existing-panel.is-open {
+  display: flex;
+}
+
+.cover-existing-menu,
+.cover-existing-list {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-1);
+}
+
+.cover-existing-menu {
+  min-width: 170px;
+}
+
+.cover-existing-menu__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font: inherit;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.cover-existing-menu__item:hover,
+.cover-existing-menu__item.is-active {
+  background: var(--color-surface-alt);
+}
+
+.cover-existing-list {
+  width: min(320px, 70vw);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.cover-existing-list__title {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+
+.cover-existing-list__empty {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+}
+
+.cover-existing-item {
+  display: block;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font: inherit;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.cover-existing-item:hover,
+.cover-existing-item:focus-visible {
+  background: var(--color-surface-alt);
+}
+
+.cover-existing-item__name {
+  display: block;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cover-existing-item__meta {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cover-existing-status {
+  margin: 0 0 var(--space-4);
+  font-size: 0.85rem;
+  color: var(--color-success);
+}
+
+.cover-existing-status.is-warning {
+  color: var(--color-warning);
+}
+
+@media (max-width: 575px) {
+  /* On phones the two boxes open inline (pushing the form down) instead of
+     floating, so they can never run off the edge of the screen. */
+  .cover-use-existing {
+    display: block;
+  }
+  .cover-existing-panel.is-open {
+    position: static;
+    flex-direction: column;
+    width: 100%;
+    margin-top: var(--space-2);
+  }
+  .cover-existing-menu,
+  .cover-existing-list {
+    width: 100%;
+  }
+}
+
+/* ---------------- Searchable country selector (frontend rework, sections
+   6-9) — replaces the old 3-button .cover-region-select above as what
+   staff actually see. A plain text input + a positioned results list,
+   the same "absolute dropdown under a relative wrapper" shape as
+   .profile-menu__dropdown just above, not a second unrelated pattern. */
+.cover-country-select {
+  margin-bottom: var(--space-5);
+}
+
+.country-combo {
+  position: relative;
+  max-width: 420px;
+}
+
+.country-combo input {
+  width: 100%;
+}
+
+.country-combo__list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + var(--space-2));
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-2);
+  z-index: 45;
+}
+
+.country-combo__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-size: 0.86rem;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.country-combo__option:hover,
+.country-combo__option.is-active {
+  background: var(--color-surface-alt);
+}
+
+.country-combo__empty {
+  padding: var(--space-2) var(--space-3);
+  margin: 0;
+}
+
+/* ---------------- "Previous Cover Letter Applications" (section 5) ---------------- */
+.cover-previous-app-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cover-previous-app-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+
+.cover-previous-app-row:hover {
+  border-color: var(--color-primary);
+}
+
+.cover-previous-app-row__name {
+  font-weight: 600;
+}
+
+.cover-previous-app-row__meta {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+/* The in-preview editor's styling lives in css/preview-editor.css. */

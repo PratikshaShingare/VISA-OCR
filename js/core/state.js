@@ -131,6 +131,12 @@
       phone: "",
       address: "",
       city: "",
+      // Frontend rework, section 10: the Cover Letter's Europe fields need
+      // a real "Next Country" value sourced from Hotel Blocking — city/
+      // address text alone don't reliably say which country a hotel is
+      // in, so this is a genuine new data point (not previously captured
+      // anywhere), not a rename/duplication of an existing field.
+      country: "",
       confirmationNumber: "",
       leadGuestName: "",
       // Split from a single "noOfGuests" field on explicit request, so the
@@ -145,6 +151,20 @@
       checkOut: "",
       guestNames: [], // extra guest-name lines for the voucher's guest table; empty = use leadGuestName only
       voucherGeneratedAt: null,
+      // Set to "voucher" when this hotel was created by uploading a hotel
+      // voucher (its fields are then OCR-extracted and must be verified —
+      // project rule 10); voucherFileName is that upload's file name (the
+      // file itself is only kept in memory for the open session).
+      source: "",
+      voucherFileName: "",
+      // Editable preview: a staff member's own reworded text for one or
+      // more of this hotel's generated fields, keyed by field name (see
+      // hotel_voucher_engine.compose_hotel_editable_fields) — real HTML
+      // from the Edit mode of the Hotel Blocking preview
+      // (js/preview-editor.js), or
+      // null for a field explicitly reset back to auto-generated. null
+      // (the whole map, here) means "no edits at all yet".
+      editedFields: null,
     };
   }
 
@@ -165,6 +185,18 @@
       updatedAt: ts,
       applicant: emptyPerson(),
       travellers: [], // each item: emptyPerson() + { id, relation }
+      // Frontend rework, Phase E: named, reusable groups of applicants for
+      // this one application/trip — "the same group of travellers selected
+      // repeatedly across Cover Letter, Hotel Blocking and Company
+      // Authorization Letter" (the user's own words). Each group is
+      // { id, name, members: [{fullName, passportNumber}], createdAt } —
+      // only the two fields any of these letters actually need to name an
+      // applicant, matching js/applicant-groups.js. Wired into the Company
+      // Authorization Letter tab first (js/authorization.js); the store
+      // lives here, at the application level, so Cover Letter/Hotel
+      // Blocking can reuse the exact same groups later without a second,
+      // duplicated store (project rule 15).
+      applicantGroups: [],
       travel: {
         destination: "",
         visaCategory: "",
@@ -184,16 +216,58 @@
         // of companions (its passenger table is a genuinely repeatable
         // row). See cover_letter_engine.py's module docstring for the full
         // reasoning.
-        region: "", // "" | "Europe" | "Japan" | "Singapore"
+        region: "", // "" | "Europe" | "Japan" | "Singapore" — derived from `country` below
+        // Frontend rework, section 6-9: the specific destination country
+        // picked from the searchable country selector (e.g. "France"),
+        // separate from `region` above. `region` is still what
+        // cover_letter_engine.py dispatches on and what the person-count
+        // rules key off (unchanged) — `country` is the finer-grained value
+        // the country/consulate config layer (js/data/cover-letter-
+        // countries.js) is keyed by, and what auto-populates
+        // recipientText/destinationCountry on selection.
+        country: "",
         selectedPersonIds: [],
+        // Passports added from OTHER applications through "Use Existing
+        // Details -> Passport" (copies; the source application is never
+        // changed). See cover-letter.js peoplePool().
+        importedPeople: [],
+        // The consulate is two lines — "The Consulate General of <country>"
+        // (filled automatically when the destination country is chosen) and
+        // its address (defaults to Mumbai, India); recipientText is the
+        // two joined, which is what the letter itself reads.
+        consulateName: "",
+        consulateAddress: "Mumbai, India",
         recipientText: "",
         destinationCountry: "",
         travelStartDate: "",
         travelEndDate: "",
+        // Who pays: fundingType is "self" (shown as "Self", or "Individual"
+        // when several applicants travel), "inviter", "company" or "other";
+        // the payer's name and relation are only used for the last three.
+        // fundingArrangement stays the single sentence-ready value the
+        // letter templates and the backend read — it is composed from these
+        // three by cover-letter.js, so nothing downstream changed.
+        fundingType: "",
+        fundingPayerName: "",
+        fundingRelation: "",
         fundingArrangement: "",
         generatedAt: null,
+        // Europe only: {body: html|null} — the staff member's hand edit of
+        // the letter's three body paragraphs, made on the preview itself.
+        editedFields: null,
         europe: {
-          cityCountryOfResidence: "",
+          // Frontend rework, Phase E: split into two separate manual/
+          // auto-filled fields (matching the user's own field list — "City
+          // manual (from passport address), Country manual (from passport
+          // address)") rather than one combined text box. The reference
+          // template itself only has a single "[City, Country]" slot in its
+          // fixed wording, so the two are still joined into one combined
+          // string ("City, Country") purely at the point the payload is
+          // built for the backend — see cover-letter.js's buildPayload() —
+          // never sent to the backend as two separate values, and the
+          // backend/API contract (`cityCountryOfResidence`) is unchanged.
+          cityOfResidence: "",
+          countryOfResidence: "",
           numberOfNights: "",
           applicantEmploymentStatus: "",
           applicantJobTitle: "",
@@ -227,11 +301,39 @@
           recipientAddress: "",
           collectorName: "",
           generatedAt: null,
+          // Frontend rework, Phase 4 (Word-like body editor): same
+          // {fieldKey: html|null} contract as a hotel's own editedFields
+          // (see emptyHotel() below) — null (the whole map) means "no
+          // edits at all yet"; a real key set to null means "explicitly
+          // reset back to auto-generated".
+          editedFields: null,
         },
         company: {
           selectedPersonIds: [],
+          // The consulate is chosen by COUNTRY (js/consulate.js): the
+          // letter reads "The Consulate General of <country>" with the
+          // address on the next line. recipientText is the composed result
+          // (kept as the one value the letter/preview/readiness all read).
+          consulateCountry: "",
+          consulateAddress: "Mumbai, India",
           recipientText: "",
           generatedAt: null,
+          // Same contract as passport.editedFields above, except its
+          // "applicant_<index>" keys are POSITIONAL — see
+          // authorization.js's onAuthPersonChange for why those are
+          // cleared (not preserved) whenever the selection changes.
+          editedFields: null,
+          // Frontend rework, Phase E: applicants added directly by name +
+          // passport number alone — this letter's own compose function
+          // (backend/python/authorization_letter_engine.py's
+          // compose_company_editable_fields) never needs more than that,
+          // so "creating a group of applicants" doesn't require first
+          // onboarding each person as a full traveller with OCR'd passport
+          // data. Each entry: { id, fullName, passportNumber }. Selecting
+          // one of these still goes through the same `selectedPersonIds`
+          // list as a real traveller — see authorization.js's
+          // getCompanyPeople().
+          manualApplicants: [],
         },
       },
       invitation: {
@@ -248,7 +350,7 @@
           addressLine2: "",
           cityPostcode: "",
           country: "",
-          cityCountry: "",
+          cityCountry: "Mumbai, India", // consulate's city — the default; editable
           passportNumber: "",
           fullAddress: "",
           studyingOrWorking: "",
@@ -265,6 +367,11 @@
         signatureFileRef: null, // key into KhannaDocumentFileStore (in-memory only)
         signatureFileName: null,
         generatedAt: null,
+        // Frontend rework, Phase 4 (Word-like body editor): same
+        // {fieldKey: html|null} contract as every other document type's
+        // own editedFields (see emptyHotel() below) — keyed by
+        // invitation_letter_engine.INVITATION_EDITABLE_FIELD_KEYS.
+        editedFields: null,
       },
       initorsLetters: {
         // Phase 10 shape. `selectedPersonIds` holds exactly 2 of this
@@ -581,6 +688,7 @@
     if (!Array.isArray(applications)) applications = [];
     activeApplicationId = storage.get(ACTIVE_KEY, null);
     migrateApplicantAndTravellerProfiles();
+    pruneBlankApplications(activeApplicationId);
   }
 
   function getApplications() {
@@ -595,6 +703,42 @@
     return applications.find(function (a) {
       return a.id === id;
     }) || null;
+  }
+
+  // An application nobody has put anything into (only ids, dates, status and
+  // the like differ from a brand-new one). Such drafts are created every time
+  // someone opens a page; they are never worth listing or keeping.
+  var BLANK_IGNORED_KEYS = ["id", "status", "createdBy", "createdAt", "updatedAt", "notes", "activity", "lastDocView", "explicitlySavedAt"];
+
+  function withoutIdsJson(value) {
+    return JSON.stringify(value, function (key, v) {
+      return key === "id" ? undefined : v;
+    });
+  }
+
+  function isBlankApplication(app) {
+    if (!app) return false;
+    var pristine = createEmptyApplication("");
+    return Object.keys(pristine)
+      .concat(Object.keys(app))
+      .every(function (key) {
+        if (BLANK_IGNORED_KEYS.indexOf(key) !== -1) return true;
+        return withoutIdsJson(app[key]) === withoutIdsJson(pristine[key]);
+      });
+  }
+
+  /** Removes blank drafts other than `exceptId`. Returns how many were removed. */
+  function pruneBlankApplications(exceptId) {
+    var before = applications.length;
+    applications = applications.filter(function (a) {
+      return a.id === exceptId || !isBlankApplication(a);
+    });
+    var removed = before - applications.length;
+    if (removed) {
+      if (activeApplicationId && !getApplication(activeApplicationId)) activeApplicationId = null;
+      persist();
+    }
+    return removed;
   }
 
   function createApplication(createdBy) {
@@ -623,6 +767,33 @@
     persist();
     notify();
     return merged;
+  }
+
+  // Frontend rework, sections 16-18: an explicit "Save" action, separate
+  // from the real-time autosave every field edit already does via
+  // updateApplication()/persist(). This doesn't change what's persisted —
+  // every field is already in localStorage the moment it's typed — it only
+  // records THAT the user deliberately confirmed this application, so
+  // "Start a different application" can tell "never explicitly saved" work
+  // apart from "already saved" work and only prompt for the former.
+  // Deliberately does not add an activity-log entry (unlike
+  // updateApplication's optional activityMessage) — logging one for every
+  // Save click would spam an application's own activity feed with an
+  // internal bookkeeping event no one asked to see.
+  function markApplicationSaved(id) {
+    return updateApplication(id, { explicitlySavedAt: nowIso() });
+  }
+
+  // Same "is this worth warning about" question as personHasData() above,
+  // but for a whole Application record — used by the "Start a different
+  // application" confirm modal to skip the prompt entirely for a
+  // completely blank draft (nothing would actually be lost).
+  function applicationHasMeaningfulData(app) {
+    if (!app) return false;
+    if (personHasData(app.applicant)) return true;
+    if ((app.travellers || []).some(personHasData)) return true;
+    if ((app.hotels || []).length > 0) return true;
+    return false;
   }
 
   function deleteApplication(id) {
@@ -853,7 +1024,11 @@
     getApplications: getApplications,
     getApplication: getApplication,
     createApplication: createApplication,
+    isBlankApplication: isBlankApplication,
+    pruneBlankApplications: pruneBlankApplications,
     updateApplication: updateApplication,
+    markApplicationSaved: markApplicationSaved,
+    applicationHasMeaningfulData: applicationHasMeaningfulData,
     deleteApplication: deleteApplication,
     addTraveller: addTraveller,
     updateTraveller: updateTraveller,
@@ -873,6 +1048,9 @@
     // exposed for other modules that need to build a fresh person record
     // (e.g. adding a traveller) without duplicating this shape elsewhere.
     createEmptyPerson: emptyPerson,
+    // a pristine Application record — js/applications.js compares real ones
+    // against it to tell "only hotel blocking was ever filled in" apart.
+    createEmptyApplication: createEmptyApplication,
     // exposed for cover-letter.js's Japan hotel-table editor (Phase 9).
     createEmptyCoverLetterHotel: emptyCoverLetterHotel,
 

@@ -42,7 +42,35 @@ BACKEND_PORT = os.environ.get("KHANNA_E2E_BACKEND_PORT", "8000")
 STATIC_BASE = f"http://127.0.0.1:{STATIC_PORT}"
 BACKEND_BASE = f"http://127.0.0.1:{BACKEND_PORT}"
 
-UP_SCRIPTS = ["test_full_journey.py", "test_accessibility.py", "test_device_emulation.py"]
+UP_SCRIPTS = [
+    "test_full_journey.py",
+    "test_accessibility.py",
+    "test_device_emulation.py",
+    "test_hotel_voucher_batch_upload.py",
+    "test_cover_letter_editable_preview.py",
+    "test_hotel_blocking_body_editor.py",
+    "test_add_hotel_once.py",
+    "test_hotel_blockings_page.py",
+    "test_applications_page.py",
+    "test_cover_letter_recent_and_existing.py",
+    "test_authorization_letters_editable_preview.py",
+    "test_invitation_letter_editable_preview.py",
+    "test_invitation_use_existing.py",
+    "test_checklist_letter_editable_preview.py",
+    "test_applicant_groups.py",
+    "test_dashboard.py",
+    "test_dashboard_view_preview.py",
+    "test_editor_ribbon_whole_document.py",
+    "test_hotel_use_existing_applicant.py",
+    "test_authorization_use_existing.py",
+    "test_group_selection_and_blank_lines.py",
+    "test_hotel_blocking_table_resize_and_select_all.py",
+    "test_consulate_country_selector.py",
+    "test_hotel_voucher_lookup_ui.py",
+    "test_recent_passports_and_empty_saves.py",
+    "test_multi_page_passport_preview.py",
+    "test_cover_letter_corrections.py",
+]
 DOWN_SCRIPTS = ["test_backend_down_resilience.py"]
 
 

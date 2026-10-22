@@ -86,6 +86,7 @@ from typing import Optional
 
 from docx import Document
 
+import document_blocks
 import docx_utils
 import letter_shared
 
@@ -127,55 +128,30 @@ def _phone_or_dash(phone: Optional[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def generate_invitation_letter_docx(
-    inviter: dict,
-    invitees: list[dict],
-    fields: dict,
-    signature_bytes: Optional[bytes] = None,
-    date_override: Optional[str] = None,
-) -> bytes:
-    """`inviter`: {fullName, addressLine1, addressLine2, cityPostcode,
-    country, cityCountry, passportNumber, fullAddress, studyingOrWorking,
-    universityOrCompany, phone, email} — a person living abroad, entered
-    freely (they are not one of this application's own travellers, since
-    Khanna isn't processing their visa). `invitees`: exactly 2 of this
-    application's own people (each {fullName, passportNumber,
-    placeOfIssue, passportIssueDate}) — the two being invited. `fields`:
-    {travelStartDate, travelEndDate, purpose, accommodationDetails,
-    returnDate, fundingArrangement}."""
-    if len(invitees) != 2:
-        raise ValueError(
-            "The Invitation Letter is written for exactly two invitees (matching the reference "
-            f"template's own fixed 'my Parents' wording) — {len(invitees)} were given."
-        )
-    if not inviter or not (inviter.get("fullName") or "").strip():
-        raise ValueError("The inviter's own name is required to generate this letter.")
-
-    document = _load_template(INVITATION_LETTER_TEMPLATE_PATH, "Invitation Letter")
-    paragraphs = document.paragraphs
+def _invitation_token_maps(inviter: dict, invitees: list[dict], fields: dict, date_override: Optional[str]) -> dict:
+    """The Invitation Letter's own token substitutions, keyed by the SAME
+    editable-field key every one of the letter's real generated content
+    slots is known by (see INVITATION_EDITABLE_FIELD_KEYS below) — one
+    shared source for the real generator's non-edited fallback AND the
+    Word-like editor's seed values (project rule 15), so neither can ever
+    drift from the other."""
     p1, p2 = invitees[0], invitees[1]
-
-    docx_utils.apply_token_map_to_paragraph(paragraphs[0], {"[DATE]": letter_shared.format_letter_date(date_override)})
-    docx_utils.apply_token_map_to_paragraph(paragraphs[2], {"[INVITER_FULL_NAME]": inviter.get("fullName") or "—"})
-    docx_utils.apply_token_map_to_paragraph(paragraphs[3], {"[INVITER_ADDRESS_LINE_1]": inviter.get("addressLine1") or "—"})
-    docx_utils.apply_token_map_to_paragraph(paragraphs[4], {"[INVITER_ADDRESS_LINE_2]": inviter.get("addressLine2") or "—"})
-    docx_utils.apply_token_map_to_paragraph(paragraphs[5], {"[CITY, POSTCODE]": inviter.get("cityPostcode") or "—"})
-    docx_utils.apply_token_map_to_paragraph(paragraphs[8], {"[COUNTRY]": inviter.get("country") or "—"})
-    docx_utils.apply_token_map_to_paragraph(paragraphs[9], {"[CITY, COUNTRY]": inviter.get("cityCountry") or "—"})
-
-    docx_utils.apply_token_map_to_paragraph(
-        paragraphs[12],
-        {
+    return {
+        "date": {"[DATE]": letter_shared.format_letter_date(date_override)},
+        "inviterNameLine": {"[INVITER_FULL_NAME]": inviter.get("fullName") or "—"},
+        "inviterAddressLine1": {"[INVITER_ADDRESS_LINE_1]": inviter.get("addressLine1") or "—"},
+        "inviterAddressLine2": {"[INVITER_ADDRESS_LINE_2]": inviter.get("addressLine2") or "—"},
+        "inviterCityPostcode": {"[CITY, POSTCODE]": inviter.get("cityPostcode") or "—"},
+        "inviterCountry": {"[COUNTRY]": inviter.get("country") or "—"},
+        "inviterCityCountry": {"[CITY, COUNTRY]": inviter.get("cityCountry") or "—"},
+        "inviterDetails": {
             "[INVITER_FULL_NAME]": inviter.get("fullName") or "—",
             "[INVITER_PASSPORT_NUMBER]": inviter.get("passportNumber") or "—",
             "[INVITER_FULL_ADDRESS]": inviter.get("fullAddress") or "—",
             "[STUDYING / WORKING]": inviter.get("studyingOrWorking") or "—",
             "[UNIVERSITY / COMPANY NAME]": inviter.get("universityOrCompany") or "—",
         },
-    )
-    docx_utils.apply_token_map_to_paragraph(
-        paragraphs[13],
-        {
+        "inviteesDetails": {
             "[PARENT_1_FULL_NAME]": p1.get("fullName") or "—",
             "[PARENT_1_PASSPORT_NUMBER]": p1.get("passportNumber") or "—",
             "[PARENT_1_PLACE_OF_ISSUE]": p1.get("placeOfIssue") or "—",
@@ -188,28 +164,153 @@ def generate_invitation_letter_docx(
             "[TRAVEL_END_DATE]": fields.get("travelEndDate") or "—",
             "[PURPOSE OF VISIT]": fields.get("purpose") or "—",
         },
-    )
-    docx_utils.apply_token_map_to_paragraph(paragraphs[14], {"[PURPOSE OF VISIT]": fields.get("purpose") or "—"})
-    docx_utils.apply_token_map_to_paragraph(
-        paragraphs[15],
-        {
+        "purposeStatement": {"[PURPOSE OF VISIT]": fields.get("purpose") or "—"},
+        "accommodationAndReturn": {
             "[ACCOMMODATION DETAILS]": fields.get("accommodationDetails") or "—",
             "[RETURN_DATE]": fields.get("returnDate") or "—",
         },
-    )
-    docx_utils.apply_token_map_to_paragraph(
-        paragraphs[16], {"[SPONSOR / PARENTS / APPLICANT]": fields.get("fundingArrangement") or "—"}
-    )
+        "fundingArrangement": {"[SPONSOR / PARENTS / APPLICANT]": fields.get("fundingArrangement") or "—"},
+        "signOffName": {"[INVITER_FULL_NAME]": inviter.get("fullName") or "—"},
+        "phone": {"[PHONE_NUMBER]": _phone_or_dash(inviter.get("phone"))},
+        "email": {"[EMAIL_ADDRESS]": (inviter.get("email") or "").strip() or "—"},
+    }
 
-    docx_utils.apply_token_map_to_paragraph(paragraphs[21], {"[INVITER_FULL_NAME]": inviter.get("fullName") or "—"})
-    docx_utils.apply_token_map_to_paragraph(paragraphs[22], {"[PHONE_NUMBER]": _phone_or_dash(inviter.get("phone"))})
-    docx_utils.apply_token_map_to_paragraph(
-        paragraphs[23], {"[EMAIL_ADDRESS]": (inviter.get("email") or "").strip() or "—"}
-    )
+
+# Frontend rework, Phase 4 (Word-like body editor extended to the
+# Invitation Letter): every one of this letter's real generated-content
+# paragraphs (never the entirely-fixed "From,"/"To,"/"Subject:"/
+# "Respected Sir/Madam,"/"Thank you!"/"Yours Sincerely," lines, and never
+# the blank signature slot) gets its own editable field, keyed here and
+# mapped to the template's own real paragraph index — see module
+# docstring's paragraph dump for exactly which paragraph each key is.
+INVITATION_EDITABLE_FIELD_KEYS = (
+    "date",
+    "inviterNameLine",
+    "inviterAddressLine1",
+    "inviterAddressLine2",
+    "inviterCityPostcode",
+    "inviterCountry",
+    "inviterCityCountry",
+    "inviterDetails",
+    "inviteesDetails",
+    "purposeStatement",
+    "accommodationAndReturn",
+    "fundingArrangement",
+    "signOffName",
+    "phone",
+    "email",
+)
+_INVITATION_FIELD_PARAGRAPH_INDEX = {
+    "date": 0,
+    "inviterNameLine": 2,
+    "inviterAddressLine1": 3,
+    "inviterAddressLine2": 4,
+    "inviterCityPostcode": 5,
+    "inviterCountry": 8,
+    "inviterCityCountry": 9,
+    "inviterDetails": 12,
+    "inviteesDetails": 13,
+    "purposeStatement": 14,
+    "accommodationAndReturn": 15,
+    "fundingArrangement": 16,
+    "signOffName": 21,
+    "phone": 22,
+    "email": 23,
+}
+
+
+def compose_invitation_editable_fields(inviter: dict, invitees: list[dict], fields: dict, date_override: Optional[str] = None) -> dict:
+    """The Word-like body editor's seed values for the Invitation Letter —
+    one real, fully-rendered {fieldKey: html} entry per editable
+    paragraph (see INVITATION_EDITABLE_FIELD_KEYS), computed from the
+    SAME token maps `generate_invitation_letter_docx`'s own non-edited
+    fallback uses (project rule 15 — never a second, hand-guessed copy
+    of this wording)."""
+    import html as _html_mod
+
+    if len(invitees) != 2:
+        raise ValueError(
+            "The Invitation Letter is written for exactly two invitees (matching the reference "
+            f"template's own fixed 'my Parents' wording) — {len(invitees)} were given."
+        )
+    document = _load_template(INVITATION_LETTER_TEMPLATE_PATH, "Invitation Letter")
+    paragraphs = document.paragraphs
+    token_maps = _invitation_token_maps(inviter, invitees, fields, date_override)
+    fields_out = {}
+    for key in INVITATION_EDITABLE_FIELD_KEYS:
+        p = paragraphs[_INVITATION_FIELD_PARAGRAPH_INDEX[key]]
+        docx_utils.apply_token_map_to_paragraph(p, token_maps[key])
+        fields_out[key] = f"<p>{_html_mod.escape(p.text)}</p>"
+    return fields_out
+
+
+def generate_invitation_letter_docx(
+    inviter: dict,
+    invitees: list[dict],
+    fields: dict,
+    signature_bytes: Optional[bytes] = None,
+    date_override: Optional[str] = None,
+    edited_fields: Optional[dict] = None,
+    _shader: Optional["docx_utils.ProbeShader"] = None,
+) -> bytes:
+    """`inviter`: {fullName, addressLine1, addressLine2, cityPostcode,
+    country, cityCountry, passportNumber, fullAddress, studyingOrWorking,
+    universityOrCompany, phone, email} — a person living abroad, entered
+    freely (they are not one of this application's own travellers, since
+    Khanna isn't processing their visa). `invitees`: exactly 2 of this
+    application's own people (each {fullName, passportNumber,
+    placeOfIssue, passportIssueDate}) — the two being invited. `fields`:
+    {travelStartDate, travelEndDate, purpose, accommodationDetails,
+    returnDate, fundingArrangement}. `edited_fields`: a {fieldKey: html}
+    map (see INVITATION_EDITABLE_FIELD_KEYS/compose_invitation_editable_fields
+    for the key set) — a staff member's own Word-like edits, applied
+    instead of the auto-generated token substitution for exactly the
+    fields present; None/absent means "auto-generate every field as
+    normal", same contract as every other document type's edited_fields.
+
+    Frontend rework, Phase 4: every editable paragraph — AND the blank
+    signature-slot paragraph, which sits between them (index 20) — is
+    captured into a stable Python variable from ONE untouched
+    `document.paragraphs` snapshot taken before any edit runs, never
+    re-derived by index afterwards. This matters here specifically
+    because an edited field's docx_utils.replace_paragraph_range_with_html
+    call can change the document's total paragraph count (a multi-line
+    edit doesn't have to stay one paragraph), which would silently shift
+    every later paragraph's real index if any were looked up fresh after
+    an earlier one was mutated — the exact hazard already documented for
+    the Authorization Letters engine."""
+    if len(invitees) != 2:
+        raise ValueError(
+            "The Invitation Letter is written for exactly two invitees (matching the reference "
+            f"template's own fixed 'my Parents' wording) — {len(invitees)} were given."
+        )
+    if not inviter or not (inviter.get("fullName") or "").strip():
+        raise ValueError("The inviter's own name is required to generate this letter.")
+
+    document = _load_template(INVITATION_LETTER_TEMPLATE_PATH, "Invitation Letter")
+    paragraphs = document.paragraphs
+    token_maps = _invitation_token_maps(inviter, invitees, fields, date_override)
+    edited_fields = edited_fields or {}
+
+    field_paragraphs = {key: paragraphs[idx] for key, idx in _INVITATION_FIELD_PARAGRAPH_INDEX.items()}
+    signature_paragraph = paragraphs[20]
+
+    if _shader is not None:  # layout probe only — see docx_utils.ProbeShader
+        for key in INVITATION_EDITABLE_FIELD_KEYS:
+            _shader.shade(key, field_paragraphs[key])
+
+    for key in INVITATION_EDITABLE_FIELD_KEYS:
+        p = field_paragraphs[key]
+        html = edited_fields.get(key)
+        if html is not None:
+            docx_utils.replace_paragraph_range_with_html(document, p, p, html)
+        else:
+            docx_utils.apply_token_map_to_paragraph(p, token_maps[key])
 
     if signature_bytes:
-        docx_utils.insert_signature_image(paragraphs[20], signature_bytes)
+        docx_utils.insert_signature_image(signature_paragraph, signature_bytes)
 
+    document_blocks.finalize(document, edited_fields, _shader)
     buf = io.BytesIO()
     document.save(buf)
     return buf.getvalue()
@@ -221,12 +322,34 @@ def generate_invitation_letter_pdf(
     fields: dict,
     signature_bytes: Optional[bytes] = None,
     date_override: Optional[str] = None,
+    edited_fields: Optional[dict] = None,
 ) -> bytes:
-    docx_bytes = generate_invitation_letter_docx(inviter, invitees, fields, signature_bytes, date_override)
+    docx_bytes = generate_invitation_letter_docx(inviter, invitees, fields, signature_bytes, date_override, edited_fields)
     try:
         return docx_utils.convert_docx_bytes_to_pdf(docx_bytes, base_name="invitation_letter")
     except docx_utils.DocxBuildError as e:
         raise InvitationLetterError(str(e))
+
+
+def compute_invitation_field_layout(
+    inviter: dict,
+    invitees: list[dict],
+    fields: dict,
+    signature_bytes: Optional[bytes] = None,
+    date_override: Optional[str] = None,
+    edited_fields: Optional[dict] = None,
+) -> dict:
+    """Page + rectangle + font of each editable value of the Invitation
+    Letter, for the editable preview (see docx_utils.ProbeShader)."""
+    shader = docx_utils.ProbeShader()
+    probe = generate_invitation_letter_docx(
+        inviter, invitees, fields, signature_bytes, date_override, edited_fields, _shader=shader
+    )
+    try:
+        pdf = docx_utils.convert_docx_bytes_to_pdf(probe, base_name="invitation_letter_layout")
+    except docx_utils.DocxBuildError as e:
+        raise InvitationLetterError(str(e))
+    return shader.layout_from_pdf(pdf)
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +378,8 @@ def generate_initors_covering_letter_docx(
     fields: dict,
     signature_bytes: Optional[bytes] = None,
     date_override: Optional[str] = None,
+    edited_fields: Optional[dict] = None,
+    _shader: Optional["docx_utils.ProbeShader"] = None,
 ) -> bytes:
     """`subject`: the person THIS letter is for/signed by — {fullName,
     passportNumber, placeOfIssue, passportIssueDate, sex, phone, email,
@@ -358,6 +483,7 @@ def generate_initors_covering_letter_docx(
     if signature_bytes:
         docx_utils.insert_signature_image(paragraphs[25], signature_bytes)
 
+    document_blocks.finalize(document, edited_fields, _shader)
     buf = io.BytesIO()
     document.save(buf)
     return buf.getvalue()
@@ -370,9 +496,34 @@ def generate_initors_covering_letter_pdf(
     fields: dict,
     signature_bytes: Optional[bytes] = None,
     date_override: Optional[str] = None,
+    edited_fields: Optional[dict] = None,
 ) -> bytes:
-    docx_bytes = generate_initors_covering_letter_docx(subject, spouse, inviting_person, fields, signature_bytes, date_override)
+    docx_bytes = generate_initors_covering_letter_docx(
+        subject, spouse, inviting_person, fields, signature_bytes, date_override, edited_fields
+    )
     try:
         return docx_utils.convert_docx_bytes_to_pdf(docx_bytes, base_name="initors_covering_letter")
     except docx_utils.DocxBuildError as e:
         raise InvitationLetterError(str(e))
+
+
+def compute_initors_field_layout(
+    subject: dict,
+    spouse: dict,
+    inviting_person: dict,
+    fields: dict,
+    signature_bytes: Optional[bytes] = None,
+    date_override: Optional[str] = None,
+    edited_fields: Optional[dict] = None,
+) -> dict:
+    """Where every block of the Initors Covering Letter sits on the page of
+    the real PDF, for the editable preview (see document_blocks)."""
+    shader = docx_utils.ProbeShader()
+    probe = generate_initors_covering_letter_docx(
+        subject, spouse, inviting_person, fields, signature_bytes, date_override, edited_fields, _shader=shader
+    )
+    try:
+        pdf = docx_utils.convert_docx_bytes_to_pdf(probe, base_name="initors_covering_letter_layout")
+    except docx_utils.DocxBuildError as e:
+        raise InvitationLetterError(str(e))
+    return shader.layout_from_pdf(pdf)

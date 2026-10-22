@@ -1,0 +1,101 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Document preview-only mode
+   Active only when router.js sets <html data-doc-mode="preview"> (hash
+   "#/<doc-view>/preview", opened from the Dashboard's View icon). Shows each
+   document page's generated preview and hides its form fields. Every selector
+   is under html[data-doc-mode="preview"], so normal pages are untouched.
+   ========================================================================== */
+
+.doc-preview-bar {
+  display: none;
+}
+
+html[data-doc-mode="preview"] .view.is-active .doc-preview-bar {
+  display: block;
+  margin-bottom: var(--space-4);
+}
+
+.doc-preview-bar__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.doc-preview-bar__info {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.doc-preview-bar__id {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.doc-preview-bar__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.doc-preview-bar .notice {
+  margin-top: var(--space-3);
+}
+
+/* Page title / description and the "Working on ..." application bar. */
+html[data-doc-mode="preview"] .view.is-active > .container > .view-header,
+html[data-doc-mode="preview"] .view.is-active [data-doc-page-app-bar] {
+  display: none;
+}
+
+/* Cover Letter / Hotel Blocking: keep only the preview box. */
+html[data-doc-mode="preview"] [data-cover-letter-page-root] > :not([data-doc-preview]),
+html[data-doc-mode="preview"] [data-hotel-blocking-page-root] > :not([data-voucher-preview]) {
+  display: none;
+}
+
+/* Company / Passport Authorization: the card holds the form and the
+   preview box together — hide everything in it except the preview. */
+html[data-doc-mode="preview"] [data-company-auth-card] > :not([data-doc-preview]),
+html[data-doc-mode="preview"] [data-passport-auth-card] > :not([data-doc-preview]) {
+  display: none;
+}
+
+html[data-doc-mode="preview"] [data-company-auth-card],
+html[data-doc-mode="preview"] [data-passport-auth-card],
+html[data-doc-mode="preview"] [data-initors-card] {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Invitation Letter: the main letter's preview plus each inviter covering
+   letter's preview; their forms are hidden, and sections that have no
+   mounted preview are dropped. */
+html[data-doc-mode="preview"] [data-invitation-letter-page-root] > :not([data-invitation-preview]):not([data-initors-card]) {
+  display: none;
+}
+
+html[data-doc-mode="preview"] [data-initors-card] > :not([data-initors-person-section]) {
+  display: none;
+}
+
+html[data-doc-mode="preview"] [data-initors-person-section] {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+html[data-doc-mode="preview"] [data-initors-person-section] > :not([data-initors-preview]) {
+  display: none;
+}
+
+html[data-doc-mode="preview"] [data-initors-person-section]:not(:has(.doc-viewer)) {
+  display: none;
+}
+
+html[data-doc-mode="preview"] [data-invitation-preview]:not(:has(.doc-viewer)) {
+  display: none;
+}

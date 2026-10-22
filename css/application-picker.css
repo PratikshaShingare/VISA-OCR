@@ -1,10 +1,16 @@
 /* ==========================================================================
-   Khanna Travels & Holidays — "Use Existing Application" picker (Phase 3)
-   A single shared modal, injected once by js/application-picker.js and
-   reused everywhere an existing application can be resumed. Built entirely
-   from the same tokens/components as the rest of the app (.card-style
-   surface, .btn-icon, .badge, .field input) — no new visual language.
-   ========================================================================== */
+   Khanna Travels & Holidays — Application/Applicant pickers
+   Two callers share this one file and the `.app-picker`/`.app-picker__*`
+   result-list styling below: js/applicant-picker.js ("Use Existing
+   Applicant" — still a centered `.app-picker-overlay` modal, unchanged)
+   and js/application-picker.js ("Use Existing Application" — converted to
+   a compact `.app-picker-popover`, section 17 of the frontend rework: "a
+   compact dropdown/popover ... do NOT create a huge full-page selector").
+   Built entirely from the same tokens/components as the rest of the app
+   (.card-style surface, .btn-icon, .badge, .field input) — no new visual
+   language. `.app-picker` itself carries only what's identical between the
+   two (surface/border/shadow/flex-column); each wrapper below sets its own
+   width/padding so converting one didn't reshape the other. */
 
 .app-picker-overlay {
   position: fixed;
@@ -22,25 +28,50 @@
   display: none;
 }
 
+.app-picker-overlay .app-picker {
+  width: 100%;
+  max-width: 480px;
+  padding: var(--space-5);
+  gap: var(--space-4);
+}
+
+/* Frontend rework (section 17): was a centered, full-screen-dimming modal;
+   now a small popover anchored under the "Use Existing Application" button
+   (js/application-picker.js's positionPopover() sets its exact top/left).
+   Kept `position:fixed` (viewport-relative coordinates, not `absolute`
+   relative to an offset parent) since positionPopover() computes from
+   `getBoundingClientRect()`, which is viewport-relative too. */
+.app-picker-popover {
+  position: fixed;
+  z-index: 60; /* above the mobile nav drawer (50) and profile dropdown (45) */
+  max-width: min(92vw, 360px);
+}
+
+.app-picker-popover[hidden] {
+  display: none;
+}
+
+.app-picker-popover .app-picker {
+  width: min(92vw, 360px);
+  padding: var(--space-4);
+  gap: var(--space-3);
+}
+
 .app-picker {
   /* min-width: 0 overrides the flex item's default "auto" minimum, which
      is otherwise its content's min-content size — the same overflow bug
      class already fixed once in this project (see components.css's
      .notice span comment): the application ID rendered below
      (.app-picker__result-meta) is one long underscore-joined token with
-     no natural break point, so without this it forces the whole modal
+     no natural break point, so without this it forces the container
      wider than the viewport at 320-414px instead of wrapping. */
   min-width: 0;
-  width: 100%;
-  max-width: 480px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
-  padding: var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
 }
 
 .app-picker__header {
@@ -66,6 +97,12 @@
   gap: var(--space-2);
   max-height: 50vh;
   overflow-y: auto;
+}
+
+/* Compact popover context only (section 17) — the applicant-picker modal
+   above keeps its original 50vh, unchanged. */
+.app-picker-popover .app-picker__results {
+  max-height: min(45vh, 320px);
 }
 
 .app-picker__result {
@@ -129,4 +166,95 @@
   padding-top: var(--space-3);
   display: flex;
   justify-content: flex-end;
+}
+
+
+/* ---- "Use an existing applicant" modal: avatar + name + chips ---------------
+   Only the applicant picker uses these (js/applicant-picker.js); the
+   application popover keeps its own plainer rows above. */
+.app-picker-overlay .app-picker {
+  max-width: 560px;
+}
+.app-picker-overlay .app-picker__results {
+  gap: var(--space-2);
+  max-height: min(56vh, 460px);
+  padding-right: 2px;
+}
+.app-picker__count {
+  margin: 0 0 2px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-faint);
+}
+.app-picker-overlay .app-picker__result {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+}
+.app-picker__avatar {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-primary);
+  background: var(--color-primary-soft, rgba(28, 95, 174, 0.12));
+}
+.app-picker__avatar.is-flagged {
+  color: #8a5a00;
+  background: rgba(230, 160, 20, 0.18);
+}
+.app-picker__result-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+.app-picker__result-main {
+  flex-wrap: wrap;
+}
+.app-picker__result-main strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.app-picker__result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.app-picker__chip {
+  display: inline-flex;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  font-size: 0.74rem;
+  color: var(--color-text-muted, var(--color-text-faint));
+}
+.app-picker__chip span {
+  color: var(--color-text-faint);
+}
+.app-picker__flag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: #8a5a00;
+  background: rgba(230, 160, 20, 0.16);
+}
+@media (max-width: 480px) {
+  .app-picker-overlay {
+    padding: var(--space-3);
+  }
+  .app-picker__avatar {
+    width: 32px;
+    height: 32px;
+  }
 }

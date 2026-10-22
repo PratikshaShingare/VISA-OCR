@@ -161,13 +161,19 @@
 
   /* ---------------- Admin gate ---------------- */
 
+  // Generalized from a single Admin-page pair to `qsa` (frontend rework,
+  // section 3) so the same gate/denied pattern also covers the Applications
+  // view, which is now admin-only too — both pairs toggle the same way, so
+  // one function still serves both instead of a second copy of this logic
+  // (project rule 15).
   function renderAdminGate() {
-    var gate = utils.qs("[data-admin-gate]");
-    var denied = utils.qs("[data-admin-denied]");
-    if (!gate || !denied) return;
     var admin = auth.isAdmin();
-    gate.hidden = !admin;
-    denied.hidden = admin;
+    utils.qsa("[data-admin-gate]").forEach(function (el) {
+      el.hidden = !admin;
+    });
+    utils.qsa("[data-admin-denied]").forEach(function (el) {
+      el.hidden = admin;
+    });
   }
 
   /* ---------------- Route guards ---------------- */
@@ -199,7 +205,7 @@
         auth.requireLogin(e.detail.view, e.detail.step || 1);
         return;
       }
-      if (e.detail.view === "admin") {
+      if (e.detail.view === "admin" || e.detail.view === "applications") {
         renderAdminGate();
       }
     });

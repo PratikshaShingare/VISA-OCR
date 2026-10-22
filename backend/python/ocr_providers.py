@@ -26,6 +26,7 @@ never committed, never hardcoded).
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import shutil
 import statistics
@@ -79,6 +80,12 @@ class OCRProviderError(Exception):
     image — never swallowed to fabricate a result (project rule 9)."""
 
 
+class OCRProviderAuthError(OCRProviderError):
+    """The cloud engine rejected the credentials (invalid/expired/restricted
+    key, billing disabled). Retrying cannot help, so FallbackOCRProvider
+    switches to the local engine instead of failing every upload."""
+
+
 class OCRProvider:
     """Common interface ocr_runner.py codes against. Every image argument
     is a single-channel (grayscale) numpy array — exactly what ocr_runner.py
@@ -123,10 +130,22 @@ class TesseractOCRProvider(OCRProvider):
             pytesseract.pytesseract.tesseract_cmd = cmd
 
     def ocr_text(self, gray_image, config: str = "") -> str:
-        return self._pytesseract.image_to_string(gray_image, config=config)
+        try:
+            return self._pytesseract.image_to_string(gray_image, config=config)
+        except self._pytesseract.TesseractError as e:
+            # A sliver of an image (a near-empty crop) cannot be read at all;
+            # that is "no text", not a failure of the whole page.
+            if "too small" in str(e).lower():
+                return ""
+            raise
 
     def ocr_mean_confidence_and_text(self, gray_image, config: str = "") -> Tuple[float, str]:
-        data = self._pytesseract.image_to_data(gray_image, output_type=self._pytesseract.Output.DICT, config=config)
+        try:
+            data = self._pytesseract.image_to_data(gray_image, output_type=self._pytesseract.Output.DICT, config=config)
+        except self._pytesseract.TesseractError as e:
+            if "too small" in str(e).lower():
+                return 0.0, ""
+            raise
         confidences = [int(c) for c in data.get("conf", []) if str(c).strip() not in ("-1", "")]
         mean_conf = statistics.mean(confidences) if confidences else 0.0
         text = " ".join(t for t in data.get("text", []) if t.strip())
@@ -158,6 +177,27 @@ class TesseractOCRProvider(OCRProvider):
 # Google Cloud Vision — the cloud provider used on Vercel, where no system
 # OCR binary can be installed
 # ---------------------------------------------------------------------------
+
+
+_BAD_KEY_MARKERS = ("API_KEY_INVALID", "API key not valid", "API_KEY_", "PERMISSION_DENIED", "billing", "SERVICE_DISABLED", "has not been used in project")
+
+
+def _looks_like_bad_key(body: str) -> bool:
+    text = body or ""
+    return any(marker.lower() in text.lower() for marker in _BAD_KEY_MARKERS)
+
+
+def _short_google_error(resp) -> str:
+    """One readable sentence from Google's JSON error instead of the raw
+    300-character blob."""
+    try:
+        err = (resp.json() or {}).get("error") or {}
+        message = err.get("message")
+        if message:
+            return str(message)
+    except Exception:  # noqa: BLE001 — body was not JSON; fall back to raw text
+        pass
+    return (resp.text or "")[:200]
 
 
 class GoogleVisionOCRProvider(OCRProvider):
@@ -208,7 +248,11 @@ class GoogleVisionOCRProvider(OCRProvider):
         except requests.RequestException as e:
             raise OCRProviderError(f"Could not reach Google Cloud Vision: {e}")
         if resp.status_code != 200:
-            raise OCRProviderError(f"Google Cloud Vision request failed ({resp.status_code}): {resp.text[:300]}")
+            detail = _short_google_error(resp)
+            message = f"Google Cloud Vision request failed ({resp.status_code}): {detail}"
+            if resp.status_code in (401, 403) or (resp.status_code == 400 and _looks_like_bad_key(resp.text)):
+                raise OCRProviderAuthError(message)
+            raise OCRProviderError(message)
 
         body = resp.json()
         single = (body.get("responses") or [{}])[0]
@@ -275,6 +319,89 @@ class GoogleVisionOCRProvider(OCRProvider):
 
 
 # ---------------------------------------------------------------------------
+# Fallback wrapper — a rejected cloud key must not stop the whole app
+# ---------------------------------------------------------------------------
+
+
+class FallbackOCRProvider(OCRProvider):
+    """Uses `primary` (Google Cloud Vision) until it reports that its
+    credentials are unusable, then permanently (for this process) switches to
+    `secondary_factory()` (local Tesseract). The switch is recorded in
+    `fallback_reason` and surfaced through status()/health so staff see WHY
+    the cloud engine is not in use — it is never hidden. Transient failures
+    (network, quota) are NOT treated as auth failures and still raise.
+
+    `name` always reports the engine that is actually answering, because
+    ocr_runner/hotel_voucher_ocr choose Tesseract-specific code paths from it."""
+
+    def __init__(self, primary: OCRProvider, secondary_factory):
+        self._primary = primary
+        self._secondary_factory = secondary_factory
+        self._secondary: Optional[OCRProvider] = None
+        self.fallback_reason: Optional[str] = None
+
+    @property
+    def name(self) -> str:  # type: ignore[override]
+        return self._active().name
+
+    def _active(self) -> OCRProvider:
+        if self.fallback_reason is None:
+            return self._primary
+        return self._get_secondary()
+
+    def _get_secondary(self) -> OCRProvider:
+        if self._secondary is None:
+            try:
+                self._secondary = self._secondary_factory()
+            except Exception as e:  # noqa: BLE001
+                raise OCRProviderError(
+                    f"Google Cloud Vision is not usable ({self.fallback_reason}) and the local Tesseract engine "
+                    f"could not be started either ({e}). Fix GOOGLE_VISION_API_KEY in backend/python/.env or install Tesseract."
+                )
+        return self._secondary
+
+    def _run(self, method: str, gray_image, config: str):
+        if self.fallback_reason is None:
+            try:
+                return getattr(self._primary, method)(gray_image, config=config)
+            except OCRProviderAuthError as e:
+                self.fallback_reason = str(e)
+                logging.getLogger("khanna.ocr").warning(
+                    "Google Cloud Vision rejected the API key; using local Tesseract instead. (%s)", e
+                )
+        secondary = self._get_secondary()
+        try:
+            return getattr(secondary, method)(gray_image, config=config)
+        except OCRProviderError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise OCRProviderError(
+                f"Google Cloud Vision is not usable ({self.fallback_reason}) and local Tesseract failed: {e}"
+            )
+
+    def ocr_text(self, gray_image, config: str = "") -> str:
+        return self._run("ocr_text", gray_image, config)
+
+    def ocr_mean_confidence_and_text(self, gray_image, config: str = "") -> Tuple[float, str]:
+        return self._run("ocr_mean_confidence_and_text", gray_image, config)
+
+    def status(self) -> Dict[str, Any]:
+        if self.fallback_reason is None:
+            st = dict(self._primary.status())
+            st["fallback"] = "tesseract"
+            return st
+        try:
+            st = dict(self._get_secondary().status())
+        except OCRProviderError as e:
+            return {"available": False, "provider": "tesseract", "error": str(e)}
+        st["warning"] = (
+            "Google Cloud Vision key was rejected, so local Tesseract is being used. "
+            "Replace GOOGLE_VISION_API_KEY in backend/python/.env (or remove it) and restart the backend. "
+            f"Google said: {self.fallback_reason}"
+        )
+        return st
+
+# ---------------------------------------------------------------------------
 # Provider selection
 # ---------------------------------------------------------------------------
 
@@ -305,7 +432,7 @@ def get_ocr_provider() -> OCRProvider:
     if use_google:
         if not google_api_key:
             raise OCRProviderError("OCR_PROVIDER=google but GOOGLE_VISION_API_KEY is not set.")
-        _provider_singleton = GoogleVisionOCRProvider(google_api_key)
+        _provider_singleton = FallbackOCRProvider(GoogleVisionOCRProvider(google_api_key), TesseractOCRProvider)
     else:
         _provider_singleton = TesseractOCRProvider()
 

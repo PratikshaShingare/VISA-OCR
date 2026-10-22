@@ -3,8 +3,12 @@
    The persistent left sidebar (Phase 1 of the workflow redesign) was
    removed in favour of a single hamburger-menu drawer at every breakpoint
    (index.html's .mobile-nav, already right-anchored) per an explicit user
-   request — navigation now lives in exactly one place instead of being
-   duplicated across a header nav, a sidebar and a drawer. The rules below
+   request — navigation lives in exactly one place instead of being
+   duplicated across a header nav, a sidebar and a drawer. The frontend
+   rework (section 2) brought persistent-sidebar BEHAVIOUR back on desktop
+   without reintroducing a second nav surface: it's still the one
+   .mobile-nav element, just no longer auto-closing itself on desktop (see
+   js/app.js / css/layout.css's .mobile-nav comment). The rules below
    (.app-body/.app-main flex wrapper, the "New Application" quick-choice
    menu, and the standalone-document-page app bar) are unrelated to the
    sidebar and are kept as-is.
@@ -50,10 +54,23 @@
   min-width: 240px;
 }
 
+/* Phones: both header dropdowns (New Application "+" and the account menu)
+   open as a sheet pinned under the header, inset from the screen edges, so
+   they can never hang off the left/right edge whatever the header's own
+   layout is (the triggers are icon-only here and sit at different x
+   positions at every phone width). Scrolls internally if taller than the
+   screen. */
 @media (max-width: 767px) {
-  .new-app-menu__dropdown {
-    right: 0;
-    left: auto;
+  .new-app-menu__dropdown,
+  .app-header .profile-menu__dropdown {
+    position: fixed;
+    top: calc(var(--header-h) + var(--space-1));
+    left: var(--space-3);
+    right: var(--space-3);
+    min-width: 0;
+    width: auto;
+    max-height: calc(100vh - var(--header-h) - var(--space-4));
+    overflow-y: auto;
   }
 }
 
@@ -64,9 +81,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
+  gap: var(--space-2) var(--space-4);
   flex-wrap: wrap;
-  margin-bottom: var(--space-5);
+  /* Compact: this bar sits above every document page, so it should take as
+     little height as the one line of information + buttons it holds. */
+  padding: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 .doc-page-app-bar__info {

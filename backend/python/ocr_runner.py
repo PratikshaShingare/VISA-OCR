@@ -803,34 +803,80 @@ def find_mrz_lines(ocr_text: str) -> Optional[Tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 
-def _confidence_field(value: Any, confidence: float, source: str, needs_review: bool) -> Dict[str, Any]:
-    return {"value": value, "confidence": round(confidence, 2), "source": source, "needsReview": needs_review}
+def _confidence_field(value: Any, confidence: float, source: str, needs_review: bool, note: Optional[str] = None) -> Dict[str, Any]:
+    field = {"value": value, "confidence": round(confidence, 2), "source": source, "needsReview": needs_review}
+    if note:
+        field["note"] = note
+    return field
 
 
-def extract_passport_fields(ocr_text: str, mrz: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def extract_passport_fields(
+    ocr_text: str,
+    mrz: Optional[Dict[str, Any]],
+    mrz_engine_confidence: Optional[str] = None,
+    mrz_repair_count: int = 0,
+    viz: Optional[Dict[str, Any]] = None,
+    back: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Builds the field set the frontend shows for review. MRZ data is
     authoritative (per ICAO 9303) when its own check digits are valid;
     a failed check digit still surfaces the OCR'd value but at low
-    confidence and flagged for review rather than being discarded."""
+    confidence and flagged for review rather than being discarded.
+
+    Values the check digits do NOT protect (names, nationality, document
+    type, country) are only treated as settled when the printed page backs
+    them up (passport_crosscheck.confirmations) or the MRZ was read cleanly
+    with no repairs; otherwise they are flagged for review with a note."""
     fields: Dict[str, Any] = {}
+    confirm: Dict[str, Any] = {}
 
     if mrz:
-        fields["fullName"] = _confidence_field(mrz["fullName"], 0.95 if mrz["valid"] else 0.5, "mrz", not mrz["valid"])
-        fields["surname"] = _confidence_field(mrz["surname"], 0.95 if mrz["valid"] else 0.5, "mrz", not mrz["valid"])
-        fields["givenNames"] = _confidence_field(mrz["givenNames"], 0.95 if mrz["valid"] else 0.5, "mrz", not mrz["valid"])
-        fields["passportNumber"] = _confidence_field(
-            mrz["passportNumber"], 0.95 if mrz["passportNumberValid"] else 0.4, "mrz", not mrz["passportNumberValid"]
+        import passport_crosscheck
+
+        confirm = passport_crosscheck.confirmations(mrz, ocr_text)
+        clean_read = bool(mrz["valid"]) and mrz_repair_count == 0 and mrz_engine_confidence in (None, "high")
+        suspicious = confirm["suspiciousNameTokens"]
+
+        def name_field(value: Any, key: str) -> Dict[str, Any]:
+            if confirm[key]:
+                return _confidence_field(value, 0.98, "mrz", False, "Matches the printed page.")
+            if suspicious:
+                return _confidence_field(value, 0.3, "mrz", True, "Name looks misread — compare with the passport.")
+            if clean_read:
+                return _confidence_field(value, 0.9, "mrz", False, "Not backed by a check digit; not found on the printed text.")
+            return _confidence_field(value, 0.6, "mrz", True, "Name is not protected by a check digit — compare with the passport.")
+
+        def checked(value: Any, valid: bool, key: Optional[str] = None) -> Dict[str, Any]:
+            if valid and key and confirm.get(key):
+                return _confidence_field(value, 0.99, "mrz", False, "Check digit valid and matches the printed page.")
+            if valid:
+                return _confidence_field(value, 0.95, "mrz", False, "Check digit valid.")
+            return _confidence_field(value, 0.4, "mrz", True, "Check digit failed — compare with the passport.")
+
+        fields["surname"] = name_field(mrz["surname"], "surname")
+        fields["givenNames"] = name_field(mrz["givenNames"], "givenNames")
+        review_names = fields["surname"]["needsReview"] or fields["givenNames"]["needsReview"]
+        fields["fullName"] = _confidence_field(
+            mrz["fullName"], min(fields["surname"]["confidence"], fields["givenNames"]["confidence"]), "mrz", review_names,
+            fields["surname"].get("note") if fields["surname"]["needsReview"] else fields["givenNames"].get("note"),
         )
-        fields["nationality"] = _confidence_field(mrz["nationality"], 0.9 if mrz["valid"] else 0.5, "mrz", not mrz["valid"])
-        fields["dateOfBirth"] = _confidence_field(
-            mrz["dateOfBirth"], 0.95 if mrz["dateOfBirthValid"] else 0.4, "mrz", not mrz["dateOfBirthValid"]
-        )
+        fields["passportNumber"] = checked(mrz["passportNumber"], mrz["passportNumberValid"], "passportNumber")
+        fields["dateOfBirth"] = checked(mrz["dateOfBirth"], mrz["dateOfBirthValid"], "dateOfBirth")
+        fields["dateOfExpiry"] = checked(mrz["dateOfExpiry"], mrz["dateOfExpiryValid"], "dateOfExpiry")
+
+        country_ok = mrz["issuingCountry"] in passport_crosscheck.COUNTRY_CODES
+        nat_ok = mrz["nationality"] in passport_crosscheck.COUNTRY_CODES
+        same_country = country_ok and nat_ok and mrz["issuingCountry"] == mrz["nationality"]
+        if same_country and clean_read:
+            fields["nationality"] = _confidence_field(mrz["nationality"], 0.95, "mrz", False)
+            fields["countryCode"] = _confidence_field(mrz["issuingCountry"], 0.95, "mrz", False)
+        else:
+            note = "Not a valid country code." if not (country_ok and nat_ok) else "Nationality and issuing country differ — confirm."
+            fields["nationality"] = _confidence_field(mrz["nationality"], 0.5, "mrz", not (nat_ok and mrz["valid"]) or not same_country, note if not same_country else None)
+            fields["countryCode"] = _confidence_field(mrz["issuingCountry"], 0.5, "mrz", not (country_ok and mrz["valid"]) or not same_country, note if not same_country else None)
         fields["sex"] = _confidence_field(mrz["sex"], 0.9 if mrz["valid"] else 0.5, "mrz", not mrz["valid"])
-        fields["dateOfExpiry"] = _confidence_field(
-            mrz["dateOfExpiry"], 0.95 if mrz["dateOfExpiryValid"] else 0.4, "mrz", not mrz["dateOfExpiryValid"]
-        )
-        fields["countryCode"] = _confidence_field(mrz["issuingCountry"], 0.9 if mrz["valid"] else 0.5, "mrz", not mrz["valid"])
-        fields["passportType"] = _confidence_field(mrz["documentType"], 0.9 if mrz["valid"] else 0.5, "mrz", not mrz["valid"])
+        doc_type_ok = (mrz.get("documentType") or "")[:1] == "P"
+        fields["passportType"] = _confidence_field(mrz["documentType"], 0.9 if doc_type_ok and mrz["valid"] else 0.5, "mrz", not (doc_type_ok and mrz["valid"]))
     else:
         for key in (
             "fullName", "surname", "givenNames", "passportNumber", "nationality",
@@ -838,49 +884,54 @@ def extract_passport_fields(ocr_text: str, mrz: Optional[Dict[str, Any]]) -> Dic
         ):
             fields[key] = _confidence_field(None, 0.0, "none", True)
 
-    # Fields the MRZ does not carry: pulled from the visible (VIZ) text with
-    # simple label matching — inherently less reliable, always flagged.
-    place_of_birth = _search_label(ocr_text, [r"PLACE\s+OF\s+BIRTH"])
-    fields["placeOfBirth"] = _confidence_field(place_of_birth, 0.4 if place_of_birth else 0.0, "viz", True)
+    # Fields the MRZ does not carry. They come from the printed page only
+    # when a position-anchored read (passport_layout) or a labelled back-page
+    # line produced a clean value — never from loose regex matches over the
+    # whole page text, which is where garbage like "ae" or "os cies" came
+    # from. Anything not found stays empty and is entered manually.
+    viz = viz or {}
+    back = back or {}
 
-    date_of_issue = _search_label(ocr_text, [r"DATE\s+OF\s+ISSUE"])
-    fields["dateOfIssue"] = _confidence_field(date_of_issue, 0.4 if date_of_issue else 0.0, "viz", True)
+    def viz_field(item: Optional[Dict[str, Any]], note: str) -> Dict[str, Any]:
+        if not item or not item.get("value"):
+            return _confidence_field(None, 0.0, "none", True)
+        return _confidence_field(item["value"], item.get("confidence", 0.5), "viz", True, note)
 
-    issuing_authority = _search_label(ocr_text, [r"ISSUING\s+AUTHORITY", r"AUTHORITY"])
-    fields["issuingAuthority"] = _confidence_field(issuing_authority, 0.4 if issuing_authority else 0.0, "viz", True)
+    fields["placeOfBirth"] = viz_field(viz.get("placeOfBirth"), "Read from the printed row below the date of birth — confirm.")
+    fields["placeOfIssue"] = viz_field(viz.get("placeOfIssue"), "Read from the printed row — confirm.")
 
-    # "Place of issue" is a distinct printed field from "issuing authority"
-    # on Indian passports (e.g. authority = "REGIONAL PASSPORT OFFICE",
-    # place of issue = "MUMBAI") and from "date of issue" — the review form
-    # (current.issuePlace) already has an editable field for it; this was
-    # missing here, silently leaving it OCR-blank on every passport.
-    place_of_issue = _search_label(ocr_text, [r"PLACE\s+OF\s+ISSUE"])
-    fields["placeOfIssue"] = _confidence_field(place_of_issue, 0.4 if place_of_issue else 0.0, "viz", True)
+    # The issue date is derived from the printed dates by elimination (the one
+    # date that is neither DOB nor expiry); an ISO value is what the review
+    # form's date input accepts.
+    date_of_issue = confirm.get("issueDate") if confirm else None
+    fields["dateOfIssue"] = _confidence_field(
+        date_of_issue, 0.6 if date_of_issue else 0.0, "viz" if date_of_issue else "none", True,
+        "Taken from the printed dates by elimination — confirm." if date_of_issue else None,
+    )
 
-    # Applicant's home address, and PIN code specifically (spec: "address,
-    # PIN where available"). A full multi-line postal address (line 2,
-    # city, state, country as separate fields) cannot be reliably split out
-    # from OCR text alone without real layout/line-structure parsing this
-    # pipeline does not do — rather than guess and risk silently wrong data
-    # in a field staff might not double-check as carefully as a passport
-    # number, only the two pieces that ARE reliably extractable from VIZ
-    # text are attempted here: whatever follows an "Address" label on its
-    # own line (addressLine1), and the 6-digit Indian PIN code specifically
-    # (see INDIA_PIN_LABEL_RE above). addressLine2/city/state/country are
-    # intentionally left for manual entry — the review form has real,
-    # editable fields for all six either way (project rule 10: a field OCR
-    # did not return is never silently hidden, just marked "please enter
-    # manually").
-    address_line1 = _search_label(ocr_text, [r"PRESENT\s+ADDRESS", r"ADDRESS"])
-    fields["addressLine1"] = _confidence_field(address_line1, 0.3 if address_line1 else 0.0, "viz", True)
-    fields["addressLine2"] = _confidence_field(None, 0.0, "none", True)
-    fields["addressCity"] = _confidence_field(None, 0.0, "none", True)
-    fields["addressState"] = _confidence_field(None, 0.0, "none", True)
-    fields["addressCountry"] = _confidence_field(None, 0.0, "none", True)
+    # Indian passports print no "issuing authority" line; only filled when a
+    # labelled, clean value exists.
+    issuing_authority = _search_label(ocr_text, [r"ISSUING\s+AUTHORITY"])
+    fields["issuingAuthority"] = _confidence_field(issuing_authority, 0.4 if issuing_authority else 0.0, "viz" if issuing_authority else "none", True)
 
-    pin_match = INDIA_PIN_LABEL_RE.search(ocr_text or "")
-    address_pincode = pin_match.group(1) if pin_match else None
-    fields["addressPincode"] = _confidence_field(address_pincode, 0.5 if address_pincode else 0.0, "viz", True)
+    def back_field(key: str, confidence: float = 0.5) -> Dict[str, Any]:
+        value = back.get(key)
+        return _confidence_field(value, confidence if value else 0.0, "viz" if value else "none", True,
+                                 "Read from the passport's last page — confirm." if value else None)
+
+    fields["addressLine1"] = back_field("addressLine1", 0.4)
+    fields["addressLine2"] = back_field("addressLine2", 0.4)
+    fields["addressCity"] = back_field("addressCity", 0.4)
+    fields["addressState"] = back_field("addressState", 0.5)
+    fields["addressCountry"] = back_field("addressCountry", 0.5)
+    fields["addressPincode"] = back_field("addressPincode", 0.6)
+    if not fields["addressPincode"]["value"]:
+        pin_match = INDIA_PIN_LABEL_RE.search(ocr_text or "")
+        if pin_match:
+            fields["addressPincode"] = _confidence_field(pin_match.group(1), 0.5, "viz", True)
+    fields["fatherName"] = back_field("fatherName")
+    fields["motherName"] = back_field("motherName")
+    fields["spouseName"] = back_field("spouseName")
 
     # Phase 10 — current vs old passport number must never be confused.
     # The MRZ number above is always the CURRENT passport. An "old /
@@ -888,22 +939,45 @@ def extract_passport_fields(ocr_text: str, mrz: Optional[Dict[str, Any]]) -> Dic
     # shows up as printed VIZ text (endorsement page) — never in the MRZ —
     # so it is extracted completely separately and always flagged for
     # manual confirmation.
-    old_match = OLD_PASSPORT_LABEL_RE.search(ocr_text or "")
-    old_number = old_match.group(1) if old_match else None
-    fields["oldPassportNumber"] = _confidence_field(old_number, 0.3 if old_number else 0.0, "viz", True)
+    old_number = back.get("oldPassportNumber")
+    old_certain = back.get("oldPassportNumberCertain")
+    old_source_note = "Read from the old-passport line on the passport's last page — confirm."
+    if not old_number:
+        old_match = OLD_PASSPORT_LABEL_RE.search(ocr_text or "")
+        old_number = old_match.group(1) if old_match else None
+        old_source_note = None
+    old_note = old_source_note
+    if old_number and old_certain is False:
+        old_note = "First character may be misread (it came out as a digit) — compare with the old passport."
+    fields["oldPassportNumber"] = _confidence_field(old_number, (0.6 if old_certain else 0.4) if old_number else 0.0, "viz" if old_number else "none", True, old_note)
+    old_issue = back.get("oldPassportIssueDate")
+    old_date_certain = back.get("oldPassportDateCertain") is not False
+    if old_issue and not old_date_certain:
+        old_date_note = "A digit of the printed day/month may be missing (pale print) — compare with the old-passport line."
+    else:
+        old_date_note = "Date of issue printed beside the old passport number — confirm." if old_issue else None
+    fields["oldPassportIssueDate"] = _confidence_field(old_issue, (0.6 if old_date_certain else 0.3) if old_issue else 0.0,
+                                                       "viz" if old_issue else "none", True, old_date_note)
+    old_place = back.get("oldPassportPlace")
+    fields["oldPassportPlace"] = _confidence_field(old_place, 0.5 if old_place else 0.0, "viz" if old_place else "none", True,
+                                                   "Place of issue printed beside the old passport number — confirm." if old_place else None)
 
     return fields
 
 
 def _search_label(text: str, label_patterns: List[str]) -> Optional[str]:
+    """Value printed after a label, accepted only when it is a clean upper-case
+    place/name-like string (see passport_layout.clean_place)."""
     if not text:
         return None
+    import passport_layout
+
     for pattern in label_patterns:
-        m = re.search(pattern + r"\s*[:\-]?\s*([A-Z0-9 ,./-]{2,40})", text, re.IGNORECASE)
+        m = re.search(pattern + r"\s*[:\-]?\s*([A-Za-z0-9 ,./-]{2,40})", text, re.IGNORECASE)
         if m:
-            value = m.group(1).strip().rstrip(".,")
-            if value:
-                return value
+            cleaned = passport_layout.clean_place(m.group(1), min_conf=0.0, conf=100.0)
+            if cleaned:
+                return cleaned
     return None
 
 
@@ -912,25 +986,111 @@ def _search_label(text: str, label_patterns: List[str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+MRZ_V2_MAX_SECONDS = 20.0
+MRZ_V2_NO_CANDIDATE_SECONDS = 6.0  # no MRZ-shaped block found: only a short last attempt
+
+
+def _read_mrz_with_v2(bgr: np.ndarray, original_bgr: np.ndarray, max_seconds: float = MRZ_V2_MAX_SECONDS) -> Optional[Dict[str, Any]]:
+    """MRZ Reader v2 (mrz_reader.py): locates the MRZ anywhere on the page,
+    tries many reads and repairs misread characters using the ICAO check
+    digits. Returns its result dict, or None when it found nothing.
+
+    Local Tesseract only: v2 makes dozens of tiny OCR calls, which is free
+    locally but would be slow and billable through a cloud OCR provider, so
+    on Google Vision (Vercel) the original single-pass reader is used.
+    Imported lazily because mrz_reader itself imports this module."""
+    if getattr(_provider, "name", "") != "tesseract":
+        return None
+    try:
+        import mrz_reader
+
+        best: Optional[Dict[str, Any]] = None
+        # Untouched photo first (nothing the earlier preprocessing did can
+        # have cut the MRZ off), then the cropped/deskewed page.
+        images = (bgr,) if original_bgr is bgr else (original_bgr, bgr)
+        for image in images:
+            res = mrz_reader.read_mrz(image, max_seconds=max_seconds)
+            if not res.get("found"):
+                continue
+            if best is None or sum(res["checks"].values()) > sum(best["checks"].values()):
+                best = res
+            if all(best["checks"].values()):
+                break
+        return best
+    except Exception:
+        return None  # never let the new reader break the existing pipeline
+
+
+BACK_PAGE_TESSERACT_CONFIG = "--oem 3 --psm 6"
+
+
+def _ink_ocr_text(binary_ink: np.ndarray) -> str:
+    """OCR of a dark-ink-only (black on white) rendering of a page."""
+    return _provider.ocr_text(binary_ink, config=BACK_PAGE_TESSERACT_CONFIG)
+
+
+def _mrz_validity(mrz: Optional[Dict[str, Any]]) -> int:
+    if not mrz:
+        return 0
+    return sum(1 for k in ("passportNumberValid", "dateOfBirthValid", "dateOfExpiryValid", "compositeValid") if mrz.get(k))
+
+
+def _mrz_candidate_score(parsed: Dict[str, Any], ocr_text: str, engine: str) -> float:
+    """How well an MRZ read is supported: check digits first, then whether the
+    printed page confirms the names (they have no check digit) and whether
+    obvious OCR junk is left in them, after the unambiguous clean-up repairs."""
+    import passport_crosscheck
+
+    try:
+        refined, _ = passport_crosscheck.refine_mrz(parsed, ocr_text, parse_mrz_td3)
+        conf = passport_crosscheck.confirmations(refined, ocr_text)
+    except Exception:
+        return _mrz_validity(parsed) * 100.0
+    score = _mrz_validity(refined) * 100.0 + (5.0 if refined.get("valid") else 0.0)
+    score += 30.0 * bool(conf["surname"]) + 30.0 * bool(conf["givenNames"])
+    score -= 25.0 * len(conf["suspiciousNameTokens"])
+    return score + (0.5 if engine == "v2" else 0.0)
+
+
+def _mrz_trustworthy(parsed: Optional[Dict[str, Any]], ocr_text: str) -> bool:
+    """A read that needs no second opinion: all check digits valid, names
+    backed by the printed page and free of junk."""
+    if not parsed or not parsed.get("valid"):
+        return False
+    import passport_crosscheck
+
+    try:
+        refined, _ = passport_crosscheck.refine_mrz(parsed, ocr_text, parse_mrz_td3)
+        conf = passport_crosscheck.confirmations(refined, ocr_text)
+    except Exception:
+        return False
+    return bool(refined.get("valid")) and not conf["suspiciousNameTokens"] and (
+        (conf["surname"] or not refined.get("surname")) and conf["givenNames"]
+    )
+
+
 def process_passport_page(
     pil_image: Image.Image,
     forced_rotation: Optional[int] = None,
+    use_mrz_v2: bool = True,
 ) -> Dict[str, Any]:
     """Runs the full pipeline on a single passport page image and returns a
-    structured, JSON-serializable result."""
+    structured, JSON-serializable result.
+
+    Page kinds: "bio" (data page, MRZ read), "back" (address / endorsement
+    page, read from its dark ink), "blank", "other" (stamps / visa pages with
+    nothing to extract). The frontend merges the results of all pages of one
+    upload; a "back" or "other" page never carries bio-page fields."""
+    import passport_layout
+
     warnings: List[str] = []
+    notices: List[str] = []
     bgr = pil_to_bgr(pil_image)
+    original_bgr = bgr
 
     # Locate the passport's own border and flatten it out of whatever else
     # is in the photo (a desk, a hand, a background) BEFORE anything else
-    # runs — orientation scoring, the MRZ-band crop (which assumes the MRZ
-    # sits in the bottom ~22% of the *whole image*), and the blank-page
-    # check all only make sense once the frame actually just IS the
-    # document. See detect_and_crop_document_region()'s own docstring for
-    # why this step was the real root cause of real-photo extraction
-    # failures. A low-confidence detection leaves `bgr` completely
-    # untouched (region_detected=False) — every step below then behaves
-    # exactly as it did before this function existed.
+    # runs. A low-confidence detection leaves `bgr` untouched.
     bgr, region_detected = detect_and_crop_document_region(bgr)
 
     gray_check = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
@@ -945,65 +1105,315 @@ def process_passport_page(
             "documentRegionDetected": region_detected,
             "mrz": None,
             "fields": {},
+            "pageKind": "blank",
             "warnings": ["This page looks blank — no processing was attempted."],
+            "notices": [],
         }
+
+    # Cheap structural test first: is there an MRZ-shaped block (two stacked
+    # text lines of ~44 characters) at any rotation, and which way up is the
+    # page then? Pages without one (address page, stamps) skip the expensive
+    # MRZ readers entirely and are read from their dark ink instead.
+    mrz_rot: Optional[int] = None
+    if forced_rotation is None:
+        mrz_rot = passport_layout.find_mrz_rotation(bgr, _rotate_90_multiple)
+
+    back_read: Optional[Dict[str, Any]] = None
+    last_text_read: Optional[Dict[str, Any]] = None
+    if forced_rotation is None and mrz_rot is None:
+        last_text_read = passport_layout.read_back_page(bgr, _ink_ocr_text, rotate=_rotate_90_multiple)
+        if last_text_read is not None and last_text_read["parsed"]["recognised"]:
+            back_read = last_text_read
+
+    if back_read is not None:
+        return _process_back_page(bgr, back_read, region_detected)
+    # A page with no MRZ-shaped block and no recognisable address page (a stamp
+    # page, or a data page too blurry for the structural test): the rotation
+    # whose dark-ink text read best is a far cheaper orientation guess than the
+    # 4-way full-page scoring below.
+    text_rot: Optional[int] = None
+    if forced_rotation is None and mrz_rot is None and last_text_read is not None and last_text_read["score"] >= 15:
+        text_rot = last_text_read["rotation"]
+
+    # MRZ Reader v2 runs BEFORE the orientation guess. The MRZ is the one
+    # thing on the page whose correctness can be proven (check digits), so
+    # the rotation at which it was read is a far better orientation signal
+    # than the mean-OCR-confidence scoring below.
+    v2_pre: Optional[Dict[str, Any]] = None
+    mrz_orientation: Optional[int] = None
+    if forced_rotation is None and use_mrz_v2 and mrz_rot is None:
+        # No MRZ-shaped block was found by the structural test: the page may
+        # still be a data page with a damaged MRZ, so give the full reader a
+        # short chance to find one anywhere on the uncropped photo.
+        v2_pre = _read_mrz_with_v2(bgr, bgr, max_seconds=MRZ_V2_NO_CANDIDATE_SECONDS)
+        if v2_pre is not None and sum(1 for ok in v2_pre["checks"].values() if ok) >= 3:
+            rot = (v2_pre.get("winningAttempt") or {}).get("rotation")
+            if rot in ORIENTATIONS:
+                mrz_orientation = rot
 
     if forced_rotation is not None:
         orientation = {"bestRotation": forced_rotation % 360, "scores": {}, "needsReview": False}
+    elif mrz_orientation is not None:
+        orientation = {"bestRotation": mrz_orientation, "scores": {}, "needsReview": False, "source": "mrz"}
+    elif mrz_rot is not None:
+        orientation = {"bestRotation": mrz_rot, "scores": {}, "needsReview": False, "source": "mrz-block"}
+    elif text_rot is not None:
+        orientation = {"bestRotation": text_rot, "scores": {}, "needsReview": False, "source": "text"}
     else:
         orientation = evaluate_orientations(bgr)
     bgr = _rotate_90_multiple(bgr, orientation["bestRotation"])
-    if orientation["needsReview"]:
-        warnings.append("Orientation could not be determined with confidence — please check the page is right-side up.")
 
-    skew_angle = detect_skew_angle(bgr)
+    # Skew comes from the MRZ lines themselves when they can be found: the
+    # whole-foreground estimate is thrown off by a skewed scanner sheet or a
+    # neighbouring page (it measured -11.8 degrees on a passport that was
+    # tilted by 4), and a wrong deskew also ruins the crop below.
+    mrz_skew = passport_layout.mrz_skew_angle(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY))
+    skew_angle = mrz_skew if mrz_skew is not None else detect_skew_angle(bgr)
     bgr = deskew_image(bgr, skew_angle)
 
-    bgr = safe_crop_white_margins(bgr)
+    # Trim to the passport data page using the MRZ as the anchor, so neither
+    # the preview nor the OCR sees the desk, a neighbouring blank page or a
+    # white border. Pages without an MRZ fall back to the white-margin crop.
+    pre_crop = bgr
+    bgr, bio_cropped, crop_box = passport_layout.crop_to_bio_page(bgr, return_box=True)
+    if not bio_cropped:
+        bgr = safe_crop_white_margins(bgr)
 
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     # The enhanced copy is used for OCR only — bgr (returned to the caller
-    # as processedImageBase64) stays exactly as deskewed/cropped, unedited,
-    # so what staff see and download is never a contrast-boosted rendering
-    # of their document, only the real one.
-    ocr_text = normalize_ocr_text(_provider.ocr_text(enhance_for_ocr(gray), config=FULL_PAGE_TESSERACT_CONFIG))
+    # as processedImageBase64) stays exactly as deskewed/cropped, unedited.
+    ocr_gray = gray
+    if ocr_gray.shape[1] < 1600:
+        scale = min(3.0, 1800 / max(ocr_gray.shape[1], 1))
+        ocr_gray = cv2.resize(ocr_gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    ocr_text = normalize_ocr_text(_provider.ocr_text(enhance_for_ocr(ocr_gray), config=FULL_PAGE_TESSERACT_CONFIG))
 
-    # Try the dedicated, character-whitelisted MRZ-band pass first (far more
-    # accurate — see _read_mrz_band_lines); fall back to scanning the
-    # whole-page OCR text if that band doesn't yield two usable lines.
     mrz_lines = _read_mrz_band_lines(bgr) or find_mrz_lines(ocr_text)
     mrz_parsed = None
+    mrz_engine = "v1"
+    mrz_repairs: List[Dict[str, str]] = []
+    mrz_confidence: Optional[str] = None
     if mrz_lines:
         mrz_parsed = parse_mrz_td3(*mrz_lines)
+
+    # MRZ Reader v2 reads the rotated, deskewed, cropped data page, where the MRZ
+    # spans most of the width (the uncropped photo of a small passport on a
+    # large sheet is exactly where its block detector struggles). It runs when
+    # the original reader found nothing, failed a check digit, or produced a
+    # name line that the printed page does not back up (check digits do not
+    # cover names). Whichever candidate is better supported wins.
+    if use_mrz_v2 and not _mrz_trustworthy(mrz_parsed, ocr_text):
+        options: List[Tuple[Dict[str, Any], str, List[Dict[str, str]], Optional[str]]] = []
+        if mrz_parsed is not None:
+            options.append((mrz_parsed, "v1", [], None))
+        v2_results: List[Dict[str, Any]] = []
+        if v2_pre is not None:
+            v2_results.append(v2_pre)
+        if v2_pre is None or not all(v2_pre["checks"].values()):
+            v2_cropped = _read_mrz_with_v2(bgr, bgr)
+            if v2_cropped is not None:
+                v2_results.append(v2_cropped)
+        for v2 in v2_results:
+            options.append((v2["parsed"], "v2", v2["repairs"], v2["confidence"]))
+        if options:
+            best = max(options, key=lambda o: _mrz_candidate_score(o[0], ocr_text, o[1]))
+            mrz_parsed, mrz_engine, mrz_repairs, mrz_confidence = best
+
+    # No MRZ-shaped block anywhere on the page: whatever the tolerant readers
+    # "found" in its text is noise unless the check digits really back it up.
+    if mrz_parsed and mrz_rot is None and forced_rotation is None and _mrz_validity(mrz_parsed) < 3:
+        mrz_parsed = None
+        mrz_repairs = []
+        mrz_confidence = None
+    # Same for a page whose text carries the address-page labels.
+    if mrz_parsed and passport_layout.looks_like_back_page(ocr_text) and _mrz_validity(mrz_parsed) < 3:
+        mrz_parsed = None
+        mrz_repairs = []
+        mrz_confidence = None
+    back_text_page = bool(not mrz_parsed and passport_layout.looks_like_back_page(ocr_text))
+
+    if mrz_parsed:
+        import passport_crosscheck
+
+        mrz_parsed, extra_repairs = passport_crosscheck.refine_mrz(mrz_parsed, ocr_text, parse_mrz_td3)
+        for rep in extra_repairs:
+            mrz_repairs.append({"field": rep["field"], "from": rep["from"], "to": rep["to"], "reason": rep["reason"]})
+        # One line per field, from the first raw read to the final value.
+        chains: Dict[str, List[str]] = {}
+        for rep in mrz_repairs:
+            field = rep["field"]
+            if field == "name":
+                field = "givenNames"
+            if field in ("surname", "givenNames", "nationality", "issuingCountry"):
+                chain = chains.setdefault(field, [rep["from"]])
+                chain.append(rep["to"])
+        confirmed_now = passport_crosscheck.confirmations(mrz_parsed, ocr_text) if chains else {}
+        for field, chain in chains.items():
+            first = chain[0]
+            if field in ("surname", "givenNames"):
+                # Names are not protected by a check digit: a changed name is
+                # worth a look unless the page itself shows the final spelling.
+                final = (mrz_parsed.get("surname") if field == "surname" else mrz_parsed.get("givenNames")) or ""
+                if final and first.replace("<", "") != final.replace(" ", "").replace("<", "") and not confirmed_now.get(field):
+                    label = "surname" if field == "surname" else "given names"
+                    warnings.append(f"MRZ {label} needed clean-up of misread characters — compare the name with the passport.")
+            # Look-alike fixes to the nationality / issuing country (1ND -> IND)
+            # are routine and fully reported in mrzRepairs; no message needed.
         warnings.extend(mrz_parsed["warnings"])
-    else:
+    elif not back_text_page:
         warnings.append("MRZ lines were not detected — passport data will need to be entered manually.")
 
-    fields = extract_passport_fields(ocr_text, mrz_parsed)
+    # Orientation: a checksum-valid MRZ proves the page is the right way up.
+    mrz_checks_ok = _mrz_validity(mrz_parsed) >= 3
+    orientation_needs_review = bool(orientation["needsReview"]) and not mrz_checks_ok
+    if orientation_needs_review:
+        message = "Orientation could not be determined with confidence — please check the page is right-side up."
+        (notices if back_text_page else warnings).append(message)
 
-    return {
+    fallback_reason = getattr(_provider, "fallback_reason", None)
+    if fallback_reason:
+        notices.append("The Google Cloud Vision key was rejected, so the local Tesseract engine was used for this page.")
+
+    viz: Dict[str, Any] = {}
+    back: Dict[str, Any] = {}
+    page_kind = "other"
+    if mrz_parsed:
+        page_kind = "bio"
+        try:
+            rows = passport_layout.read_value_rows(bgr, mrz_top=_mrz_top(bgr))
+            viz = passport_layout.extract_bio_viz(rows, mrz_parsed)
+        except Exception:
+            viz = {}
+        # A photo that also shows the address page above the data page (one
+        # shot of the open booklet): read it too, from the part the crop cut off.
+        if bio_cropped and crop_box and crop_box[1] > 0.2 * pre_crop.shape[0]:
+            above = pre_crop[: crop_box[1] + int(0.01 * pre_crop.shape[1])]
+            try:
+                above_text = _ink_ocr_text(passport_layout.ink_binary(cv2.cvtColor(above, cv2.COLOR_BGR2GRAY)))
+                parsed_above = passport_layout.parse_back_page(above_text)
+                if parsed_above["recognised"]:
+                    back = parsed_above
+            except Exception:
+                back = {}
+    elif back_text_page:
+        page_kind = "back"
+        back = passport_layout.parse_back_page(ocr_text)
+
+    fields = extract_passport_fields(
+        ocr_text, mrz_parsed, mrz_engine_confidence=mrz_confidence, mrz_repair_count=len(mrz_repairs), viz=viz, back=back
+    )
+    if page_kind == "back":
+        fields = {k: v for k, v in fields.items() if k in BACK_FIELD_KEYS and v.get("value")}
+    elif page_kind == "other":
+        fields = {}
+        notices.append("No passport details were recognised on this page.")
+    elif page_kind == "bio":
+        sal = passport_layout.derive_salutation(
+            (fields.get("sex") or {}).get("value"), (fields.get("dateOfBirth") or {}).get("value"), (back or {}).get("spouseName")
+        )
+        if sal:
+            fields["salutation"] = _confidence_field(
+                sal["value"], 0.6, "derived", True, "Worked out from sex and date of birth: " + sal["reason"]
+            )
+            fields["salutation"]["canBeMrs"] = bool(sal.get("canBeMrs"))
+
+    result = {
         "isBlank": False,
         "orientationApplied": orientation["bestRotation"],
-        "orientationNeedsReview": orientation["needsReview"],
+        "orientationNeedsReview": orientation_needs_review,
         "orientationScores": orientation["scores"],
         "skewAngleCorrectedDegrees": round(skew_angle, 2),
         "processedImageBase64": bgr_to_base64_png(bgr),
         "documentRegionDetected": region_detected,
+        "croppedToPage": bio_cropped,
+        "pageKind": page_kind,
         "ocrText": ocr_text,
         "mrz": mrz_parsed,
+        "mrzEngine": mrz_engine,
+        "mrzConfidence": mrz_confidence,
+        "mrzRepairs": mrz_repairs,
         "fields": fields,
         "verificationStatus": "OCR Extracted — Please Verify",
         "warnings": warnings,
+        "notices": notices,
+    }
+    # The structural test can only say "MRZ-shaped block in the lower half", so
+    # a data page that sits in the UPPER half of the photo was turned the wrong
+    # way up. A read that did not validate gets one retry the other way up.
+    if (
+        mrz_rot is not None
+        and forced_rotation is None
+        and _mrz_validity(mrz_parsed) < 3
+        and orientation.get("source") == "mrz-block"
+    ):
+        retry = process_passport_page(pil_image, forced_rotation=(mrz_rot + 180) % 360, use_mrz_v2=use_mrz_v2)
+        if _mrz_validity(retry.get("mrz")) > _mrz_validity(mrz_parsed):
+            return retry
+    return result
+
+
+BACK_FIELD_KEYS = (
+    "addressLine1", "addressLine2", "addressCity", "addressState", "addressCountry", "addressPincode",
+    "fatherName", "motherName", "spouseName", "oldPassportNumber", "oldPassportIssueDate", "oldPassportPlace",
+)
+
+
+def _mrz_top(bgr: np.ndarray) -> Optional[int]:
+    import passport_layout
+
+    box = passport_layout.locate_mrz_ink(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY))
+    return box[1] if box else None
+
+
+def _process_back_page(bgr: np.ndarray, back_read: Dict[str, Any], region_detected: bool) -> Dict[str, Any]:
+    """Result for an address / endorsement page, already oriented by the text
+    reader. Only the fields this page can carry are returned."""
+    import passport_layout
+
+    notices: List[str] = []
+    bgr = _rotate_90_multiple(bgr, back_read["rotation"])
+    skew = passport_layout.text_skew_angle(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)) or 0.0
+    bgr = deskew_image(bgr, skew)
+    bgr = safe_crop_white_margins(bgr)
+    bgr, page_cropped = passport_layout.crop_back_page(bgr)
+
+    parsed = back_read["parsed"]
+    back_fields = extract_passport_fields(back_read["text"], None, back=parsed)
+    fields = {k: v for k, v in back_fields.items() if k in BACK_FIELD_KEYS and v.get("value")}
+    fallback_reason = getattr(_provider, "fallback_reason", None)
+    if fallback_reason:
+        notices.append("The Google Cloud Vision key was rejected, so the local Tesseract engine was used for this page.")
+    return {
+        "isBlank": False,
+        "orientationApplied": back_read["rotation"],
+        "orientationNeedsReview": False,
+        "orientationScores": {},
+        "skewAngleCorrectedDegrees": round(skew, 2),
+        "processedImageBase64": bgr_to_base64_png(bgr),
+        "documentRegionDetected": region_detected,
+        "croppedToPage": page_cropped,
+        "pageKind": "back",
+        "ocrText": back_read["text"],
+        "mrz": None,
+        "mrzEngine": None,
+        "mrzConfidence": None,
+        "mrzRepairs": [],
+        "fields": fields,
+        "verificationStatus": "OCR Extracted — Please Verify",
+        "warnings": [],
+        "notices": notices,
     }
 
 
-def process_passport_file(path: str, page_index: int = 0, forced_rotation: Optional[int] = None) -> Dict[str, Any]:
+def process_passport_file(
+    path: str, page_index: int = 0, forced_rotation: Optional[int] = None, use_mrz_v2: bool = True
+) -> Dict[str, Any]:
     pages = load_pages(path)
     total_pages = len(pages)
     if page_index < 0 or page_index >= total_pages:
         raise IndexError(f"page_index {page_index} out of range (file has {total_pages} page(s))")
 
-    result = process_passport_page(pages[page_index], forced_rotation=forced_rotation)
+    result = process_passport_page(pages[page_index], forced_rotation=forced_rotation, use_mrz_v2=use_mrz_v2)
     result["pageIndex"] = page_index
     result["totalPages"] = total_pages
     return result

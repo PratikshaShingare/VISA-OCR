@@ -29,7 +29,7 @@ import asyncio
 
 from playwright.async_api import async_playwright
 
-from _common import BASE, Checks, STAFF_EMAIL, STAFF_PASSWORD
+from _common import BASE, Checks, STAFF_EMAIL, STAFF_PASSWORD, start_guided_wizard_application
 
 DEVICES = [
     "iPhone SE",
@@ -127,8 +127,11 @@ async def run_for_device(p, device_name):
 
     await check_no_overflow(page, device_name, "Applications (post-login)")
 
-    # New application -> wizard stepper: tap through all 8 steps
-    await page.locator("[data-action='new-application']:visible").first.tap()
+    # New application -> wizard stepper: tap through all 8 steps.
+    # Frontend rework, section 2: the header's "New Application" dropdown
+    # is now the only entry point (Dashboard's own duplicate button was
+    # removed) — see start_guided_wizard_application() in _common.py.
+    await start_guided_wizard_application(page, tap=True)
     await page.wait_for_timeout(300)
     for step in range(1, 9):
         await page.evaluate(f"location.hash = '#/new-application/{step}'")

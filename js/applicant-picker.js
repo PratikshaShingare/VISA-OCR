@@ -46,23 +46,49 @@
     return (p.address && p.address.country) || "";
   }
 
+  // Initials for the avatar: first letters of the first and last name word.
+  function initials(name) {
+    var words = String(name || "").trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return "?";
+    var first = words[0].charAt(0);
+    var last = words.length > 1 ? words[words.length - 1].charAt(0) : "";
+    return (first + last).toUpperCase();
+  }
+
+  // A name the passport OCR clearly garbled (one very long "word", or letters
+  // only with no vowels…) is flagged, so staff check it instead of picking it blind.
+  function looksUnreliable(p) {
+    var name = String(p.fullName || "").trim();
+    if (!name) return true;
+    return name.split(/\s+/).some(function (w) { return w.length > 18; }) || !passportNumber(p);
+  }
+
+  function chipHtml(label, value) {
+    return value ? '<span class="app-picker__chip"><span>' + utils.escapeHtml(label) + "</span> " + utils.escapeHtml(value) + "</span>" : "";
+  }
+
   function resultMetaHtml(p) {
-    var bits = [];
-    if (p.nationality) bits.push(utils.escapeHtml(p.nationality));
-    if (passportNumber(p)) bits.push("Passport " + utils.escapeHtml(passportNumber(p)));
-    if (country(p)) bits.push(utils.escapeHtml(country(p)));
-    return bits.join(" · ");
+    return (
+      chipHtml("Passport", passportNumber(p)) +
+      chipHtml("", p.nationality) +
+      chipHtml("", country(p) && country(p) !== p.nationality ? country(p) : "")
+    );
   }
 
   function resultRowHtml(p) {
+    var flagged = looksUnreliable(p);
     return (
       '<button type="button" class="app-picker__result" data-action="pick-applicant" data-applicant-id="' +
       utils.escapeHtml(p.id) +
       '">' +
+      '<span class="app-picker__avatar' + (flagged ? " is-flagged" : "") + '" aria-hidden="true">' + utils.escapeHtml(initials(p.fullName)) + "</span>" +
+      '<span class="app-picker__result-body">' +
       '<span class="app-picker__result-main">' +
       "<strong>" + utils.escapeHtml(p.fullName || "Untitled applicant") + "</strong>" +
+      (flagged ? '<span class="app-picker__flag" title="The name or passport number looks incomplete — check it after choosing">Check details</span>' : "") +
       "</span>" +
-      '<span class="app-picker__result-meta">' + resultMetaHtml(p) + "</span>" +
+      '<span class="app-picker__result-meta">' + (resultMetaHtml(p) || '<span class="app-picker__chip">No passport details saved</span>') + "</span>" +
+      "</span>" +
       "</button>"
     );
   }
@@ -77,7 +103,7 @@
     var all = allProfiles();
 
     if (all.length === 0) {
-      listEl.innerHTML = '<p class="app-picker__empty">No saved applicants yet — use "+ New Applicant" to add one via Upload Passport.</p>';
+      listEl.innerHTML = '<p class="app-picker__empty">No saved applicants yet.</p>';
       return;
     }
 
@@ -90,7 +116,9 @@
       return;
     }
 
-    listEl.innerHTML = matches.map(resultRowHtml).join("");
+    listEl.innerHTML =
+      '<p class="app-picker__count">' + matches.length + (matches.length === 1 ? " applicant" : " applicants") + (rawQuery.trim() ? " found" : " saved") + "</p>" +
+      matches.map(resultRowHtml).join("");
   }
 
   function close() {
@@ -122,7 +150,7 @@
       "</div>" +
       '<div class="field app-picker__search-field">' +
       '<label for="applicantPickerSearch" class="sr-only">Search applicants by name, passport number, email, nationality or country</label>' +
-      '<input type="search" id="applicantPickerSearch" placeholder="Search by name, passport number, email, nationality or country" autocomplete="off" />' +
+      '<input type="search" id="applicantPickerSearch" placeholder="Search name, passport no. or email" autocomplete="off" />' +
       "</div>" +
       '<div class="app-picker__results" data-applicant-picker-results aria-live="polite"></div>' +
       '<div class="app-picker__footer">' +
@@ -136,6 +164,15 @@
     searchInput = wrap.querySelector("#applicantPickerSearch");
 
     searchInput.addEventListener("input", renderResults);
+    // Enter chooses the first match, like a search box should.
+    searchInput.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      var first = listEl.querySelector("[data-action='pick-applicant']");
+      if (first) {
+        e.preventDefault();
+        first.click();
+      }
+    });
 
     utils.on(wrap, "click", "[data-action='close-applicant-picker']", close);
     utils.on(wrap, "click", "[data-action='new-applicant-from-picker']", close);

@@ -231,6 +231,14 @@
   color: var(--color-text-muted);
 }
 
+/* A date field holding something that is not a valid DD-MM-YYYY date. */
+.ocr-field input.is-invalid {
+  border-color: var(--color-danger);
+}
+.ocr-field input.is-invalid + .ocr-field__meta {
+  color: var(--color-danger);
+}
+
 /* ---------------- MRZ strip ---------------- */
 .mrz-strip {
   display: flex;

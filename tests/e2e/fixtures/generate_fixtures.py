@@ -17,6 +17,12 @@ passport data must never be used as sample/test data).
   fake_signature.png — a small squiggle standing in for an uploaded
   staff/inviter signature image, used to exercise the real
   docx_utils.insert_signature_image() embedding path end-to-end.
+
+  synthetic_hotel_voucher_1.png / synthetic_hotel_voucher_2.png — two
+  distinctly-labeled fake hotel/OTA booking confirmations (never a real
+  hotel's or a real guest's data — project rule 11), used to exercise the
+  real hotel_voucher_ocr.py label-search pipeline end-to-end for the
+  Hotel Blocking "Upload Hotel Vouchers" (multi-file) flow.
 """
 
 import os
@@ -103,16 +109,85 @@ def render_fake_signature() -> Image.Image:
     return img
 
 
+def render_synthetic_hotel_voucher(rows: list[tuple[str, str]], guest_lines: list[str]) -> Image.Image:
+    W, H = 1200, 900
+    img = Image.new("RGB", (W, H), "white")
+    draw = ImageDraw.Draw(img)
+
+    try:
+        font_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 22)
+    except Exception:
+        font_big = font = ImageFont.load_default()
+
+    draw.rectangle([30, 30, W - 30, H - 30], outline="black", width=2)
+    draw.text((60, 60), "HOTEL BOOKING CONFIRMATION", font=font_big, fill="black")
+
+    y = 130
+    for label, value in rows:
+        draw.text((60, y), f"{label}: {value}", font=font, fill="black")
+        y += 40
+
+    y += 20
+    for line in guest_lines:
+        draw.text((60, y), line, font=font, fill="black")
+        y += 36
+
+    return img
+
+
 def main():
     os.makedirs(FIXTURES_DIR, exist_ok=True)
     passport_path = os.path.join(FIXTURES_DIR, "synthetic_passport.png")
     signature_path = os.path.join(FIXTURES_DIR, "fake_signature.png")
+    voucher1_path = os.path.join(FIXTURES_DIR, "synthetic_hotel_voucher_1.png")
+    voucher2_path = os.path.join(FIXTURES_DIR, "synthetic_hotel_voucher_2.png")
 
     render_synthetic_passport_page(rotate_deg=7).save(passport_path)
     render_fake_signature().save(signature_path)
 
+    render_synthetic_hotel_voucher(
+        rows=[
+            ("Hotel Name", "Fixture Grand Hotel"),
+            ("Hotel Phone", "01 23456789"),
+            ("Address", "1 Fixture Street"),
+            ("City", "Paris"),
+            ("Country", "France"),
+            ("Confirmation No", "FIX111222"),
+            ("Lead Guest Name", "Test Guestone"),
+            ("Room Type", "Deluxe Double"),
+            ("No of Rooms", "1"),
+            ("Adults", "2"),
+            ("Children", "0"),
+            ("Check-in", "01/12/2026"),
+            ("Check-out", "05/12/2026"),
+        ],
+        guest_lines=["Guest 1 Name: Test Guestone", "Guest 2 Name: Test Guesttwo"],
+    ).save(voucher1_path)
+
+    render_synthetic_hotel_voucher(
+        rows=[
+            ("Hotel Name", "Fixture Riviera Hotel"),
+            ("Hotel Phone", "09 87654321"),
+            ("Address", "2 Fixture Avenue"),
+            ("City", "Nice"),
+            ("Country", "France"),
+            ("Confirmation No", "FIX333444"),
+            ("Lead Guest Name", "Test Guestthree"),
+            ("Room Type", "Standard Twin"),
+            ("No of Rooms", "1"),
+            ("Adults", "1"),
+            ("Children", "1"),
+            ("Check-in", "06/12/2026"),
+            ("Check-out", "10/12/2026"),
+        ],
+        guest_lines=["Guest 1 Name: Test Guestthree"],
+    ).save(voucher2_path)
+
     print(f"Wrote {passport_path}")
     print(f"Wrote {signature_path}")
+    print(f"Wrote {voucher1_path}")
+    print(f"Wrote {voucher2_path}")
 
 
 if __name__ == "__main__":

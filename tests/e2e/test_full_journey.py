@@ -29,14 +29,19 @@ import tempfile
 from playwright.async_api import async_playwright
 
 from _common import (
+    future_date,
     BASE,
     FAKE_SIGNATURE_PNG,
     Checks,
     ensure_fixtures,
     fill_ocr_person,
     fresh_load_and_login,
+    pick_inviter_country,
+    pick_company_consulate,
     generate_and_download,
     generate_and_download_docx,
+    select_cover_letter_country,
+    start_guided_wizard_application,
 )
 
 checks = Checks()
@@ -56,12 +61,12 @@ async def main():
         checks.check("Logged in (header shows account)", await page.locator("[data-profile-toggle]").count() == 1)
 
         # ---------- New application ----------
-        # Three buttons now share this data-action (profile-menu item, plus
-        # one each on Dashboard and Applications) — the menu one is hidden
-        # until that dropdown is opened, so an unscoped click can resolve to
-        # a hidden element and time out. Matches the :visible-scoped pattern
-        # already used in test_device_emulation.py.
-        await page.locator("[data-action='new-application']:visible").first.click()
+        # Frontend rework, section 2: Dashboard's own inline button (a
+        # duplicate) was removed on request — the header's "New
+        # Application" dropdown is now the only entry point for the guided
+        # wizard at every viewport width. See start_guided_wizard_application()
+        # in _common.py for the full reasoning.
+        await start_guided_wizard_application(page)
         await page.wait_for_timeout(300)
         app_id = await page.evaluate("KhannaState.getActiveApplicationId()")
         checks.check("New application created with an id", bool(app_id))
@@ -217,9 +222,7 @@ async def main():
         company_count = await company_checks.count()
         for i in range(company_count):
             await company_checks.nth(i).check()
-        await page.fill("#auth-company-recipientText", "The Consulate General of Germany, Mumbai")
-        await page.locator("#auth-company-recipientText").blur()
-        await page.wait_for_timeout(300)
+        await pick_company_consulate(page, "Germany")
         ca_disabled = await page.get_attribute("[data-action='generate-authorization'][data-group='company']", "disabled")
         checks.check("Step 6: Company Authorization Generate enabled (3 people)", ca_disabled is None)
         dl = await generate_and_download_docx(
@@ -229,19 +232,19 @@ async def main():
 
         await page.click("[data-auth-tab='cover']")
         await page.wait_for_timeout(200)
-        await page.click("[data-cover-region='Europe']")
+        await select_cover_letter_country(page, "France")
         await page.wait_for_timeout(200)
         cover_checks = page.locator("[data-cover-checklist] input[type=checkbox]")
         await cover_checks.nth(0).check()
         await cover_checks.nth(1).check()
         await page.wait_for_timeout(150)
         cover_fields = {
-            "#cover-top-recipientText": "Consulate General of France, Mumbai",
+            "#cover-top-consulateName": "The Consulate General of France",
             "#cover-top-destinationCountry": "France",
-            "#cover-top-travelStartDate": "2026-12-01",
-            "#cover-top-travelEndDate": "2026-12-15",
-            "#cover-top-fundingArrangement": "Applicant",
-            "#cover-europe-cityCountryOfResidence": "Mumbai, India",
+            "#cover-top-travelStartDate": future_date(40),
+            "#cover-top-travelEndDate": future_date(54),
+            "#cover-europe-cityOfResidence": "Mumbai",
+            "#cover-europe-countryOfResidence": "India",
             "#cover-europe-numberOfNights": "14 nights",
             "#cover-europe-applicantEmploymentStatus": "Salaried",
             "#cover-europe-applicantJobTitle": "Software Engineer",
@@ -250,6 +253,7 @@ async def main():
             "#cover-europe-companionEmployerName": "N/A",
             "#cover-europe-companionEmploymentStartYear": "2015",
         }
+        await page.select_option("#cover-top-fundingType", "self")
         for sel, val in cover_fields.items():
             await page.fill(sel, val)
         await page.locator("#cover-europe-companionEmploymentStartYear").blur()
@@ -275,8 +279,7 @@ async def main():
             "#invitation-field-inviter-addressLine1": "1 Example Street",
             "#invitation-field-inviter-cityPostcode": "Example City EX1",
             "#invitation-field-inviter-fullAddress": "1 Example Street, Example City EX1",
-            "#invitation-field-inviter-country": "TestCountry",
-            "#invitation-field-inviter-cityCountry": "Example City, TestCountry",
+            "#invitation-field-inviter-cityCountry": "Mumbai, India",
             "#invitation-field-inviter-studyingOrWorking": "Working",
             "#invitation-field-inviter-universityOrCompany": "Example Corp",
             "#invitation-field-inviter-phone": "9999999999",
@@ -288,6 +291,7 @@ async def main():
             "#invitation-field-top-returnDate": "2026-11-20",
             "#invitation-field-top-fundingArrangement": "the inviter",
         }
+        await pick_inviter_country(page, "Ireland")
         for sel, val in inviter_fields.items():
             await page.fill(sel, val)
         await page.locator("#invitation-field-top-fundingArrangement").blur()
@@ -345,6 +349,18 @@ async def main():
             voice = "wife" if idx == 0 else "husband"
             checks.check(f"Step 7: Initors letter for person {idx + 1} ({voice}-voice template) generated, no error", err == "", err)
 
+        # Initors previews are whole-document editable like every other letter.
+        init_scope = f'[data-initors-preview="{person_ids[0]}"]'
+        init_edit = page.locator(f"{init_scope} [data-dv='edit-toggle']")
+        checks.check("Step 7: Initors preview has an enabled Edit button", await init_edit.count() == 1 and await init_edit.is_enabled())
+        if await init_edit.is_enabled():
+            await init_edit.click()
+            await page.wait_for_timeout(500)
+            n_init = await page.locator(f"{init_scope} .pe-field").count()
+            checks.check("Step 7: Initors letter is editable as a whole document", n_init >= 5, str(n_init))
+            await init_edit.click()
+            await page.wait_for_timeout(200)
+
         cont_disabled_7 = await page.get_attribute("[data-wizard-continue]", "disabled")
         checks.check("Step 7: combined Continue gate enabled (both document types ready)", cont_disabled_7 is None)
 
@@ -363,18 +379,15 @@ async def main():
         checks.check("Reload #1: Initors per-person sections still render after reload", resumed_sections == 2, str(resumed_sections))
 
         # ---------- Applications list + Admin dashboard ----------
-        await page.evaluate("location.hash = '#/applications'")
-        await page.wait_for_timeout(300)
-        apps_view = page.locator('[data-view="applications"]')
-        app_card_text = await apps_view.inner_text()
-        checks.check("Applications list shows the journey's own application", (last_name in app_card_text) if last_name else True)
-
-        status_select = apps_view.locator(f"[data-action='change-status'][data-app-id='{app_id}']")
-        await status_select.select_option("Documents Pending")
-        await page.wait_for_timeout(200)
-        status_after = await page.evaluate(f"KhannaState.getApplication('{app_id}').status")
-        checks.check("Applications list: status change persists to state", status_after == "Documents Pending", status_after)
-
+        # Frontend rework, section 3: Applications is now an admin-only
+        # page (this journey has been logged in as the plain STAFF account
+        # throughout), so the admin login that used to happen AFTER this
+        # section now has to happen BEFORE it — a staff account would only
+        # ever see the "Restricted to admins" denied panel here now, not
+        # the real list. The application itself is unaffected: it's the
+        # same shared KhannaState/localStorage regardless of which account
+        # is logged in, so the admin account sees the exact same
+        # journey-created application.
         await page.click("[data-profile-toggle]")
         await page.wait_for_timeout(100)
         await page.click("[data-action='logout']")
@@ -382,9 +395,23 @@ async def main():
         from _common import ADMIN_EMAIL, ADMIN_PASSWORD, login as _login
 
         await _login(page, ADMIN_EMAIL, ADMIN_PASSWORD)
+
+        await page.evaluate("location.hash = '#/applications'")
+        await page.wait_for_timeout(300)
+        apps_view = page.locator('[data-view="applications"]')
+        app_card_text = await apps_view.inner_text()
+        checks.check("Applications list shows the journey's own application", (last_name in app_card_text) if last_name else True)
+
+        checks.check("Applications list has no status dropdown (status removed)", await apps_view.locator("[data-action='change-status']").count() == 0)
+
         await page.evaluate("location.hash = '#/admin'")
         await page.wait_for_timeout(400)
-        gate_hidden = await page.get_attribute("[data-admin-gate]", "hidden")
+        # Scoped to the Admin view specifically — [data-admin-gate] /
+        # [data-admin-denied] are no longer unique to this one page: the
+        # now-admin-only Applications view (above) reuses the exact same
+        # gate/denied pattern (js/auth-view.js's renderAdminGate()), so an
+        # unscoped selector here would resolve to 2 elements.
+        gate_hidden = await page.get_attribute("[data-view='admin'] [data-admin-gate]", "hidden")
         checks.check("Admin: gate visible for admin account", gate_hidden is None)
         admin_rows = await page.locator("[data-admin-applications-table] tbody tr").count()
         checks.check("Admin: all-applications table includes the journey's own application", admin_rows >= 1, str(admin_rows))
@@ -397,8 +424,8 @@ async def main():
         # ---------- Checkpoint reload #2: final, from Admin ----------
         await page.reload()
         await page.wait_for_timeout(500)
-        final_status = await page.evaluate(f"KhannaState.getApplication('{app_id}').status")
-        checks.check("Reload #2: status change from earlier survives a fresh load", final_status == "Documents Pending", final_status)
+        still_there = await page.evaluate(f"!!KhannaState.getApplication('{app_id}')")
+        checks.check("Reload #2: the journey's application survives a fresh load", still_there)
 
         checks.check("Zero console errors across the entire continuous journey", len(console_errors) == 0, "; ".join(console_errors[:5]))
 

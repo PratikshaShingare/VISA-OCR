@@ -1,8 +1,7 @@
 /* ==========================================================================
    Khanna Travels & Holidays — Admin dashboard (Phase 11)
-   Real content behind the Phase 3 Admin gate: a full status-breakdown
-   overview, an all-applications management table (reusing the same
-   status-change control as the Applications list), the Master Excel
+   Real content behind the Phase 3 Admin gate: an application-count
+   overview, an all-applications table, the Master Excel
    Export, CSV bulk import, a read-only Document Templates reference, and a
    read-only Staff Directory. Mounted into the existing [data-admin-gate]
    markup (index.html) — auth-view.js already owns showing/hiding that
@@ -11,7 +10,7 @@
    Honesty notes (project rule 9): the Staff Directory and Document
    Templates cards are explicitly read-only — there is no backend user
    store or template-editing capability to back a real CRUD UI, so none is
-   offered. Everything else here (status changes, the export, the import)
+   offered. Everything else here (the export, the import)
    is fully real: every claimed action actually happens against
    KhannaState/the local backend, nothing is decorative.
    ========================================================================== */
@@ -171,42 +170,26 @@
     { name: "Cover Letter — Japan", category: "Cover & Authorization (step 6)" },
     { name: "Cover Letter — Singapore", category: "Cover & Authorization (step 6)" },
     { name: "Invitation Letter", category: "Invitation Letter (step 7)" },
-    { name: "Initors Covering Letter", category: "Invitation Letter (step 7)" },
+    { name: "Inviter Covering Letter", category: "Invitation Letter (step 7)" },
   ];
 
   /* ---------------------------------------------------------------------
-   * Overview — every real status (not just the dashboard's own curated
-   * subset), since an admin needs the full lifecycle breakdown, including
-   * statuses that legitimately read 0.
+   * Overview — total applications only (application status was removed from
+   * the product; see claude/ project docs).
    * ------------------------------------------------------------------- */
   function renderOverview() {
     var container = utils.qs("[data-admin-overview]");
     if (!container) return;
-    var stats = global.KhannaState.getStats();
-    var statuses = global.KhannaState.STATUSES;
-    var cards = [{ key: "total", label: "Total Applications" }].concat(
-      statuses.map(function (s) {
-        return { key: s, label: s };
-      })
-    );
-    container.innerHTML = cards
-      .map(function (c) {
-        return (
-          '<div class="card stat-card">' +
-          '<span class="stat-card__label">' + utils.escapeHtml(c.label) + "</span>" +
-          '<span class="stat-card__value">' + (stats[c.key] || 0) + "</span>" +
-          "</div>"
-        );
-      })
-      .join("");
+    container.innerHTML =
+      '<div class="card stat-card">' +
+      '<span class="stat-card__label">Total Applications</span>' +
+      '<span class="stat-card__value">' + global.KhannaState.getApplications().length + "</span>" +
+      "</div>";
   }
 
   /* ---------------------------------------------------------------------
    * All Applications table — reuses global.KhannaApplicationsList's own
-   * statusSelectHtml()/applicantLabel() (applications.js, Phase 11) rather
-   * than a second copy of that control or its change handler (project
-   * rule 15); the single delegated listener registered in applications.js
-   * already covers whatever this table renders.
+   * applicantLabel() (applications.js) rather than a second copy of it.
    * ------------------------------------------------------------------- */
   function applicationRowHtml(app) {
     var list = global.KhannaApplicationsList;
@@ -217,7 +200,6 @@
       "<td>" + utils.escapeHtml(name) + "</td>" +
       "<td>" + utils.escapeHtml(travel.destination || "—") + "</td>" +
       "<td>" + utils.escapeHtml(travel.visaCategory || "—") + "</td>" +
-      "<td>" + (list ? list.statusSelectHtml(app) : utils.escapeHtml(app.status)) + "</td>" +
       "<td>" + ((app.travellers || []).length) + "</td>" +
       "<td>" + utils.formatDate(app.updatedAt) + "</td>" +
       "</tr>"
@@ -234,14 +216,13 @@
         '<div class="empty-state">' +
         '<svg class="icon" viewBox="0 0 24 24"><path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z"/></svg>' +
         "<h3>No applications yet</h3>" +
-        "<p>Applications created from the wizard, or imported below, will appear here.</p>" +
         "</div>";
       return;
     }
 
     container.innerHTML =
       '<div class="scroll-fade admin-table-scroll-fade"><div class="admin-table-wrap"><table class="admin-table"><thead><tr>' +
-      "<th>Applicant</th><th>Destination</th><th>Visa Category</th><th>Status</th><th>Travellers</th><th>Updated</th>" +
+      "<th>Applicant</th><th>Destination</th><th>Visa Category</th><th>Travellers</th><th>Updated</th>" +
       "</tr></thead><tbody>" +
       apps.map(applicationRowHtml).join("") +
       "</tbody></table></div></div>";

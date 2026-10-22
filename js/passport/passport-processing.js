@@ -39,7 +39,6 @@
     return (
       '<div class="passport-continue-to-document card" data-passport-continue-to-document hidden>' +
       "<h3>Continue to document</h3>" +
-      "<p>Passport details are saved for this applicant. Choose which document to generate next.</p>" +
       '<div class="passport-continue-to-document__grid">' + links + "</div>" +
       "</div>"
     );
@@ -70,6 +69,8 @@
         currentPageIndex: 0,
         rotationByPage: {}, // pageIndex -> degrees, independent per page
         resultByPage: {}, // pageIndex -> last OCR result for that page
+        pending: {}, // pageIndex -> true while that page is being processed
+        failedPages: {}, // pageIndex -> true once processing that page failed
         status: "idle", // idle | counting-pages | processing | error
         errorMessage: null,
         isPdf: false,
@@ -169,6 +170,8 @@
         imageSrc = "data:image/png;base64," + result.processedImageBase64;
       } else if (cached && cached.originalDataUrl && session.totalPages === 1) {
         imageSrc = cached.originalDataUrl;
+      } else if (session.file && session.status === "error") {
+        placeholderLabel = "This page could not be processed: " + (session.errorMessage || "unknown error");
       } else if (session.file) {
         placeholderLabel = "Processing passport — preview will appear automatically...";
       } else if (session.imageRef) {
@@ -200,7 +203,7 @@
           rotationDeg: currentRotation(),
           pageIndex: session.currentPageIndex,
           totalPages: session.totalPages,
-          busy: session.status === "processing",
+          busy: !!session.pending[session.currentPageIndex],
         },
         {
           onRotate: function (delta) {
@@ -211,19 +214,25 @@
           onPrevPage: function () {
             if (session.currentPageIndex <= 0) return;
             session.currentPageIndex -= 1;
-            renderPreview(r);
-            var cachedResult = session.resultByPage[session.currentPageIndex];
-            if (cachedResult) reviewForm.applyOcrResult(r, cachedResult);
+            showPage(r);
           },
           onNextPage: function () {
             if (session.currentPageIndex >= session.totalPages - 1) return;
             session.currentPageIndex += 1;
-            renderPreview(r);
-            var cachedResult = session.resultByPage[session.currentPageIndex];
-            if (cachedResult) reviewForm.applyOcrResult(r, cachedResult);
+            showPage(r);
           },
         }
       );
+    }
+
+    // Moves to the page now in session.currentPageIndex. Only the preview
+    // changes: the form already holds the merged result of every page read so
+    // far, so paging back and forth never rewrites (or loses) what is in it. A
+    // page that has not been read yet is processed now.
+    function showPage(r) {
+      renderPreview(r);
+      var idx = session.currentPageIndex;
+      if (!session.resultByPage[idx] && session.file && !session.pending[idx]) runOcr(r, idx);
     }
 
     // Also hides/shows the upload dropzone: once a file is selected (or a
@@ -246,6 +255,9 @@
       session = freshSession();
       session.file = file;
       session.imageRef = utils.generateId("psp");
+      // A different passport: nothing read from the previous file (or typed
+      // for it) may stay behind in the form.
+      reviewForm.resetForNewUpload(r);
       showWorkspace(r);
 
       var isPdf = /pdf$/i.test(file.type) || /\.pdf$/i.test(file.name);
@@ -290,36 +302,71 @@
       renderPreview(r);
     }
 
-    function runOcr(r) {
+    // How many pages of one upload are read automatically, one after the
+    // other, right after the first: a passport PDF is the data page plus the
+    // address / old-passport page, and the user should not have to open the
+    // last page to get the address.
+    var AUTO_PAGE_LIMIT = 4;
+
+    function anyPending() {
+      return Object.keys(session.pending).length > 0;
+    }
+
+    // Processes the next page (in order) of this upload that has no result yet.
+    function processNextPage(r) {
+      if (!session || !session.file || anyPending()) return;
+      var limit = Math.min(session.totalPages, AUTO_PAGE_LIMIT);
+      for (var i = 0; i < limit; i++) {
+        if (!session.resultByPage[i] && !session.failedPages[i]) {
+          runOcr(r, i);
+          return;
+        }
+      }
+      // Every page that will be read automatically has been read.
+      reviewForm.finalizeMissing(r);
+      setStatus(r, "");
+    }
+
+    function runOcr(r, pageIndex, opts) {
       if (!session || !session.file) return;
-      session.status = "processing";
-      setStatus(r, "Running OCR — this can take a few seconds...");
+      opts = opts || {};
+      if (pageIndex === undefined) pageIndex = session.currentPageIndex;
+      var thisSession = session;
+      thisSession.pending[pageIndex] = true;
+      thisSession.status = "processing";
+      var pageLabel = thisSession.totalPages > 1 ? " (page " + (pageIndex + 1) + " of " + thisSession.totalPages + ")" : "";
+      setStatus(r, "Reading passport" + pageLabel + " — this can take a little while...");
       renderPreview(r);
 
-      var forcedRotation = session.rotationByPage[session.currentPageIndex] || null;
-      api.processPassport(session.file, session.currentPageIndex, forcedRotation).then(
+      var forcedRotation = thisSession.rotationByPage[pageIndex] || null;
+      api.processPassport(thisSession.file, pageIndex, forcedRotation).then(
         function (result) {
-          session.status = "idle";
-          session.resultByPage[session.currentPageIndex] = result;
+          if (session !== thisSession) return; // a different file was chosen meanwhile
+          delete thisSession.pending[pageIndex];
+          thisSession.status = anyPending() ? "processing" : "idle";
+          thisSession.resultByPage[pageIndex] = result;
           // The rotation just requested (forcedRotation, above) is now
           // baked into result.processedImageBase64's actual pixels — reset
           // this page's tracked rotation to 0 so the preview shows the
           // already-correct image at rotate(0deg) instead of rotating it a
-          // second time on top of itself. Rotating again from here starts a
-          // fresh delta for the *next* Run OCR call.
-          session.rotationByPage[session.currentPageIndex] = 0;
-          if (session.imageRef) {
-            imageStore.update(session.imageRef, { processedDataUrl: "data:image/png;base64," + result.processedImageBase64 });
+          // second time on top of itself.
+          thisSession.rotationByPage[pageIndex] = 0;
+          if (thisSession.imageRef && (result.pageKind === "bio" || pageIndex === 0)) {
+            imageStore.update(thisSession.imageRef, { processedDataUrl: "data:image/png;base64," + result.processedImageBase64 });
           }
-          setStatus(r, "");
-          renderPreview(r);
-          reviewForm.applyOcrResult(r, result);
+          reviewForm.applyOcrResult(r, result, thisSession.resultByPage, { pageIndex: pageIndex });
+          if (pageIndex === thisSession.currentPageIndex) renderPreview(r);
+          processNextPage(r);
         },
         function (err) {
-          session.status = "error";
-          session.errorMessage = err.message;
+          if (session !== thisSession) return;
+          delete thisSession.pending[pageIndex];
+          thisSession.failedPages[pageIndex] = true;
+          thisSession.status = "error";
+          thisSession.errorMessage = err.message;
           renderPreview(r);
           setStatus(r, err.message);
+          processNextPage(r);
         }
       );
     }
@@ -347,7 +394,7 @@
           session.resultByPage[session.currentPageIndex] = result;
           setStatus(r, "");
           renderPreview(r);
-          reviewForm.applyOcrResult(r, result);
+          reviewForm.applyOcrResult(r, result, session.resultByPage, { force: true });
         },
         function (err) {
           session.status = "error";
@@ -362,7 +409,9 @@
       var app = config.getApplication();
       if (!app) return;
       var values = reviewForm.readValues(r);
-      var lastResult = session ? session.resultByPage[session.currentPageIndex] : null;
+      // The MRZ shown with the saved passport is the one of the data page
+      // that supplied the form's details, not of whichever page is on screen.
+      var lastResult = session ? reviewForm.bioResultOf(session.resultByPage) : null;
 
       // The "Full name" field was removed from the review form itself (the
       // user only edits Given Name / Last Name now), but several other
@@ -372,6 +421,26 @@
       // Letter/Authorization/Invitation Letter checklists. Deriving it here
       // keeps that working without resurrecting a field the user asked to
       // remove from the UI.
+      var hasName = [values.applicant.firstName, values.applicant.lastName].some(function (part) {
+        return part && part.trim();
+      });
+      var hasNumber = values.current && values.current.number && String(values.current.number).trim();
+      if (!hasName || !hasNumber) {
+        var message = !hasName && !hasNumber ? "Enter the applicant's name and passport number before saving." :
+          !hasName ? "Enter the applicant's name before saving." : "Enter the passport number before saving.";
+        setStatus(r, message);
+        if (global.KhannaToast) global.KhannaToast.show(message, { type: "error" });
+        return;
+      }
+
+      var badDates = reviewForm.invalidDates(r);
+      if (badDates.length) {
+        var dateMessage = "Enter dates as DD-MM-YYYY (check: " + badDates.join(", ") + ").";
+        setStatus(r, dateMessage);
+        if (global.KhannaToast) global.KhannaToast.show(dateMessage, { type: "error" });
+        return;
+      }
+
       values.applicant.fullName = [values.applicant.firstName, values.applicant.lastName]
         .filter(function (part) {
           return part && part.trim();
@@ -455,6 +524,7 @@
         var filenameEl = utils.qs("[data-passport-filename]", r);
         if (filenameEl) filenameEl.hidden = true;
         fileInput.value = "";
+        reviewForm.resetForNewUpload(r);
         renderPreview(r);
       });
 

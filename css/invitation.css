@@ -43,6 +43,17 @@
   white-space: nowrap;
 }
 
+/* Groups the filename with its own "remove signature" icon button so the
+   two wrap together as a single unit on narrow screens — without this,
+   .signature-upload's own flex-wrap let the icon button wrap onto its own
+   line, disconnected from the filename it removes (confirmed live at
+   320-414px: the "x" landed on its own line with a large gap above it). */
+.signature-upload__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .initors-person-section {
   margin-bottom: var(--space-5);
 }
@@ -56,4 +67,21 @@
   margin: 0 0 var(--space-4);
   font-size: 0.78rem;
   color: var(--color-text-faint);
+}
+
+/* Mobile (this app's own 320/375/390/414 required widths — see
+   css/responsive.css's own header comment). Everything else on this page
+   (.card, .field-grid, .auth-person-list/.auth-person-row,
+   .hotel-generate-bar, .cover-subheading) is
+   already made responsive generically, by css/responsive.css and each
+   class's own base rules — confirmed by live-rendering this page at every
+   required width with zero horizontal overflow. The one real, visually
+   confirmed issue on THIS page's own markup was the signature filename +
+   remove button (fixed above with .signature-upload__meta); this narrows
+   the filename a little further on small phones so that grouped pair has
+   more room to sit on one line before wrapping. */
+@media (max-width: 767px) {
+  .signature-upload__filename {
+    max-width: 160px;
+  }
 }

@@ -50,11 +50,33 @@
     else delete r.dataset.activeHotelId;
   }
 
+  // The voucher's wording is edited directly IN the preview (js/preview-editor.js):
+  // click any value on the generated page, format it with the toolbar in the
+  // viewer's title line, press Regenerate. Edits are stored per hotel in
+  // hotel.editedFields (field key -> HTML), the shape the backend already
+  // understands (hotel_voucher_engine.compose_hotel_editable_fields).
+
+  // Uploaded voucher files, kept in memory only (never written to
+  // localStorage — they can contain guest personal data, project rule 11).
+  // hotelId -> { name, type, url }. hotel.voucherFileName (persisted) says
+  // a voucher was uploaded even after a reload, when the file itself is gone.
+  var voucherFiles = {};
+  // hotelId -> true while that voucher is still being read by OCR.
+  var readingVoucher = {};
+  // Set by KhannaHotels.requestPreview() (the Recent Hotel Blockings page's
+  // "Edit"): the next render opens the preview straight away.
+  var pendingPreview = false;
+
   var HOTEL_FIELDS = [
     { key: "hotelName", label: "Hotel name", required: true },
     { key: "phone", label: "Hotel phone number" },
     { key: "address", label: "Hotel address" },
     { key: "city", label: "City", required: true },
+    // Frontend rework, section 10: captured so the Cover Letter's Europe
+    // "Next Country" field can be pulled from this hotel record (via "Use
+    // Existing Details ▾ → Hotel Blocking" in cover-letter.js) instead of
+    // being guessed from the city/address text.
+    { key: "country", label: "Country", placeholder: "e.g. France" },
     { key: "confirmationNumber", label: "Booking confirmation number" },
     { key: "leadGuestName", label: "Lead guest name" },
     // Split from a single "No. of guests" field on explicit request — the
@@ -94,6 +116,24 @@
     return !!(h.hotelName && h.city && h.checkIn && h.checkOut);
   }
 
+  // The voucher is generated from the hotels that have their core details.
+  // A hotel still missing something (e.g. a voucher the OCR could not read)
+  // must not stop the others from being generated — but it is never dropped
+  // silently either: renderGenerateBar() names every hotel left out and
+  // exactly what it is missing.
+  function completeHotels(hotels) {
+    return (hotels || []).filter(isHotelComplete);
+  }
+
+  function missingFieldsOf(h) {
+    var missing = [];
+    if (!h.hotelName) missing.push("hotel name");
+    if (!h.city) missing.push("city");
+    if (!h.checkIn) missing.push("check-in date");
+    if (!h.checkOut) missing.push("check-out date");
+    return missing;
+  }
+
   function nightsBetween(checkIn, checkOut) {
     if (!checkIn || !checkOut) return null;
     var d1 = new Date(checkIn + "T00:00:00");
@@ -101,6 +141,41 @@
     if (isNaN(d1.getTime()) || isNaN(d2.getTime())) return null;
     var n = Math.round((d2 - d1) / 86400000);
     return n >= 0 ? n : null;
+  }
+
+  var FILE_ICON =
+    '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>';
+
+  function voucherThumbHtml(h, large) {
+    var f = voucherFiles[h.id];
+    if (!f) return "";
+    var isImage = /^image\//.test(f.type || "");
+    return (
+      '<a class="hotel-voucher-thumb' + (large ? " hotel-voucher-thumb--large" : "") + '" href="' + f.url + '" target="_blank" rel="noopener" ' +
+      'data-voucher-thumb title="Open the uploaded voucher">' +
+      (isImage ? '<img src="' + f.url + '" alt="Uploaded voucher: ' + utils.escapeHtml(f.name) + '" />' : FILE_ICON) +
+      "</a>"
+    );
+  }
+
+  function voucherLineHtml(h) {
+    if (!h.voucherFileName && !readingVoucher[h.id]) return "";
+    if (readingVoucher[h.id]) {
+      return '<div class="hotel-card__voucher" data-voucher-reading>' + FILE_ICON + "<span>Reading voucher " + utils.escapeHtml(h.voucherFileName || "") + "…</span></div>";
+    }
+    var f = voucherFiles[h.id];
+    return (
+      '<div class="hotel-card__voucher" data-voucher-file>' +
+      FILE_ICON +
+      (f
+        ? '<a href="' + f.url + '" target="_blank" rel="noopener">' + utils.escapeHtml(h.voucherFileName) + "</a>"
+        : "<span>" + utils.escapeHtml(h.voucherFileName) + " (file not kept after reload)</span>") +
+      (h.source === "voucher" ? '<span class="hotel-card__verify">OCR Extracted — Please Verify</span>' : "") +
+      (h.source === "voucher" && h.lookupSource
+        ? '<span class="hotel-card__verify" title="The voucher names the hotel; its address, phone and city were looked up online">Address / phone / city looked up on ' + utils.escapeHtml(h.lookupSource) + " — Please Verify</span>"
+        : "") +
+      "</div>"
+    );
   }
 
   function cardHtml(h, activeId) {
@@ -111,11 +186,12 @@
       : "Dates not set";
     return (
       '<div class="hotel-card' + (h.id === activeId ? " is-editing" : "") + '" data-hotel-card="' + h.id + '">' +
+      voucherThumbHtml(h, false) +
       '<div class="hotel-card__info">' +
       '<div class="hotel-card__name">' + utils.escapeHtml(hotelLabel(h)) + "</div>" +
       '<div class="hotel-card__meta">' + utils.escapeHtml((h.city ? h.city + " · " : "") + dateRange) + "</div>" +
+      voucherLineHtml(h) +
       "</div>" +
-      (isHotelComplete(h) ? '<span class="badge badge-success">Ready</span>' : '<span class="badge badge-warning">Incomplete</span>') +
       '<div class="hotel-card__actions">' +
       '<button class="btn btn-secondary btn-sm" type="button" data-action="edit-hotel" data-hotel-id="' + h.id + '">' +
       (h.id === activeId ? "Editing…" : "Edit") +
@@ -134,21 +210,32 @@
     if (!box) return;
     var app = getApp();
     var hotels = (app && app.hotels) || [];
-    var ready = hotels.length > 0 && hotels.every(isHotelComplete);
+    var usable = completeHotels(hotels);
+    var ready = usable.length > 0;
+    var skipped = hotels.filter(function (h) { return !isHotelComplete(h); });
 
     var lastGenerated = hotels.reduce(function (latest, h) {
       return h.voucherGeneratedAt && (!latest || h.voucherGeneratedAt > latest) ? h.voucherGeneratedAt : latest;
     }, null);
 
+    var warningIcon = '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>';
+    var notice = "";
+    if (!ready) {
+      notice =
+        '<div class="notice notice-warning">' + warningIcon +
+        "<span>Add at least one hotel with name, city and check-in/check-out dates before generating a voucher.</span></div>";
+    } else if (skipped.length) {
+      notice =
+        '<div class="notice notice-warning" data-hotel-skipped-notice>' + warningIcon +
+        "<span>Not included in the voucher yet (use Edit to complete): " +
+        skipped.map(function (h) {
+          return "<strong>" + utils.escapeHtml(hotelLabel(h)) + "</strong> — missing " + missingFieldsOf(h).join(", ");
+        }).join("; ") +
+        ".</span></div>";
+    }
+
     box.innerHTML =
-      "<h3>Hotel Voucher document</h3>" +
-      "<p>Generates the official Khanna Travels &amp; Holidays Hotel Voucher — one block per hotel below, in the exact reference format (letterhead, fonts, tables preserved).</p>" +
-      (ready
-        ? ""
-        : '<div class="notice notice-warning">' +
-          '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>' +
-          "<span>Add at least one hotel with name, city and check-in/check-out dates before generating a voucher.</span>" +
-          "</div>") +
+      notice +
       '<div class="hotel-generate-bar">' +
       '<button class="btn btn-primary btn-sm" type="button" data-action="generate-voucher"' + (ready ? "" : " disabled") + ">" +
       "Generate &amp; Preview Hotel Voucher</button>" +
@@ -170,7 +257,6 @@
         '<div class="empty-state">' +
         '<svg class="icon" viewBox="0 0 24 24"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h1m-1 4h1m4-4h1m-1 4h1M9 21v-4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4"/></svg>' +
         "<h3>No hotels blocked yet</h3>" +
-        "<p>Add each hotel booking made for this application. Once at least one hotel has its core details filled in, generate the Hotel Voucher document below.</p>" +
         "</div>";
     } else {
       var activeId = getActiveHotelId(r);
@@ -232,59 +318,109 @@
     global.KhannaState.updateHotel(appId, hotelId, { guestNames: names }, "Guest names updated");
   }
 
-  // "Upload Hotel Voucher" (explicit instruction): runs the new backend OCR
-  // module (backend/python/hotel_voucher_ocr.py) on a staff-uploaded
-  // hotel/OTA voucher and prefills whatever it could read into this
-  // hotel's own already-editable fields — nothing here is auto-verified
-  // (project rule 10, same as passport OCR): every field stays a plain,
-  // editable input, so an incorrect extraction is fixed the same way a
-  // manually-typed mistake would be. Only fields the backend actually
-  // returned a non-empty value for are touched — a field it couldn't find
-  // is left exactly as it was (blank, or whatever the user already typed),
-  // never overwritten with a blank.
-  function runHotelVoucherOcr(app, hotelId, file, r) {
-    var panel = utils.qs("[data-hotel-panel]", r);
-    var statusEl = utils.qs("[data-hotel-voucher-status]", panel);
-    if (statusEl) statusEl.textContent = "Extracting details from the voucher — this can take a few seconds...";
-
-    api.processHotelVoucher(file).then(
-      function (result) {
-        var hotel = global.KhannaState.getHotel(app.id, hotelId);
-        if (!hotel) return; // panel was closed / hotel removed while this was in flight
-        var fields = result.fields || {};
-        var patch = {};
-        Object.keys(fields).forEach(function (key) {
-          var value = fields[key];
-          if (value !== null && value !== undefined && String(value).trim() !== "") {
-            patch[key] = value;
-          }
-        });
-        if (result.guestNames && result.guestNames.length) {
-          patch.guestNames = result.guestNames;
-        }
-        if (Object.keys(patch).length === 0) {
-          if (statusEl) {
-            statusEl.textContent = "No recognizable details were found on this file — please enter them manually below.";
-          }
-          return;
-        }
-        global.KhannaState.updateHotel(app.id, hotelId, patch, "Hotel voucher details extracted");
-        var updated = global.KhannaState.getHotel(app.id, hotelId);
-        HOTEL_FIELDS.forEach(function (f) {
-          var el = utils.qs('[data-hotel-field="' + f.key + '"]', panel);
-          if (el) el.value = updated[f.key] || "";
-        });
-        renderGuestNames(updated, r);
-        if (statusEl) {
-          statusEl.textContent =
-            (result.warnings && result.warnings[0]) ||
-            "Extracted — please verify every field against the voucher before saving.";
-        }
-      },
-      function (err) {
-        if (statusEl) statusEl.textContent = (err && err.message) || "Could not read the hotel voucher.";
+  // Turns one OCR result into a hotel patch object (used by the "Upload
+  // Hotel Vouchers" batch flow below). Only fields the backend actually returned a non-empty value
+  // for are included — a field it couldn't find is left out of the patch
+  // entirely (never overwritten with a blank), same honesty rule as
+  // passport OCR (project rule 10).
+  function ocrResultToPatch(result) {
+    var fields = (result && result.fields) || {};
+    var patch = {};
+    Object.keys(fields).forEach(function (key) {
+      var value = fields[key];
+      if (value !== null && value !== undefined && String(value).trim() !== "") {
+        patch[key] = value;
       }
-    );
+    });
+    if (result && result.guestNames && result.guestNames.length) {
+      patch.guestNames = result.guestNames;
+    }
+    // Where the address / phone / city came from, so the card can say so
+    // ("looked up", not "read from the voucher") — only set on a real hit.
+    var lookup = result && result.lookup;
+    if (lookup && lookup.status === "ok") {
+      patch.lookupSource = lookup.source === "google_places" ? "Google" : "OpenStreetMap";
+    }
+    return patch;
+  }
+
+  // "Upload Hotel Vouchers" (plural — frontend rework, section: Hotel
+  // Blocking multi-voucher upload): one NEW hotel record per selected
+  // file, each run through the same real OCR pipeline as the single-hotel
+  // flow above (never a second, fake code path) and left just as
+  // editable/unverified. Files are processed ONE AT A TIME (not
+  // Promise.all) so the backend — a single local process — never gets N
+  // simultaneous OCR requests at once, and so the status line can report
+  // real per-file progress; a failure on one file is reported and the rest
+  // still proceed (never lets one bad upload silently drop the others).
+  function runBatchHotelVoucherOcr(app, files, r) {
+    var statusEl = utils.qs("[data-hotel-batch-upload-status]", r);
+    var total = files.length;
+    var failures = []; // the OCR call itself errored (network/backend down/unreadable file)
+    var noFieldsFound = []; // OCR ran fine but found nothing usable
+    var extracted = 0;
+    var lookedUp = 0;
+    var notLookedUp = []; // hotel named on the voucher, but the online lookup found nothing
+    var warned = []; // the backend flagged something to check (e.g. nights vs dates)
+
+    function next(index) {
+      if (index >= total) {
+        renderList();
+        if (statusEl) {
+          var parts = [total + " hotel(s) added, one per voucher — review every field below (extraction is never auto-verified)."];
+          if (extracted > 0) parts.push(extracted + " had readable details filled in automatically.");
+          if (lookedUp > 0) parts.push("Address, phone and city of " + lookedUp + " hotel(s) were looked up online by hotel name — please verify them.");
+          if (notLookedUp.length) parts.push("Address / phone / city could not be looked up for: " + notLookedUp.join(", ") + " — fill them in from the voucher.");
+          warned.forEach(function (w) { parts.push(w); });
+          if (noFieldsFound.length) parts.push("No details found on: " + noFieldsFound.join(", ") + ".");
+          if (failures.length) parts.push("Could not read: " + failures.join(", ") + ".");
+          statusEl.textContent = parts.join(" ");
+        }
+        // Every hotel read OK and complete -> generate the voucher straight
+        // away, one block per uploaded voucher. Anything missing stays for the
+        // staff member to fill in first (never guessed).
+        autoPreviewIfReady(false);
+        return;
+      }
+      var file = files[index];
+      if (statusEl) {
+        statusEl.textContent = "Processing voucher " + (index + 1) + " of " + total + " (" + file.name + ")…";
+      }
+      // The hotel record is created up front and kept regardless of what
+      // happens below — a blank, manually-fillable entry is more useful
+      // than silently dropping the voucher, and the card shows the uploaded
+      // file immediately while it is being read.
+      var hotel = global.KhannaState.addHotel(app.id);
+      voucherFiles[hotel.id] = { name: file.name, type: file.type || "", url: URL.createObjectURL(file) };
+      readingVoucher[hotel.id] = true;
+      global.KhannaState.updateHotel(app.id, hotel.id, { source: "voucher", voucherFileName: file.name }, null);
+      renderList();
+      api.processHotelVoucher(file).then(
+        function (result) {
+          delete readingVoucher[hotel.id];
+          var patch = ocrResultToPatch(result);
+          if (Object.keys(patch).length > 0) {
+            global.KhannaState.updateHotel(app.id, hotel.id, patch, "Hotel voucher details extracted");
+            extracted += 1;
+            if (patch.lookupSource) lookedUp += 1;
+            else if (result.lookup && result.lookup.status !== "skipped") notLookedUp.push(file.name);
+            (result.warnings || []).forEach(function (w) { warned.push(file.name + ": " + w); });
+          } else {
+            noFieldsFound.push(file.name);
+            renderList();
+          }
+          next(index + 1);
+        },
+        function () {
+          delete readingVoucher[hotel.id];
+          failures.push(file.name);
+          renderList();
+          next(index + 1);
+        }
+      );
+    }
+
+    next(0);
   }
 
   function openPanel(hotelId, r) {
@@ -306,20 +442,22 @@
       "<h3>Editing: " + utils.escapeHtml(hotelLabel(hotel)) + "</h3>" +
       '<button class="btn btn-ghost btn-sm" type="button" data-action="close-hotel-panel">Close</button>' +
       "</div>" +
-      '<div class="hotel-voucher-upload" data-hotel-voucher-upload>' +
-      '<input type="file" accept="image/jpeg,image/png,image/webp,image/bmp,application/pdf" data-hotel-voucher-file-input hidden />' +
-      '<button type="button" class="btn btn-secondary btn-sm" data-hotel-voucher-browse>Upload Hotel Voucher</button>' +
-      '<span class="hotel-voucher-upload__status" data-hotel-voucher-status></span>' +
-      "</div>" +
-      '<p class="field-hint">Extracts whatever this voucher prints into the fields below — every field stays fully editable, so fix anything the extraction gets wrong before saving.</p>' +
+      (voucherFiles[hotel.id]
+        ? '<div class="hotel-panel__voucher">' + voucherThumbHtml(hotel, true) +
+          '<div><div class="hotel-panel__voucher-name">' + utils.escapeHtml(hotel.voucherFileName) + "</div>" +
+          '<div class="field-hint">OCR Extracted — Please Verify.</div></div></div>'
+        : hotel.voucherFileName
+          ? '<p class="field-hint">Voucher "' + utils.escapeHtml(hotel.voucherFileName) + '" — OCR Extracted — Please Verify.</p>'
+          : "") +
       '<div class="field-grid">' + HOTEL_FIELDS.map(fieldRowHtml).join("") + "</div>" +
       '<div class="hotel-panel__guests">' +
       "<label>Guest names on the voucher</label>" +
       '<div data-guest-names-list></div>' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-action="hotel-use-applicant-lead">Use existing applicant as lead guest</button> ' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-action="hotel-use-applicant-guest">Add existing applicant as guest</button> ' +
       '<button type="button" class="btn btn-ghost btn-sm" data-action="add-guest-name">' +
       '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>' +
       "Add guest name</button>" +
-      '<p class="field-hint">Leave empty to use the lead guest name only.</p>' +
       "</div>" +
       "</div>";
 
@@ -373,76 +511,131 @@
   var viewerHandles = new WeakMap();
 
   function applicantNameOf(app) {
-    return [app.applicant.firstName, app.applicant.lastName].filter(Boolean).join(" ") || "Application";
+    var label = global.KhannaApplicationsList ? global.KhannaApplicationsList.applicantLabel(app) : "";
+    return label && label !== "Untitled applicant" ? label : "Application";
   }
 
-  function markVoucherGenerated(app) {
+  function markVoucherGenerated() {
+    // Previewing from the Dashboard's View icon only re-displays the
+    // voucher — it must not change "Last generated" / "Updated" dates.
+    if (global.KhannaRouter && global.KhannaRouter.isPreviewMode()) return;
+    // Read the application FRESH: edits made in the preview are saved into
+    // the hotel records while the PDF is being generated, and stamping from
+    // an older snapshot would write them back out.
+    var app = getApp();
+    if (!app) return;
     var ts = new Date().toISOString();
     var hotels = (app.hotels || []).map(function (h) {
       return Object.assign({}, h, { voucherGeneratedAt: ts });
     });
-    // Goes through the normal state-change subscription (renderList() only
-    // — renderGenerateBar's own "Last generated" meta line is cosmetic and
-    // does not need to force a viewer remount, so this module does NOT
-    // resubscribe renderGenerateBar to every state change).
     global.KhannaState.updateApplication(app.id, { hotels: hotels }, "Hotel voucher generated");
   }
 
-  // generateAndPreview() replaces the old "Generate (.docx)" / "Download
-  // as PDF" two-button flow (a real 31-section-spec requirement: preview
-  // must show the exact generated PDF, and DOCX/PDF must both come from
-  // the shared viewer rather than two separate blind downloads). Both
-  // loadPdf/loadDocx below read getApp()/app.hotels live at CALL time (not
-  // a stale snapshot captured once), so the viewer's own "Regenerate"
-  // button — or simply reopening/editing hotels and clicking Generate
-  // again — always reflects whatever is currently saved.
-  function generateAndPreview(btn) {
+  // Saves one edited value from the preview into its hotel record.
+  function saveEditedField(hotelId, key, html) {
     var app = getApp();
     if (!app) return;
+    var patch = {};
+    patch[key] = html; // null clears the override; a string sets it
+    global.KhannaState.updateHotel(app.id, hotelId, { editedFields: patch }, null);
+  }
+
+  // Mounts (once per root) the shared document viewer with the editable
+  // layer, and returns its handle.
+  function ensureViewer(r) {
+    var handle = viewerHandles.get(r);
+    if (handle) return handle;
+    var previewBox = utils.qs("[data-voucher-preview]", r);
+    if (!previewBox) return null;
+    var editor = global.KhannaPreviewEditor.create({
+      getHotels: function () {
+        var a = getApp();
+        return (a && a.hotels) || [];
+      },
+      composeFields: function (hotels) {
+        return api.composeHotelFields(hotels);
+      },
+      onFieldChange: saveEditedField,
+    });
+    handle = global.KhannaDocumentViewer.mount(previewBox, {
+      title: "Hotel Voucher",
+      regenerateLabel: "Regenerate",
+      editor: editor,
+      // The PDF and where each editable value sits on its page come from ONE
+      // backend call (the PDF is the exact file "Download as PDF" hands over).
+      // Reads getApp()/app.hotels live at CALL time, so Regenerate — or any
+      // Download/Print with unsaved edits — always reflects what is saved.
+      loadPdf: function () {
+        var a = getApp();
+        var hotels = completeHotels(a.hotels);
+        if (!hotels.length) {
+          return Promise.reject(new Error("Add at least one hotel with name, city and check-in/check-out dates first."));
+        }
+        return api.previewHotelVoucher(hotels, applicantNameOf(a)).then(function (res) {
+          res.hotelIds = hotels.map(function (h) { return h.id; });
+          return res;
+        });
+      },
+      loadDocx: function () {
+        var a = getApp();
+        return api.downloadHotelVoucher(completeHotels(a.hotels), "docx", applicantNameOf(a));
+      },
+      onRefreshed: markVoucherGenerated,
+      onRegenerate: function () {
+        return Promise.resolve();
+      },
+    });
+    viewerHandles.set(r, handle);
+    return handle;
+  }
+
+  // generateAndPreview() replaces the old "Generate (.docx)" / "Download
+  // as PDF" two-button flow: preview shows the exact generated PDF, and
+  // DOCX/PDF both come from the shared viewer. `btn` is optional (the
+  // automatic previews after an upload / from Recent Hotel Blockings have no
+  // button click behind them).
+  function generateAndPreview(btn) {
+    var app = getApp();
+    if (!app) return Promise.resolve();
     showVoucherError("");
     var r = root();
-    if (!r) return;
-    var previewBox = utils.qs("[data-voucher-preview]", r);
-    if (!previewBox) return;
+    if (!r) return Promise.resolve();
+    var handle = ensureViewer(r);
+    if (!handle) return Promise.resolve();
 
-    var handle = viewerHandles.get(r);
-    if (!handle) {
-      handle = global.KhannaDocumentViewer.mount(previewBox, {
-        title: "Hotel Voucher",
-        loadPdf: function () {
-          var a = getApp();
-          return api.downloadHotelVoucher(a.hotels, "pdf", applicantNameOf(a));
-        },
-        loadDocx: function () {
-          var a = getApp();
-          return api.downloadHotelVoucher(a.hotels, "docx", applicantNameOf(a));
-        },
-        onEdit: function () {
-          var listEl = utils.qs("[data-hotels-list]", root());
-          if (listEl) listEl.scrollIntoView({ behavior: "smooth", block: "start" });
-        },
-        onRegenerate: function () {
-          return Promise.resolve();
-        },
-      });
-      viewerHandles.set(r, handle);
+    var originalText = btn ? btn.textContent : "";
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Generating…";
     }
-
-    var originalText = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "Generating…";
-    handle
+    return handle
       .refresh()
-      .then(function () {
-        markVoucherGenerated(app);
-      })
       .catch(function (err) {
         showVoucherError(err && err.message ? err.message : "Could not generate the hotel voucher.");
       })
       .finally(function () {
-        btn.disabled = false;
-        btn.textContent = originalText;
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = originalText;
+        }
       });
+  }
+
+  function isReadyToGenerate() {
+    var app = getApp();
+    var hotels = (app && app.hotels) || [];
+    return completeHotels(hotels).length > 0 && !Object.keys(readingVoucher).length;
+  }
+
+  function autoPreviewIfReady(scroll) {
+    var r = root();
+    if (!r || !isReadyToGenerate()) return Promise.resolve();
+    var p = generateAndPreview(null);
+    if (scroll) {
+      var box = utils.qs("[data-voucher-preview]", r);
+      if (box && box.scrollIntoView) box.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    return p;
   }
 
   function mountSkeleton() {
@@ -452,13 +645,24 @@
       '<div class="view-header">' +
       '<div class="view-header__text">' +
       "<h2>Hotel blocking</h2>" +
-      "<p>Add every hotel booked/blocked for this application, then generate the official Khanna Travels &amp; Holidays Hotel Voucher document straight from the reference format.</p>" +
       "</div>" +
+      '<div class="view-header__actions">' +
+      // "Upload Hotel Vouchers" (plural, frontend rework): one NEW hotel
+      // per selected file, each run through the real OCR pipeline — see
+      // runBatchHotelVoucherOcr() above. A real <input multiple> file
+      // picker, not a decorative button (project rule 9).
+      '<input type="file" accept="image/jpeg,image/png,image/webp,image/bmp,application/pdf" multiple data-hotel-batch-upload-input hidden />' +
+      '<button class="btn btn-secondary btn-sm" type="button" data-action="upload-hotel-vouchers">' +
+      '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>' +
+      "Upload Hotel Vouchers" +
+      "</button>" +
       '<button class="btn btn-primary btn-sm" type="button" data-action="add-hotel">' +
       '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>' +
-      "Add hotel" +
+      "Add hotel Manually" +
       "</button>" +
       "</div>" +
+      "</div>" +
+      '<p class="field-hint" data-hotel-batch-upload-status></p>' +
       '<div class="hotel-list" data-hotels-list></div>' +
       '<div data-hotel-panel></div>' +
       '<div class="card" data-voucher-generate></div>' +
@@ -469,6 +673,25 @@
       if (!app) return;
       var hotel = global.KhannaState.addHotel(app.id);
       openPanel(hotel.id, r);
+    });
+
+    utils.on(r, "click", "[data-action='upload-hotel-vouchers']", function () {
+      var input = utils.qs("[data-hotel-batch-upload-input]", r);
+      if (input) input.click();
+    });
+
+    // Auto-runs on selection — same "no separate Run button" pattern as
+    // the single-hotel upload above and Upload Passport. `target.value =
+    // ""` afterward lets staff re-select the SAME file(s) a second time
+    // (e.g. after fixing something and wanting to re-run OCR fresh) —
+    // browsers don't fire "change" again for an unchanged file list
+    // otherwise.
+    utils.on(r, "change", "[data-hotel-batch-upload-input]", function (e, target) {
+      var app = getApp();
+      var files = target.files ? Array.prototype.slice.call(target.files) : [];
+      target.value = "";
+      if (!app || !files.length) return;
+      runBatchHotelVoucherOcr(app, files, r);
     });
 
     utils.on(r, "click", "[data-action='edit-hotel']", function (e, target) {
@@ -489,23 +712,6 @@
       closePanel(r);
     });
 
-    utils.on(r, "click", "[data-hotel-voucher-browse]", function (e) {
-      e.stopPropagation();
-      var panel = utils.qs("[data-hotel-panel]", r);
-      var input = utils.qs("[data-hotel-voucher-file-input]", panel);
-      if (input) input.click();
-    });
-
-    // Auto-runs on selection — same "no separate Run button" pattern as
-    // Upload Passport (js/passport/passport-processing.js), on request.
-    utils.on(r, "change", "[data-hotel-voucher-file-input]", function (e, target) {
-      var app = getApp();
-      var activeId = getActiveHotelId(r);
-      var file = target.files && target.files[0];
-      if (!app || !activeId || !file) return;
-      runHotelVoucherOcr(app, activeId, file, r);
-    });
-
     utils.on(r, "click", "[data-action='add-guest-name']", function () {
       var app = getApp();
       var activeId = getActiveHotelId(r);
@@ -516,6 +722,45 @@
       global.KhannaState.updateHotel(app.id, activeId, { guestNames: names }, null);
       renderGuestNames(global.KhannaState.getHotel(app.id, activeId), r);
     });
+
+    // "Use existing applicant" — same saved-people pool every other document
+    // page uses (KhannaApplicantPicker), but a hotel voucher lists guests, not
+    // an application's applicant, so the picked person only fills the lead
+    // guest name or is added to the guest-name list of the hotel being edited.
+    function applicantGuestName(profile) {
+      var name = String((profile && profile.fullName) || "").trim();
+      if (!name) return "";
+      var sal = String((profile && profile.salutation) || "").trim();
+      return sal ? sal.replace(/\.?$/, ".") + " " + name : name;
+    }
+    function pickApplicantForHotel(asLead) {
+      var app = getApp();
+      var activeId = getActiveHotelId(r);
+      if (!app || !activeId || !global.KhannaApplicantPicker) return;
+      global.KhannaApplicantPicker.open(function (profile) {
+        var guest = applicantGuestName(profile);
+        if (!guest) {
+          global.KhannaToast && global.KhannaToast.show && global.KhannaToast.show("That saved applicant has no name.", "warning");
+          return;
+        }
+        if (getActiveHotelId(r) !== activeId) return;
+        saveGuestNamesFromDom(app.id, activeId, r); // keep in-progress typing
+        var hotel = global.KhannaState.getHotel(app.id, activeId);
+        if (!hotel) return;
+        if (asLead) {
+          global.KhannaState.updateHotel(app.id, activeId, { leadGuestName: guest }, "Lead guest set from saved applicant");
+        } else {
+          var names = (hotel.guestNames || []).slice();
+          var already = names.some(function (n) { return String(n).trim().toLowerCase() === guest.toLowerCase(); }) ||
+            String(hotel.leadGuestName || "").trim().toLowerCase() === guest.toLowerCase();
+          if (!already) names.push(guest);
+          global.KhannaState.updateHotel(app.id, activeId, { guestNames: names }, already ? null : "Guest added from saved applicant");
+        }
+        openPanel(activeId, r);
+      });
+    }
+    utils.on(r, "click", "[data-action='hotel-use-applicant-lead']", function () { pickApplicantForHotel(true); });
+    utils.on(r, "click", "[data-action='hotel-use-applicant-guest']", function () { pickApplicantForHotel(false); });
 
     utils.on(r, "click", "[data-action='remove-guest-name']", function (e, target) {
       var app = getApp();
@@ -589,11 +834,29 @@
       r.innerHTML = '<p class="field-hint">Create or continue an application above to start adding hotels.</p>';
       return;
     }
+    var app = getApp();
+    if (r.dataset.mounted && r.dataset.appId !== app.id) {
+      // Switched to a different application: the old preview/panel belong
+      // to the previous one, so rebuild from scratch.
+      delete r.dataset.mounted;
+      setActiveHotelId(r, null);
+    }
     if (!r.dataset.mounted) {
       r.dataset.mounted = "1";
+      r.dataset.appId = app.id;
+      var oldViewer = viewerHandles.get(r);
+      if (oldViewer) {
+        try { oldViewer.destroy(); } catch (e) { /* container already gone */ }
+        viewerHandles.delete(r);
+      }
       mountSkeleton();
     }
     renderList();
+    if (pendingPreview && r === utils.qs("[data-hotel-blocking-page-root]")) {
+      pendingPreview = false;
+      // Straight to the editable preview (Recent Hotel Blockings -> Edit).
+      autoPreviewIfReady(true);
+    }
   }
 
   function init() {
@@ -609,8 +872,19 @@
       if (root() && root().dataset.mounted) renderList();
     });
 
-    if (location.hash.indexOf("new-application") !== -1 || location.hash.indexOf("hotel-blocking") !== -1) render();
+    var startView = global.KhannaRouter ? global.KhannaRouter.parseHash().view : "";
+    if (startView === "new-application" || startView === "hotel-blocking") render();
   }
+
+  global.KhannaHotels = {
+    // Recent Hotel Blockings -> "Edit": make the next Hotel Blocking page
+    // render open the (editable) preview straight away.
+    requestPreview: function () {
+      pendingPreview = true;
+    },
+    isHotelComplete: isHotelComplete,
+    completeHotels: completeHotels,
+  };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);

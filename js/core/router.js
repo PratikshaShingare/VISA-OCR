@@ -26,14 +26,32 @@
     // [data-view]/[data-nav-link] handling already covers navigating to and
     // highlighting these with no further changes to this file.
     "cover-letter",
+    // "Recent Cover Letters" list (reached from the Cover Letter page).
+    "cover-letters",
     "hotel-blocking",
+    // "Recent Hotel Blockings" list (reached from the Hotel Blocking page).
+    "hotel-blockings",
     "company-authorization",
     "passport-authorization",
     "checklist-letter",
     "invitation-letter",
     "upload-passport",
+    // "Recent Passports" list (reached from the Upload Passport page).
+    "passport-applications",
   ];
   var WIZARD_STEP_COUNT = 8;
+
+  // Preview-only mode (Dashboard "View" eye icon): "#/<doc-view>/preview"
+  // opens one of these document pages showing only its generated-document
+  // preview — no form fields. Only the five application-backed document
+  // pages support it; for any other view the "/preview" suffix is ignored.
+  var PREVIEW_VIEWS = [
+    "cover-letter",
+    "hotel-blocking",
+    "company-authorization",
+    "passport-authorization",
+    "invitation-letter",
+  ];
 
   // Wizard-step completion gate: each step's own module (passport-processing.js
   // for step 1, later phases for the rest) registers a validator here instead
@@ -69,12 +87,15 @@
     var raw = (location.hash || "").replace(/^#\/?/, "");
     var parts = raw.split("/").filter(Boolean);
     var view = VALID_VIEWS.indexOf(parts[0]) !== -1 ? parts[0] : DEFAULT_VIEW;
-    var step = parts[1] ? parseInt(parts[1], 10) : null;
-    return { view: view, step: step };
+    var mode = parts[1] === "preview" && PREVIEW_VIEWS.indexOf(view) !== -1 ? "preview" : null;
+    var step = parts[1] && !mode ? parseInt(parts[1], 10) : null;
+    return { view: view, step: step, mode: mode };
   }
 
-  function navigate(view, step) {
-    var hash = "#/" + view + (step ? "/" + step : "");
+  // mode: pass "preview" (with step null) to open a document page in
+  // preview-only mode; omit for the normal full page / wizard step.
+  function navigate(view, step, mode) {
+    var hash = "#/" + view + (mode === "preview" ? "/preview" : step ? "/" + step : "");
     if (location.hash === hash) {
       render();
     } else {
@@ -137,6 +158,9 @@
   function render() {
     var parsed = parseHash();
     setActiveView(parsed.view);
+    // Drives css/document-preview.css (hides everything but the preview).
+    // Always rewritten, so any normal navigation leaves preview mode.
+    document.documentElement.setAttribute("data-doc-mode", parsed.mode || "");
     if (parsed.view === "new-application") {
       setActiveStep(parsed.step || 1);
       // .stepper-nav sits inside a .view that's `display:none` until
@@ -174,6 +198,19 @@
     // Stepper tabs inside the New Application wizard.
     utils.on(document, "click", ".stepper-nav__item", function (e, target) {
       navigate("new-application", parseInt(target.getAttribute("data-step"), 10));
+    });
+
+    // "Save & exit": only an application with a name can be saved; an empty one
+    // stays where it is.
+    utils.on(document, "click", "[data-wizard-save-exit]", function (e) {
+      e.preventDefault();
+      var app = global.KhannaState && global.KhannaState.getActiveApplication();
+      if (app && global.KhannaApplicationsList && !global.KhannaApplicationsList.hasName(app)) {
+        if (global.KhannaToast) global.KhannaToast.show("Enter the applicant's name before saving.", { type: "error" });
+        return;
+      }
+      if (app) global.KhannaState.markApplicationSaved(app.id);
+      navigate("dashboard");
     });
 
     // Shared wizard-footer "Continue" button — advances one step. Disabled
@@ -225,6 +262,9 @@
     init: init,
     navigate: navigate,
     parseHash: parseHash,
+    isPreviewMode: function () {
+      return parseHash().mode === "preview";
+    },
     registerStepValidator: registerStepValidator,
     refreshWizardFooter: refreshWizardFooter,
   };

@@ -70,6 +70,15 @@
     knownFacts: null,
     loadingLookup: false,
     generating: false,
+    // Frontend rework, Phase 4 extension: the Word-like body editor's
+    // {fieldKey: html} override map — same "absent/null = auto-generate,
+    // a real string = apply the edit" contract every other document type
+    // uses (see js/invitation.js's own state.editedFields). This page has
+    // no Application record to persist into (module docstring above — a
+    // standalone document, not tied to any Applicant/Traveller), so the
+    // overrides simply live in this module's own state, exactly like
+    // checkedDocumentIds already does.
+    editedFields: {},
   };
 
   // Single standalone root (no dual-mount for this page), so a plain
@@ -77,6 +86,42 @@
   // cover-letter.js/invitation.js, which all need a WeakMap because they
   // can each mount into two different DOM roots.
   var viewerHandle = null;
+
+  /* ---------------------------------------------------------------------
+   * Editable preview — the checkbox-driven document SELECTION is unchanged;
+   * the 6 pieces of generated WORDING (see required_document_letter_engine.
+   * REQUIRED_DOCUMENT_LETTER_EDITABLE_FIELD_KEYS: the greeting sentence, the
+   * country/visa-type lines, the WHOLE variable-length checklist as one
+   * field, the processing-time line and the visa-fees line) are edited
+   * directly on the real preview page (Edit button, js/document-viewer.js).
+   * Edits live in state.editedFields.
+   * ------------------------------------------------------------------- */
+
+  var FIELD_LABELS = {
+    greetingSentence: "greeting sentence",
+    countryLine: "country line",
+    visaTypeLine: "visa type line",
+    checklistItems: "documents-required checklist",
+    processingTime: "processing time line",
+    visaFees: "visa fees line",
+  };
+
+  function makeEditor() {
+    return global.KhannaPreviewEditor.createForDocument({
+      getEditedFields: function () { return state.editedFields; },
+      // The auto-generated wording each value would have WITHOUT edits,
+      // from the real generator.
+      composeFields: function () {
+        return api.composeRequiredDocumentLetterFields(readForm()).then(function (res) {
+          return (res && res.fields) || {};
+        });
+      },
+      onFieldChange: function (key, html) {
+        state.editedFields[key] = html; // null clears the override
+      },
+      fieldLabel: function (key) { return FIELD_LABELS[key] || key; },
+    });
+  }
 
   function root() {
     return utils.qs("[data-checklist-letter-root]");
@@ -159,7 +204,6 @@
 
       '<div class="card" style="margin-bottom:var(--space-4);">' +
       '<h3 style="margin-top:0;">Figures for this letter</h3>' +
-      '<p class="field-hint" style="margin-top:0;">Pre-filled automatically when a verified figure is on file for this country/visa type — always editable, and never invented when nothing is on file (you\'ll see "Check current official requirement" instead). Bank statement/ITR/processing-time pick-lists are staff convenience shortcuts, not a claim about this specific country\'s actual requirement — pick "Custom" to type the consulate\'s own exact wording.</p>' +
       '<div class="field-grid">' +
       pickListHtml("bankStatementDuration", "Bank statement — last how long", state.bankStatementDurationOptions, "bankStatementDurationCustom") +
       pickListHtml("itrYears", "Income Tax Returns — last how many years", state.itrYearOptions, "itrYearsCustom") +
@@ -171,7 +215,12 @@
 
       '<div class="card">' +
       '<h3 style="margin-top:0;">Documents required</h3>' +
-      '<p class="field-hint" style="margin-top:0;">Every document Khanna Travels can ever list on this letter — checked ones are this enquiry\'s own suggestions (country/visa-type/employment-status/circumstance rules on the backend), but every checkbox is yours to add or remove for this specific client. Only checked documents appear in the generated letter.</p>' +
+      '<div style="display:flex;gap:var(--space-4);flex-wrap:wrap;margin-bottom:var(--space-3);">' +
+      '<label style="display:flex;align-items:center;gap:var(--space-2);font-size:.85rem;">' +
+      '<input type="radio" name="rdlCopyType" data-field="copyType" value="Digital" checked /> Digital Copies</label>' +
+      '<label style="display:flex;align-items:center;gap:var(--space-2);font-size:.85rem;">' +
+      '<input type="radio" name="rdlCopyType" data-field="copyType" value="Hard" /> Hard Copies</label>' +
+      "</div>" +
       '<div data-rdl-document-checklist class="auth-person-list"></div>' +
       "</div>" +
 
@@ -227,18 +276,10 @@
         "confirm current bank-statement duration, ITR years, processing time and fees with the consulate/VFS before quoting a client.</span></div>"
       );
     }
-    var lines = [];
-    ["bankStatementDuration", "itrYears", "processingTime", "visaFees"].forEach(function (k) {
-      if (facts[k]) lines.push(utils.escapeHtml(String(facts[k])));
-    });
-    return (
-      '<div class="notice notice-success"><span>' +
-      (lines.length ? lines.join(" · ") + " — " : "") +
-      "Verified against " + utils.escapeHtml(facts.source || "an official source") +
-      (facts.verifiedOn ? " on " + utils.escapeHtml(facts.verifiedOn) : "") +
-      (facts.note ? ". " + utils.escapeHtml(facts.note) : "") +
-      "</span></div>"
-    );
+    // A verified figure on file is simply used to pre-fill the fields below
+    // (see fillIfEmpty) — the source/date/caveat sentence that used to be
+    // printed here was removed at the staff's request.
+    return "";
   }
 
   function renderKnownFactsNotice() {
@@ -256,6 +297,7 @@
     var checkedIds = Object.keys(state.checkedDocumentIds).filter(function (id) {
       return state.checkedDocumentIds[id];
     });
+    var copyTypeEl = utils.qs("[data-field='copyType']:checked", r);
     return {
       country: fieldValue("[data-field='country']"),
       visaType: fieldValue("[data-field='visaType']") || state.visaTypes[0],
@@ -267,6 +309,12 @@
       processingTime: resolvedPickListValue("processingTime", "processingTimeCustom"),
       visaFees: fieldValue("[data-field='visaFees']"),
       documentIds: checkedIds,
+      // Hard copy / digital copy toggle (one choice for the whole listed
+      // checklist, per the user's own explicit instruction) — defaults to
+      // "Digital" to match the reference template's own default wording
+      // when the radio group hasn't mounted yet.
+      copyType: copyTypeEl ? copyTypeEl.value : "Digital",
+      editedFields: state.editedFields,
     };
   }
 
@@ -373,8 +421,9 @@
     if (!viewerHandle) {
       viewerHandle = global.KhannaDocumentViewer.mount(previewBox, {
         title: "Required Document Letter",
+        editor: makeEditor(),
         loadPdf: function () {
-          return api.downloadRequiredDocumentLetter(Object.assign({}, readForm(), { format: "pdf" }));
+          return api.previewWithLayout(api.downloadRequiredDocumentLetter, readForm());
         },
         loadDocx: function () {
           return api.downloadRequiredDocumentLetter(Object.assign({}, readForm(), { format: "docx" }));
@@ -420,7 +469,9 @@
     updateGenerateButtons();
     refreshSuggestedDocuments();
 
-    utils.on(r, "input", "[data-field]", updateGenerateButtons);
+    utils.on(r, "input", "[data-field]", function () {
+      updateGenerateButtons();
+    });
 
     utils.on(r, "change", "[data-field='country'], [data-field='visaType']", function () {
       runLookup();
@@ -438,7 +489,9 @@
     // next to "Personal Bank Statement of Last ...") — never a fresh
     // suggested-documents lookup, since which documents are suggested
     // never depends on the actual duration/years VALUE, only on visa
-    // type/employment status/circumstances.
+    // type/employment status/circumstances. The checklistItems editable
+    // field's own composed wording DOES depend on this value though, so
+    // it still needs a refresh.
     utils.on(r, "change", "[data-field='bankStatementDuration'], [data-field='bankStatementDurationCustom'], [data-field='itrYears'], [data-field='itrYearsCustom']", function () {
       renderDocumentChecklist();
     });

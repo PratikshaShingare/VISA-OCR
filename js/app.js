@@ -48,8 +48,16 @@
     utils.on(document, "click", "[data-mobile-nav-close]", close);
     utils.on(document, "click", "[data-mobile-nav-backdrop]", close);
 
-    // Close the drawer whenever a nav link inside it is used.
-    utils.on(drawer, "click", "[data-nav-link]", close);
+    // Desktop: the drawer behaves like a persistent sidebar — it stays open
+    // across navigation and closes only via the X, the backdrop or Escape
+    // (Frontend Master Rework, sections 2 & 38). Mobile (<768px): it is an
+    // overlay drawer, so picking ANY item in it — a nav link or Log Out —
+    // closes it (Dashboard page request, supersedes the Phase 1 "stay open
+    // on mobile" behaviour). The width check is read at click time, so
+    // rotating or resizing the window never leaves a stale decision.
+    utils.on(drawer, "click", "[data-nav-link], [data-action='logout']", function () {
+      if (window.matchMedia("(max-width: 767px)").matches) close();
+    });
 
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape") close();

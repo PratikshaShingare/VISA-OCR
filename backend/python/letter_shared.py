@@ -17,6 +17,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
+import re
+
 _ORDINAL_EXCEPTIONS = {11: "th", 12: "th", 13: "th"}
 
 
@@ -112,3 +114,40 @@ def order_people(people: list[dict]) -> list[dict]:
     applicants = [p for p in people if p.get("isApplicant")]
     others = [p for p in people if not p.get("isApplicant")]
     return (applicants + others) if applicants else list(people)
+
+
+# ---------------------------------------------------------------------------
+# Person names in generated documents
+# ---------------------------------------------------------------------------
+# A passport prints a name in capitals ("MIHIR HARILAL KOTAK") and the app
+# stores it exactly like that — the passport record is never altered. A letter
+# or voucher, though, reads properly in ordinary capitalisation ("Mihir Harilal
+# Kotak"), so every document engine receives names through this function.
+
+_NAME_SPLIT_RE = re.compile(r"([\s\-'’]+)")
+
+
+_TITLE_WORDS = {"mr", "mrs", "ms", "miss", "mstr", "master", "dr", "prof", "shri", "smt", "sri"}
+
+
+def _capitalise_word(word: str) -> str:
+    # Already mixed case ("McDonald", "Mr.", "de Souza") or a short initial /
+    # abbreviation ("K.", "K.R.") — the writer meant it, leave it alone.
+    if not word or (word != word.upper() and word != word.lower()):
+        return word
+    if word.rstrip(".").lower() in _TITLE_WORDS:
+        return word[:1].upper() + word[1:].lower()  # "MR." -> "Mr."
+    if len(word) <= 1 or "." in word:
+        return word.upper()
+    return word[:1].upper() + word[1:].lower()
+
+
+def person_display_name(name: Optional[str]) -> str:
+    """'MIHIR HARILAL KOTAK' -> 'Mihir Harilal Kotak'; 'Mr. AMARDEEP DIVEKAR' ->
+    'Mr. Amardeep Divekar'; 'O\'BRIEN-SMITH' -> 'O\'Brien-Smith'. Words that already
+    mix capitals and lower case, and initials, are left exactly as typed."""
+    if not name:
+        return name or ""
+    cleaned = re.sub(r"[ \t]{2,}", " ", str(name).strip())  # stray double spaces from a scan
+    parts = _NAME_SPLIT_RE.split(cleaned)
+    return "".join(p if _NAME_SPLIT_RE.fullmatch(p) or not p else _capitalise_word(p) for p in parts)

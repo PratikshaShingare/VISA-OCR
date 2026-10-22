@@ -8,8 +8,8 @@ reference `.docx` template to preserve — there is no existing "master Excel
 export" format on file to match (project rule 5 only applies when a
 reference template actually exists). Its layout is instead a straightforward,
 professional data export designed from the real Application data model
-(data_model.py / js/core/state.js): one row per Application, one row per
-Traveller, and a real computed status breakdown — never fabricated figures.
+(data_model.py / js/core/state.js): one row per Application, and one row per
+Traveller — never fabricated figures.
 
 This app has no persistent backend datastore for Application records (they
 live in the browser's localStorage — see state.js's own header comment), so
@@ -44,27 +44,6 @@ HEADER_FILL = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="s
 HEADER_FONT = Font(bold=True, color="FFFFFF")
 TITLE_FONT = Font(bold=True, size=14)
 SUBTITLE_FONT = Font(size=9, italic=True, color="6B7280")
-
-# Canonical status list — kept in sync with data_model.py / state.js
-# (STATUSES). Used so the Status Summary sheet always shows every real
-# status, including ones with a genuine zero count, rather than only the
-# statuses that happen to appear in this particular export (an admin
-# reading "0 Rejected" is real information; a missing row would look like
-# an oversight).
-STATUSES: List[str] = [
-    "Draft",
-    "New",
-    "Documents Pending",
-    "Documents Received",
-    "Under Review",
-    "Ready for Submission",
-    "Submitted",
-    "Processing",
-    "Approved",
-    "Rejected",
-    "Cancelled",
-]
-
 
 def _dash(value: Any) -> str:
     """Missing/blank data renders as an em dash, matching the convention
@@ -144,7 +123,6 @@ def _applications_sheet(wb: Workbook, applications: List[Dict[str, Any]], genera
 
     headers = [
         "Application ID",
-        "Status",
         "Applicant Name",
         "Passport Number",
         "Destination",
@@ -169,7 +147,6 @@ def _applications_sheet(wb: Workbook, applications: List[Dict[str, Any]], genera
 
         values = [
             _dash(app.get("id")),
-            _dash(app.get("status")),
             _applicant_name(app),
             _dash(passport.get("number")),
             _dash(travel.get("destination")),
@@ -231,38 +208,6 @@ def _travellers_sheet(wb: Workbook, applications: List[Dict[str, Any]], generate
     _autofit(ws, header_row)
 
 
-def _status_summary_sheet(wb: Workbook, applications: List[Dict[str, Any]], generated_at: datetime) -> None:
-    ws = wb.create_sheet("Status Summary")
-    header_row = _write_title_block(ws, "Status Summary", generated_at)
-    _write_header(ws, header_row, ["Status", "Applications"])
-
-    counts: Dict[str, int] = {s: 0 for s in STATUSES}
-    for app in applications:
-        status = app.get("status")
-        if status not in counts:
-            # An application carrying a status this export doesn't
-            # recognize is still counted, not silently dropped — it just
-            # gets its own row rather than being folded into a known one.
-            counts[status] = 0
-        counts[status] = counts.get(status, 0) + 1
-
-    row_idx = header_row + 1
-    for status in STATUSES:
-        ws.cell(row=row_idx, column=1, value=status)
-        ws.cell(row=row_idx, column=2, value=counts.get(status, 0))
-        row_idx += 1
-    for status, count in counts.items():
-        if status not in STATUSES:
-            ws.cell(row=row_idx, column=1, value=status + " (unrecognized status)")
-            ws.cell(row=row_idx, column=2, value=count)
-            row_idx += 1
-
-    ws.cell(row=row_idx + 1, column=1, value="Total").font = Font(bold=True)
-    ws.cell(row=row_idx + 1, column=2, value=len(applications)).font = Font(bold=True)
-
-    _autofit(ws, header_row)
-
-
 def build_applications_workbook(applications: List[Dict[str, Any]]) -> bytes:
     """Builds the real Master Excel export workbook and returns its raw
     .xlsx bytes. `applications` must be a list (an empty list is valid —
@@ -275,7 +220,6 @@ def build_applications_workbook(applications: List[Dict[str, Any]]) -> bytes:
     wb = Workbook()
     _applications_sheet(wb, applications, generated_at)
     _travellers_sheet(wb, applications, generated_at)
-    _status_summary_sheet(wb, applications, generated_at)
 
     buffer = io.BytesIO()
     wb.save(buffer)

@@ -39,7 +39,7 @@
 .doc-viewer__title {
   font-weight: 600;
   font-size: 0.9rem;
-  margin-right: auto;
+  margin-right: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -137,6 +137,9 @@
     text-align: center;
     margin-right: 0;
   }
+  .doc-viewer__edit {
+    margin-right: 0;
+  }
   .doc-viewer__actions {
     flex-direction: column;
     align-items: stretch;
@@ -148,3 +151,56 @@
     flex: 1;
   }
 }
+
+/* ---- Page wrapper + editable overlay layer (js/preview-editor.js) -------- */
+.doc-viewer__page {
+  position: relative;
+  flex: none;
+  line-height: 0;
+}
+.doc-viewer__page[hidden] {
+  display: none;
+}
+.doc-viewer__canvas {
+  display: block;
+}
+.doc-viewer__overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.doc-viewer__format {
+  /* The Word-style ribbon (js/editor-ribbon.js) takes a full row of its own
+     under the title line. */
+  flex: 0 0 100%;
+  order: 10;
+  min-width: 0;
+}
+.doc-viewer__format[hidden] {
+  display: none;
+}
+
+/* ---- Edit toggle (js/document-viewer.js) ---------------------------------- */
+.doc-viewer__edit {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-right: auto; /* Edit sits beside the title; the tools go to the right */
+}
+/* No Edit button (hidden): the title itself takes the free space instead. */
+.doc-viewer__title:has(+ .doc-viewer__edit[hidden]) {
+  margin-right: auto;
+}
+.doc-viewer__edit.is-on {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+.doc-viewer__edit:disabled {
+  cursor: not-allowed;
+}
+/* Fields are only live (and only visible) while Edit is on. */
+.doc-viewer:not(.is-editing) .doc-viewer__overlay {
+  display: none;
+}
+/* (no outline boxes in edit mode — see preview-editor.css) */

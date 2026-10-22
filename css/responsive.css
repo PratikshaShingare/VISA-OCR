@@ -3,9 +3,30 @@
    Tested at 320 / 375 / 390 / 414 / 768 / 1024 / 1280 / 1440+
    ========================================================================== */
 
+/* Phones: backstop against sideways scrolling. Every page was measured at
+   320-767px with no horizontal overflow; this only guarantees a stray
+   over-wide element can never make the page itself scroll sideways.
+   `clip` (not `hidden`) is used on purpose: it does not create a scroll
+   container, so the sticky header and drawer keep working. Widgets that
+   are meant to scroll sideways (the wizard stepper, tables) have their own
+   overflow container and are unaffected. */
+@media (max-width: 767px) {
+  html,
+  body {
+    overflow-x: clip;
+  }
+}
+
 /* Below tablet: mobile-only spacing/sizing adjustments. */
 @media (max-width: 767px) {
   .brand__subtitle {
+    display: none;
+  }
+
+  /* Phones: header is just the logo, the "+" , the account avatar and the
+     menu button — the company name + "Visa Documentation Platform" text
+     beside the logo is dropped (the logo already carries the name). */
+  .brand__text {
     display: none;
   }
 
@@ -15,6 +36,25 @@
 
   .header-actions .btn-primary span {
     display: none;
+  }
+
+  /* Icon-only triggers on phones: the "+" (New Application) and the avatar
+     (account menu) keep their dropdowns, but the small "v" arrow beside
+     each is dropped to save header width. */
+  .header-actions .menu-chevron {
+    display: none;
+  }
+
+  /* With the label and arrow gone, the "+" is a square icon button. */
+  .header-actions [data-new-app-menu-toggle] {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+  }
+
+  .header-actions [data-new-app-menu-toggle] .icon-sm {
+    width: 18px;
+    height: 18px;
   }
 
   .view {
@@ -81,24 +121,64 @@
   }
 }
 
-/* On real phones (this app's own 320/375/390/414 required widths all fall
-   here), pushing .app-main over by a fixed ~300px open menu the css/layout.css
-   push-layout rule uses at wider widths would leave main content only
-   20-70px wide — technically zero overflow, but not usable (project rule
-   13: "avoid horizontal overflow" is the floor, not the bar — mobile must
-   be designed INTENTIONALLY). Below 576px the open menu instead takes the
-   FULL width, so .app-main (flex:1, min-width:0 — css/sidebar.css) shrinks
-   to 0 and is cleanly out of the way rather than squeezed into an
-   unreadable sliver; closing the menu returns it to full width exactly as
-   before. Still a push, not a floating overlay — no backdrop, no dimming —
-   just a push all the way to 100%. */
-@media (max-width: 575px) {
+/* Mobile (<768px): the menu is a proper overlay drawer, not a push panel.
+   The push layout in css/layout.css is right for desktop (the sidebar sits
+   beside the content), but on a phone it either took 100% width (<576px) or
+   squeezed .app-main into a ~100-300px sliver (576-767px) — and, because the
+   drawer used to stay open across navigation, that squeeze persisted.
+   Here the drawer floats over the page below the header with a dimming
+   backdrop, so .app-main always keeps the full viewport width whether the
+   menu is open or closed. js/app.js closes it after any navigation click. */
+@media (max-width: 767px) {
+  .mobile-nav {
+    position: fixed;
+    top: var(--header-h);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    height: auto;
+    z-index: 45;
+    overflow: hidden;
+    background: transparent;
+    border-right: none;
+    visibility: hidden;
+    pointer-events: none;
+    transition: visibility 0s linear 0.2s;
+  }
+
   .mobile-nav.is-open {
-    width: 100%;
+    width: auto;
+    visibility: visible;
+    pointer-events: auto;
+    transition-delay: 0s;
+  }
+
+  .mobile-nav__backdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+
+  .mobile-nav.is-open .mobile-nav__backdrop {
+    opacity: 1;
   }
 
   .mobile-nav__panel {
-    width: 100%;
+    position: relative;
+    width: min(86vw, 320px);
+    height: 100%;
+    background: var(--color-surface);
+    border-right: 1px solid var(--color-border);
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+
+  .mobile-nav.is-open .mobile-nav__panel {
+    transform: none;
   }
 }
 

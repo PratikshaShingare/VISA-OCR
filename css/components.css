@@ -23,6 +23,19 @@
   text-decoration: none;
 }
 
+/* A button that can't be used right now must LOOK unusable — without this a
+   disabled "Generate & Preview" looked identical to a working one. */
+.btn:disabled,
+.btn[disabled],
+.btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-primary:disabled:hover,
+.btn-primary[disabled]:hover {
+  background: var(--color-primary);
+}
+
 .btn-primary {
   background: var(--color-primary);
   color: var(--color-primary-contrast);
@@ -47,6 +60,53 @@
 .btn-ghost:hover {
   background: var(--color-surface-alt);
   color: var(--color-text);
+}
+
+/* Frontend rework, section 16: "Start Different Application" needs a
+   proper, clearly-distinguishable color/style instead of blending in as a
+   plain .btn-secondary — it's a meaningfully different action from the
+   other secondary buttons around it (it can discard the current
+   application's not-yet-saved work), so it reuses the existing warning/
+   amber design token rather than inventing a new color. */
+.btn-warning {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+}
+.btn-warning:hover {
+  background: var(--color-warning);
+  color: var(--color-primary-contrast);
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  color: #fff;
+  border-color: var(--color-danger);
+}
+.btn-danger:hover {
+  background: #a31f1f;
+  border-color: #a31f1f;
+  color: #fff;
+}
+[data-theme="dark"] .btn-danger {
+  background: #c94a4a;
+  border-color: #c94a4a;
+}
+[data-theme="dark"] .btn-danger:hover {
+  background: #b23c3c;
+  border-color: #b23c3c;
+}
+
+.btn-danger-outline {
+  background: transparent;
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+@media (hover: hover) {
+  .btn-danger-outline:hover {
+    background: var(--color-danger);
+    color: #fff;
+  }
 }
 
 .btn-sm {
@@ -115,6 +175,44 @@
   }
 }
 
+/* Theme toggle as a profile-menu row: icon + the current theme's name
+   (sun + "Light" / moon + "Dark"). The icon switching rules above already
+   apply because the row also carries .theme-toggle; the names follow the
+   same dark-theme selectors so exactly one icon and one name show. */
+.profile-menu__item.profile-menu__theme {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.profile-menu__theme .icon {
+  color: var(--color-text-muted);
+}
+
+/* Both sun and moon are display:none/block-switched above; the row itself
+   must be a flex row (needs the .profile-menu__item prefix to out-rank
+   that class's own display:block, which is declared later in this file). */
+
+.theme-label--dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .theme-label--light {
+  display: none;
+}
+:root[data-theme="dark"] .theme-label--dark {
+  display: inline;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .theme-label--light {
+    display: none;
+  }
+  :root:not([data-theme="light"]) .theme-label--dark {
+    display: inline;
+  }
+}
+
 /* ---------------- Cards ---------------- */
 .card {
   background: var(--color-surface);
@@ -129,15 +227,7 @@
   gap: var(--space-4);
 }
 
-/* Dashboard now shows a single stat card (Total Applications) — the
-   responsive.css breakpoints below force .card-grid to repeat(3/4,1fr)
-   for the multi-card layouts used elsewhere, which would otherwise leave
-   this one real card stretched or trailed by empty grid tracks on wide
-   screens. Scoped to this container only — .card-grid itself stays
-   shared/unmodified for every other page that still uses it. */
-[data-dashboard-stats] {
-  grid-template-columns: minmax(200px, 260px) !important;
-}
+/* Dashboard-only stat grid / card styling now lives in css/dashboard.css. */
 
 .stat-card {
   display: flex;
@@ -562,4 +652,56 @@
 .field select:focus,
 .field textarea:focus {
   border-color: var(--color-primary);
+}
+
+/* ==========================================================================
+   Consistency pass (Oct 2026): the letter / authorization / invitation pages'
+   own stacked blocks and small form controls now follow the same spacing,
+   control height, border strength and accent colour as the Hotel Blocking
+   pages (the reference look). Shared rules only — no page layout changes.
+   ========================================================================== */
+
+/* Native checkboxes / radios use the brand colour everywhere. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--color-primary);
+}
+
+/* Wording boxes -> readiness notice -> error -> Generate button: consistent
+   vertical rhythm (previously the notice sat flush against the grid above and
+   the button flush against the notice). */
+[data-auth-readiness] > .notice,
+[data-auth-error] > .notice,
+[data-invitation-readiness] > .notice,
+[data-invitation-error] > .notice {
+  margin-top: var(--space-4);
+}
+
+[data-generate-bar] > .hotel-generate-bar:first-child,
+[data-invitation-generate-bar] > .hotel-generate-bar:first-child,
+.notice + .hotel-generate-bar:first-child {
+  margin-top: var(--space-4);
+}
+
+/* Small inline form controls on the letter pages match the standard field
+   control (38px, strong border) instead of a 36px lighter variant. */
+.auth-manual-applicant-form input[type="text"],
+.auth-group-toolbar select,
+.auth-group-toolbar input[type="text"] {
+  height: 38px;
+  border-color: var(--color-border-strong);
+}
+
+.auth-group-toolbar input[type="text"] {
+  width: 260px;
+}
+
+/* Informational OCR notices (e.g. which engine was used, a safe look-alike
+   fix) — deliberately quieter than the "needs review" summary above. */
+.ocr-notices {
+  margin: var(--space-2) 0 0;
+  padding: 0 0 0 var(--space-4);
+  font-size: 0.8rem;
+  color: var(--color-text-faint);
+  overflow-wrap: anywhere;
 }

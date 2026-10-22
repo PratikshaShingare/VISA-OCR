@@ -1,0 +1,149 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — shared "Word-like" body-wording editor
+   (js/body-editor.js). Reuses .card/.field-hint/.btn as-is (project rule
+   15 — no duplicated CSS). The page box below deliberately stays fixed
+   white background/dark text in BOTH light and dark theme — same
+   reasoning as css/document-viewer.css's own real PDF preview page
+   (background: #fff) — it is meant to look like the real printed
+   document, not like the rest of this app's own chrome.
+   ========================================================================== */
+
+.body-editor__toolbar-extra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+
+.body-editor__status--error {
+  color: var(--color-danger);
+}
+
+.body-editor__page {
+  max-width: 700px;
+  margin: 0 auto;
+  background: #fff;
+  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.body-editor__page .ql-toolbar.ql-snow {
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+}
+
+.body-editor__page .ql-container.ql-snow {
+  border: none;
+}
+
+.body-editor__page .ql-editor {
+  min-height: 160px;
+  padding: var(--space-6);
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  color: #1a1a1a;
+}
+
+@media (max-width: 480px) {
+  .body-editor__page .ql-editor {
+    padding: var(--space-4);
+  }
+}
+
+/* ---------------- attachCompact() — one dense field row, reused across
+   Hotel Blocking's (and the other structured document types') many short
+   generated values instead of a full .body-editor card per value. ---- */
+
+.body-editor-compact {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.body-editor-compact--placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-alt);
+}
+
+.body-editor-compact__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-alt);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.body-editor-compact__label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.body-editor-compact__reset {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+}
+
+.body-editor-compact__reset:hover {
+  color: var(--color-primary);
+  background: var(--color-surface);
+}
+
+.body-editor-compact__status {
+  padding: 0 var(--space-3);
+  font-size: 0.75rem;
+  color: var(--color-danger);
+}
+
+.body-editor-compact__status:empty {
+  display: none;
+}
+
+.body-editor-compact__quill {
+  background: #fff;
+}
+
+.body-editor-compact__quill .ql-toolbar.ql-snow {
+  border: none;
+  border-bottom: 1px solid #e5e5e5;
+  padding: 4px 6px;
+}
+
+.body-editor-compact__quill .ql-container.ql-snow {
+  border: none;
+}
+
+.body-editor-compact__quill .ql-editor {
+  min-height: 32px;
+  padding: var(--space-2) var(--space-3);
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #1a1a1a;
+}
+
+.body-editor-compact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+@media (max-width: 640px) {
+  .body-editor-compact-grid {
+    grid-template-columns: 1fr;
+  }
+}

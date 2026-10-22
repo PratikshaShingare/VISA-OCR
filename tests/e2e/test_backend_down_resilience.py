@@ -21,7 +21,7 @@ import asyncio
 
 from playwright.async_api import async_playwright
 
-from _common import BASE, Checks, STAFF_EMAIL, STAFF_PASSWORD
+from _common import BASE, Checks, STAFF_EMAIL, STAFF_PASSWORD, future_date, select_cover_letter_country, start_guided_wizard_application
 
 checks = Checks()
 
@@ -97,9 +97,11 @@ async def main():
         await page.fill("[data-login-form] input[type='password']", STAFF_PASSWORD)
         await page.click("[data-login-form] button[type='submit']")
         await page.wait_for_timeout(300)
-        # Scoped to a visible match — three buttons now share this
-        # data-action and one (the profile-menu item) is hidden by default.
-        await page.locator("[data-action='new-application']:visible").first.click()
+        # Frontend rework, section 2: the header's "New Application"
+        # dropdown is now the only entry point (Dashboard's own duplicate
+        # button was removed) — see start_guided_wizard_application() in
+        # _common.py.
+        await start_guided_wizard_application(page)
         await page.wait_for_timeout(300)
 
         # Seed enough state directly (rather than re-running real OCR,
@@ -160,18 +162,19 @@ async def main():
         # ---- Europe Cover Letter (Step 6) ----
         await page.click("[data-auth-tab='cover']")
         await page.wait_for_timeout(150)
-        await page.click("[data-cover-region='Europe']")
+        await select_cover_letter_country(page, "France")
         await page.wait_for_timeout(150)
         cover_checkboxes = page.locator("[data-cover-checklist] input[type=checkbox]")
         await cover_checkboxes.nth(0).check()
         await cover_checkboxes.nth(1).check()
+        await page.select_option("#cover-top-fundingType", "self")
         for sel, val in [
-            ("#cover-top-recipientText", "Consulate General of France, Mumbai"),
+            ("#cover-top-consulateName", "The Consulate General of France"),
             ("#cover-top-destinationCountry", "France"),
-            ("#cover-top-travelStartDate", "2026-11-10"),
-            ("#cover-top-travelEndDate", "2026-11-20"),
-            ("#cover-top-fundingArrangement", "Applicant"),
-            ("#cover-europe-cityCountryOfResidence", "Mumbai, India"),
+            ("#cover-top-travelStartDate", future_date(40)),
+            ("#cover-top-travelEndDate", future_date(50)),
+            ("#cover-europe-cityOfResidence", "Mumbai"),
+            ("#cover-europe-countryOfResidence", "India"),
             ("#cover-europe-numberOfNights", "10 nights"),
             ("#cover-europe-applicantEmploymentStatus", "Salaried"),
             ("#cover-europe-applicantJobTitle", "Software Engineer"),

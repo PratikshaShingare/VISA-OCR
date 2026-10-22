@@ -74,7 +74,7 @@
     var all = allProfiles();
 
     if (all.length === 0) {
-      listEl.innerHTML = '<p class="app-picker__empty">No saved travellers yet — use "Add Traveller" to enter one, and it becomes reusable here from then on.</p>';
+      listEl.innerHTML = '<p class="app-picker__empty">No saved travellers yet.</p>';
       return;
     }
 

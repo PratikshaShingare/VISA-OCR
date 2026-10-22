@@ -34,16 +34,20 @@ ADMIN_PASSWORD = "admin123"
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 SYNTHETIC_PASSPORT_PNG = os.path.join(FIXTURES_DIR, "synthetic_passport.png")
 FAKE_SIGNATURE_PNG = os.path.join(FIXTURES_DIR, "fake_signature.png")
+SYNTHETIC_HOTEL_VOUCHER_1_PNG = os.path.join(FIXTURES_DIR, "synthetic_hotel_voucher_1.png")
+SYNTHETIC_HOTEL_VOUCHER_2_PNG = os.path.join(FIXTURES_DIR, "synthetic_hotel_voucher_2.png")
+
+_ALL_FIXTURES = (SYNTHETIC_PASSPORT_PNG, FAKE_SIGNATURE_PNG, SYNTHETIC_HOTEL_VOUCHER_1_PNG, SYNTHETIC_HOTEL_VOUCHER_2_PNG)
 
 
 def ensure_fixtures():
     """Generates the synthetic test assets on demand if they aren't
     already sitting in fixtures/ — see fixtures/generate_fixtures.py for
     exactly how (a synthetic, clearly-fake passport bio-data page with a
-    valid MRZ, and a small squiggle standing in for an uploaded
-    signature). Neither is a real travel document or a real person's
-    signature (project rule 11)."""
-    if os.path.isfile(SYNTHETIC_PASSPORT_PNG) and os.path.isfile(FAKE_SIGNATURE_PNG):
+    valid MRZ, a small squiggle standing in for an uploaded signature, and
+    two distinctly-labeled fake hotel vouchers). None of these is a real
+    travel document or a real person's data (project rule 11)."""
+    if all(os.path.isfile(f) for f in _ALL_FIXTURES):
         return
     subprocess.run(
         [sys.executable, os.path.join(FIXTURES_DIR, "generate_fixtures.py")],
@@ -77,6 +81,12 @@ class Checks:
         sys.exit(1 if self.failures else 0)
 
 
+def future_date(days: int = 30) -> str:
+    """YYYY-MM-DD, `days` from today — cover-letter dates may not be in the past, so tests must not hard-code them."""
+    import datetime as _dt
+    return (_dt.date.today() + _dt.timedelta(days=days)).isoformat()
+
+
 async def login(page, email: str = STAFF_EMAIL, password: str = STAFF_PASSWORD):
     await page.evaluate("location.hash = '#/auth'")
     await page.wait_for_timeout(200)
@@ -94,6 +104,54 @@ async def fresh_load_and_login(page, base: str = BASE, email: str = STAFF_EMAIL,
     await page.evaluate("localStorage.clear()")
     await page.reload()
     await login(page, email, password)
+
+
+async def start_guided_wizard_application(page, tap: bool = False):
+    """Starts a fresh "Full Application (guided wizard)" application via the
+    header's "New Application" dropdown (index.html's [data-new-app-menu]).
+
+    Frontend rework, section 2: the Dashboard's own inline "New Application"
+    button (which used to be what every prior version of this helper's
+    call sites clicked directly, via a bare
+    `[data-action='new-application']:visible` selector) was removed as an
+    explicitly-requested duplicate of this one — the header button is now
+    the ONLY entry point for this action at every viewport width (there is
+    no equivalent item in the mobile-nav drawer). Opening the dropdown
+    first is therefore required, not optional, before
+    `[data-action='new-application']` (the "Full Application (guided
+    wizard)" item inside it) is even visible enough for Playwright to
+    click. `[data-new-app-menu-toggle]` is a real click/tap target at every
+    width (css/responsive.css only collapses its text label on narrow
+    screens, never the button itself), so this one helper covers desktop,
+    mobile-emulation and touch call sites alike — pass `tap=True` for a
+    real touch tap (test_device_emulation.py) instead of a mouse click.
+    """
+    toggle = page.locator("[data-new-app-menu-toggle]")
+    item = page.locator("[data-new-app-menu-dropdown] [data-action='new-application']")
+    if tap:
+        await toggle.tap()
+        await page.wait_for_timeout(150)
+        await item.tap()
+    else:
+        await toggle.click()
+        await page.wait_for_timeout(150)
+        await item.click()
+
+
+async def select_cover_letter_country(page, country_name: str):
+    """Frontend rework, section 6: the Cover Letter's old 3-button region
+    selector ([data-cover-region='Europe'|'Japan'|'Singapore']) was replaced
+    by a searchable country combobox (js/cover-letter.js's
+    countrySelectorHtml()/countryOptionsHtml()) — this types into it and
+    clicks the matching result, which is what every call site that used to
+    click a region button directly now does instead. Selecting a country
+    also derives and sets the underlying region (Europe/Japan/Singapore)
+    exactly the same way the old buttons did, so nothing downstream of that
+    (the person checklist, the region-specific fields) needed to change."""
+    await page.fill("[data-cover-country-search]", country_name)
+    await page.wait_for_timeout(200)
+    await page.click(f"[data-cover-country-option='{country_name}']")
+    await page.wait_for_timeout(200)
 
 
 async def wait_ocr_done(page, scope: str, timeout_polls: int = 80):
@@ -186,4 +244,69 @@ async def fill_ocr_person(page, scope: str, relation_select: str | None = None, 
     await wait_ocr_done(page, scope)
     await page.check(f"{scope} [data-verified-checkbox]")
     await page.click(f"{scope} [data-passport-save]")
+    await page.wait_for_timeout(300)
+
+
+async def wait_preview_ready(page, preview_scope: str, timeout_polls: int = 100):
+    """Waits until the document viewer mounted in `preview_scope` has
+    finished generating AND drawn its page (status cleared, canvas visible)."""
+    status_sel = f"{preview_scope} [data-dv='status']"
+    for _ in range(timeout_polls):
+        status_text = (await page.inner_text(status_sel)).strip()
+        if status_text == "" and await page.locator(f"{preview_scope} [data-dv='canvas']").is_visible():
+            break
+        await page.wait_for_timeout(300)
+    await page.wait_for_timeout(700)
+
+
+async def set_edit_mode(page, preview_scope: str, on: bool = True):
+    """Presses the Preview section's Edit button until edit mode matches `on`."""
+    btn = page.locator(f"{preview_scope} [data-dv='edit-toggle']")
+    pressed = (await btn.get_attribute("aria-pressed")) == "true"
+    if pressed != on:
+        await btn.click()
+        await page.wait_for_timeout(300)
+
+
+async def edit_value_on_preview(page, preview_scope: str, key: str, text: str, select_all: bool = True):
+    """Edit mode on -> click the on-page value `key` -> replace its text with
+    `text` the way a person would (Ctrl+A, type) -> move on so it is saved.
+    Returns the text the value was seeded with before the edit."""
+    await set_edit_mode(page, preview_scope, True)
+    field = page.locator(f"{preview_scope} .pe-field[data-pe-key='{key}']").first
+    await field.click()
+    await page.wait_for_timeout(700)
+    seeded = (await page.inner_text(f"{preview_scope} .pe-field.is-active .ql-editor")).strip()
+    if select_all:
+        await page.keyboard.press("Control+A")
+    await page.keyboard.type(text)
+    await page.wait_for_timeout(450)
+    return seeded
+
+
+async def commit_preview_edit(page, preview_scope: str):
+    """Leaves the open value (Escape) so it is saved into the record."""
+    await page.keyboard.press("Escape")
+    await page.wait_for_timeout(400)
+
+
+async def pick_company_consulate(page, country="Germany"):
+    """Company Authorization Letter: choose the consulate by COUNTRY from the
+    searchable list (type, then Enter picks the highlighted match) — the
+    wording "The Consulate General of <country>" and the default address
+    "Mumbai, India" complete themselves."""
+    inp = page.locator("#auth-company-consulateCountry")
+    await inp.click()
+    await inp.fill(country)
+    await inp.press("Enter")
+    await page.wait_for_timeout(300)
+
+
+async def pick_inviter_country(page, country="Ireland"):
+    """Invitation Letter: choose the consulate's country from the searchable
+    list (type, then Enter picks the highlighted match)."""
+    inp = page.locator("#inv-inviter-country")
+    await inp.click()
+    await inp.fill(country)
+    await inp.press("Enter")
     await page.wait_for_timeout(300)
