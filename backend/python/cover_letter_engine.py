@@ -8,7 +8,8 @@ template (project rule 5 — Document Template Rule):
 
     reference-cover-letter-formats/Europe/Europe_covering_letter_template_clean.docx
     reference-cover-letter-formats/Japan/Japan_covering_letter_template_clean.docx
-    reference-cover-letter-formats/Singapore/Singapore_covering_letter_template_clean.docx
+    reference-templates/Singapore/ (Singapore has its own two templates and its own
+    engine, singapore_letter_engine.py — see the Singapore section at the bottom)
 
 Unlike the Passport Authorization templates (Phase 8), these three ARE
 genuine blank templates — every dynamic paragraph in all three is a
@@ -26,28 +27,25 @@ and an optional second-country leg) — those specific paragraphs are
 composed directly as plain Python strings instead of token-substituted,
 for the same reason.
 
-Two deliberate, documented judgement calls on real template quirks
+One deliberate, documented judgement call on a real template quirk
 (neither left in the generated output — project rule 9, no faked/broken
 content reaches a client):
   - Japan's companion sentence carries a literal, human-authored
     instruction, `[Add additional family member details here if
     applicable].` — stripped outright rather than ever shown to a client,
     consistent with this letter's own real person cap (see below).
-  - Singapore's file has a second, broken, mislabeled signature block
-    directly duplicating the first ("Passanger 1 Name" — misspelled and
-    not even bracketed — "P1's Email ID") — deleted outright as leftover
-    template cruft, the same judgement call already made for the Company
-    Authorization Letter's flawed second applicant line in Phase 8.
 
-Real-person-count limits, each directly justified by what that
-template's own FIXED sentences actually say — never an invented sentence
-structure beyond what the reference material supports (project rule 9):
-  - Europe: exactly applicant + 1 companion. Every dynamic sentence is
-    written for exactly one named companion ("[Relation/Family]"
-    singular, "We both are...", "My [Relation]...").
-  - Japan: exactly applicant + 1 companion, for the same reason — its
-    own template literally asks a human to hand-add more, which this
-    engine does not attempt to do automatically.
+Traveller counts (frontend rework, Stage 2 — no cap on any region):
+  - Europe: the applicant alone, or with any number of companions. With
+    one companion the wording is exactly the reference template's
+    ("along with my wife, Name ..."); with several, every companion is
+    named with their own relation and only companions with job details
+    entered get a "... is working for ..." sentence (children etc. do not).
+  - Japan: the applicant alone, or with any number of companions — the
+    template's single companion line ("[Relation] [Passenger 2 Name] ...
+    [Occupation]") is repeated once per companion, and the template's own
+    "[Add additional family member details here if applicable]" hint is
+    still stripped, never shown to a client.
   - Singapore: applicant alone, or applicant + any number of companions —
     its passenger table is a genuinely repeatable row (Sr no./Name/
     Passport/Relation/Occupation), cloned the same way the Company
@@ -64,17 +62,18 @@ from typing import Optional
 
 from docx import Document
 from docx.table import Table
+from docx.text.paragraph import Paragraph
 
 import document_blocks
 import docx_utils
 import letter_shared
+import singapore_letter_engine
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REFERENCE_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", "..", "reference-cover-letter-formats"))
 
 EUROPE_TEMPLATE_PATH = os.path.join(_REFERENCE_ROOT, "Europe", "Europe_covering_letter_template_clean.docx")
 JAPAN_TEMPLATE_PATH = os.path.join(_REFERENCE_ROOT, "Japan", "Japan_covering_letter_template_clean.docx")
-SINGAPORE_TEMPLATE_PATH = os.path.join(_REFERENCE_ROOT, "Singapore", "Singapore_covering_letter_template_clean.docx")
 
 
 class CoverLetterError(docx_utils.DocxBuildError):
@@ -111,7 +110,65 @@ def _phone_or_dash(phone: Optional[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def compose_europe_body_paragraphs(applicant: dict, companion: dict, fields: dict) -> list:
+def _companion_list(companion) -> list:
+    """`companion` may be None (travelling alone), one companion dict, or a
+    list of them — every letter below accepts all three, so the original
+    one-companion callers keep working unchanged."""
+    if not companion:
+        return []
+    if isinstance(companion, dict):
+        return [companion]
+    return [c for c in companion if c]
+
+
+def _relations_for(companions: list, fields: dict, fallback: str) -> list:
+    """[(phrase, bare)] per companion — ('my wife', 'wife'). With ONE
+    companion the single relation control (travellerRelation /
+    travellerRelationText) decides, exactly as before; with several, each
+    person carries their own choice (falling back to what their traveller
+    record says)."""
+    out = []
+    for c in companions:
+        if len(companions) == 1:
+            choice, text = fields.get("travellerRelation"), fields.get("travellerRelationText")
+        else:
+            choice, text = c.get("travellerRelation"), c.get("travellerRelationText")
+        out.append(letter_shared.traveller_relation(choice, text, c, fallback))
+    return out
+
+
+def _join_list(items: list) -> str:
+    """'a' / 'a and b' / 'a; b; and c' (semicolons once there are three or
+    more, because each item already contains a comma: 'my wife, Anita')."""
+    items = [i for i in items if i]
+    if len(items) <= 1:
+        return items[0] if items else ""
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return "; ".join(items[:-1]) + "; and " + items[-1]
+
+
+def _join_simple(items: list) -> str:
+    items = [i for i in items if i]
+    if len(items) <= 1:
+        return items[0] if items else ""
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _companion_job(companion: dict, fields: dict, single: bool) -> dict:
+    """Employment details for one companion: the person's own entries, or —
+    for the one-companion form — the original companion* form fields."""
+    job = companion.get("jobTitle") or ""
+    employer = companion.get("employerName") or ""
+    since = companion.get("employmentStartYear") or ""
+    if single:
+        job = job or fields.get("companionJobTitle") or ""
+        employer = employer or fields.get("companionEmployerName") or ""
+        since = since or fields.get("companionEmploymentStartYear") or ""
+    return {"job": job, "employer": employer, "since": since}
+
+
+def compose_europe_body_paragraphs(applicant: dict, companion: Optional[dict], fields: dict) -> list:
     """Composes the Europe Cover Letter's three free-composed body
     paragraphs (template indices 8-10) as plain {"text", "align"} blocks.
     Shared by the real DOCX generator below AND the Phase 4 'compose body
@@ -131,27 +188,73 @@ def compose_europe_body_paragraphs(applicant: dict, companion: dict, fields: dic
     applicantEmployerName, companionJobTitle, companionEmployerName,
     companionEmploymentStartYear, destinationCountry, nextCountry,
     nextTravelStartDate, nextTravelEndDate, nextNumberOfNights,
-    numberOfNights."""
-    relation_with_name = f"{_relation_word_or_fallback(companion.get('relationToApplicant'), companion.get('sex'))}, {companion.get('fullName') or '—'}"
-    relation_bare = _relation_word_or_fallback(companion.get("relationToApplicant"), companion.get("sex"))
+    numberOfNights, travellerRelation, travellerRelationText.
 
-    para8 = (
+    `companion` None = the applicant travelling alone: every "we/our/along
+    with my ..." is written in the singular instead."""
+    companions = _companion_list(companion)
+    solo = not companions
+    many = len(companions) > 1
+    if solo:
+        relation_with_name = relation_bare = ""
+    else:
+        relations = _relations_for(companions, fields, "family member")
+        with_names = [f"{phrase}, {c.get('fullName') or '—'}" for (phrase, _bare), c in zip(relations, companions)]
+        relation_with_name = _join_list(with_names)
+        relation_bare = relations[0][1]
+
+    passport_part = (
         f"I, {letter_shared.display_name(applicant)} (holding Indian Passport No.: "
         f"{applicant.get('passportNumber') or '—'} issued at {applicant.get('placeOfIssue') or '—'} on "
-        f"{applicant.get('passportIssueDate') or '—'}) would like to visit your admired country along with "
-        f"my {relation_with_name} from {fields.get('travelStartDate') or '—'} to "
-        f"{fields.get('travelEndDate') or '—'} for the purpose of Tourism."
+        f"{applicant.get('passportIssueDate') or '—'}) would like to visit your admired country"
     )
-
-    para9 = (
-        f"I and my {relation_with_name} reside in {fields.get('cityCountryOfResidence') or '—'} along with our "
-        "parents and few close relatives. We both are financially independent and Employed – "
-        f"{fields.get('applicantEmploymentStatus') or '—'}. I am a {fields.get('applicantJobTitle') or '—'} at "
-        f"{fields.get('applicantEmployerName') or '—'}. While my {relation_bare} is working for "
-        f"{fields.get('companionEmployerName') or '—'} since {fields.get('companionEmploymentStartYear') or '—'}, "
-        f"currently as {fields.get('companionJobTitle') or '—'}. Kindly find our relevant documents for your "
-        "reference."
+    dates_part = (
+        f"from {fields.get('travelStartDate') or '—'} to {fields.get('travelEndDate') or '—'} "
+        "for the purpose of Tourism."
     )
+    if solo:
+        para8 = f"{passport_part} {dates_part}"
+        para9 = (
+            f"I reside in {fields.get('cityCountryOfResidence') or '—'} along with my parents and few close "
+            "relatives. I am financially independent and Employed – "
+            f"{fields.get('applicantEmploymentStatus') or '—'}. I am a {fields.get('applicantJobTitle') or '—'} at "
+            f"{fields.get('applicantEmployerName') or '—'}. Kindly find my relevant documents for your reference."
+        )
+    elif not many:
+        para8 = f"{passport_part} along with {relation_with_name} {dates_part}"
+        para9 = (
+            f"I and {relation_with_name} reside in {fields.get('cityCountryOfResidence') or '—'} along with our "
+            "parents and few close relatives. We both are financially independent and Employed – "
+            f"{fields.get('applicantEmploymentStatus') or '—'}. I am a {fields.get('applicantJobTitle') or '—'} at "
+            f"{fields.get('applicantEmployerName') or '—'}. While my {relation_bare} is working for "
+            f"{fields.get('companionEmployerName') or '—'} since {fields.get('companionEmploymentStartYear') or '—'}, "
+            f"currently as {fields.get('companionJobTitle') or '—'}. Kindly find our relevant documents for your "
+            "reference."
+        )
+    else:
+        # Two or more companions: the same wording, with every companion named
+        # with their relation. Not everyone travelling is employed (children,
+        # parents), so each companion's job sentence appears only when staff
+        # entered job details for them.
+        para8 = f"{passport_part} along with {relation_with_name} {dates_part}"
+        job_sentences = []
+        for (phrase, _bare), c in zip(relations, companions):
+            job = _companion_job(c, fields, single=False)
+            if not (job["job"] or job["employer"]):
+                continue
+            lead = phrase[:1].upper() + phrase[1:]
+            works = f"working for {job['employer']}" if job["employer"] else "working"
+            since = f" since {job['since']}" if job["since"] else ""
+            role = f", currently as {job['job']}" if job["job"] else ""
+            job_sentences.append(f"{lead} is {works}{since}{role}.")
+        para9 = (
+            f"I, along with {relation_with_name}, reside in {fields.get('cityCountryOfResidence') or '—'} along with our "
+            "parents and few close relatives. I am financially independent and Employed – "
+            f"{fields.get('applicantEmploymentStatus') or '—'}. I am a {fields.get('applicantJobTitle') or '—'} at "
+            f"{fields.get('applicantEmployerName') or '—'}. "
+            + "".join(f"{sentence} " for sentence in job_sentences)
+            + "Kindly find our relevant documents for your reference."
+        )
 
     destination = fields.get("destinationCountry") or "—"
     next_country = (fields.get("nextCountry") or "").strip()
@@ -162,15 +265,38 @@ def compose_europe_body_paragraphs(applicant: dict, companion: dict, fields: dic
         if next_country
         else ""
     )
-    para10 = (
-        f"My {relation_with_name} and I have planned to visit {destination_or_countries} for the purpose of "
-        "Tourism. We look forward to visiting the country, exploring the beautiful sights, witnessing its rich "
-        f"culture and spending leisure time together. We would be visiting {destination} for "
-        f"{fields.get('numberOfNights') or '—'} from {fields.get('travelStartDate') or '—'} to "
-        f"{fields.get('travelEndDate') or '—'}{next_leg}. Kindly find our relevant documents for your perusal. "
-        "We will return back to India after the end of our visit as we need to rejoin and look after our work "
-        "and personal commitments."
+    visit_part = (
+        f"{destination} for {fields.get('numberOfNights') or '—'} from {fields.get('travelStartDate') or '—'} to "
+        f"{fields.get('travelEndDate') or '—'}{next_leg}."
     )
+    if solo:
+        para10 = (
+            f"I have planned to visit {destination_or_countries} for the purpose of Tourism. I look forward to "
+            "visiting the country, exploring the beautiful sights, witnessing its rich culture and spending "
+            f"leisure time. I would be visiting {visit_part} Kindly find my relevant documents for your perusal. "
+            "I will return back to India after the end of my visit as I need to rejoin and look after my work "
+            "and personal commitments."
+        )
+    elif not many:
+        para10 = (
+            f"{relation_with_name[:1].upper() + relation_with_name[1:]} and I have planned to visit "
+            f"{destination_or_countries} for the purpose of "
+            "Tourism. We look forward to visiting the country, exploring the beautiful sights, witnessing its rich "
+            f"culture and spending leisure time together. We would be visiting {visit_part} Kindly find our "
+            "relevant documents for your perusal. "
+            "We will return back to India after the end of our visit as we need to rejoin and look after our work "
+            "and personal commitments."
+        )
+    else:
+        para10 = (
+            f"I, along with {relation_with_name}, have planned to visit "
+            f"{destination_or_countries} for the purpose of "
+            "Tourism. We look forward to visiting the country, exploring the beautiful sights, witnessing its rich "
+            f"culture and spending leisure time together. We would be visiting {visit_part} Kindly find our "
+            "relevant documents for your perusal. "
+            "We will return back to India after the end of our visit as we need to rejoin and look after our work "
+            "and personal commitments."
+        )
 
     return [
         {"text": para8, "align": "justify"},
@@ -179,7 +305,7 @@ def compose_europe_body_paragraphs(applicant: dict, companion: dict, fields: dic
     ]
 
 
-def compose_europe_body_html(applicant: dict, companion: dict, fields: dict) -> str:
+def compose_europe_body_html(applicant: dict, companion: Optional[dict], fields: dict) -> str:
     """HTML seed for the Phase 4 Quill body editor — the exact same real
     wording `compose_europe_body_paragraphs` returns (and therefore the
     same wording the real generator writes when nothing has been edited
@@ -198,7 +324,7 @@ def compose_europe_body_html(applicant: dict, companion: dict, fields: dict) -> 
 
 def generate_europe_cover_letter_docx(
     applicant: dict,
-    companion: dict,
+    companion: Optional[dict],
     fields: dict,
     date_override: Optional[str] = None,
     edited_body_html: Optional[str] = None,
@@ -221,12 +347,8 @@ def generate_europe_cover_letter_docx(
     Rule). When None (the normal/default path), the body is composed
     automatically via `compose_europe_body_paragraphs`, unchanged from
     before Phase 4."""
-    if not applicant or not companion:
-        raise ValueError(
-            "The Europe Cover Letter is written for the applicant plus exactly one "
-            "companion (matching the reference template's own fixed wording) — "
-            "please select both."
-        )
+    if not applicant:
+        raise ValueError("At least the applicant is required to generate this letter.")
 
     document = _load_template(EUROPE_TEMPLATE_PATH, "Europe Cover Letter")
     paragraphs = document.paragraphs
@@ -247,6 +369,8 @@ def generate_europe_cover_letter_docx(
     # different paragraph count than the original 3 (see that helper's
     # own docstring).
     funding_paragraph = paragraphs[11]
+    enclosed_paragraph = paragraphs[12]
+    request_paragraph = paragraphs[13]
     signature_name_paragraph = paragraphs[17]
     signature_phone_paragraph = paragraphs[18]
     signature_email_paragraph = paragraphs[19]
@@ -266,6 +390,17 @@ def generate_europe_cover_letter_docx(
     docx_utils.apply_token_map_to_paragraph(
         funding_paragraph, {"[Funding Arrangement]": fields.get("fundingArrangement") or "—"}
     )
+    if not companion:
+        # Travelling alone: the template's three fixed closing sentences say
+        # "us / our" — only those pronouns change, the rest (and the
+        # formatting) stays exactly as the template has it.
+        docx_utils.apply_token_map_to_paragraph(
+            funding_paragraph, {"expenses for us will": "expenses for me will", "find our financial": "find my financial"}
+        )
+        docx_utils.apply_token_map_to_paragraph(
+            enclosed_paragraph, {"find our visa": "find my visa", "support our visa": "support my visa"}
+        )
+        docx_utils.apply_token_map_to_paragraph(request_paragraph, {"grant us the": "grant me the"})
 
     docx_utils.apply_token_map_to_paragraph(signature_name_paragraph, {"[Applicant Full Name]": letter_shared.display_name(applicant)})
     docx_utils.apply_token_map_to_paragraph(signature_phone_paragraph, {"[Phone Number]": _phone_or_dash(applicant.get("phone"))})
@@ -368,7 +503,7 @@ def _cells_of_row_element(table: Table, row_el):
 
 def generate_japan_cover_letter_docx(
     applicant: dict,
-    companion: dict,
+    companion: Optional[dict],
     fields: dict,
     hotels: list[dict],
     date_override: Optional[str] = None,
@@ -377,13 +512,10 @@ def generate_japan_cover_letter_docx(
 ) -> bytes:
     """`fields` keys used: destinationCountry, travelStartDate,
     travelEndDate, applicantEmployerOccupation, companionOccupation,
-    fundingArrangement."""
-    if not applicant or not companion:
-        raise ValueError(
-            "The Japan Cover Letter is written for the applicant plus exactly one "
-            "companion (matching the reference template's own fixed wording) — "
-            "please select both."
-        )
+    fundingArrangement, travellerRelation, travellerRelationText.
+    `companion` None = the applicant travelling alone."""
+    if not applicant:
+        raise ValueError("At least the applicant is required to generate this letter.")
 
     document = _load_template(JAPAN_TEMPLATE_PATH, "Japan Cover Letter")
     paragraphs = document.paragraphs
@@ -392,36 +524,81 @@ def generate_japan_cover_letter_docx(
     docx_utils.apply_token_map_to_paragraph(
         paragraphs[8], {"[Destination Country]": fields.get("destinationCountry") or "—"}
     )
+    # Captured before anything is removed (python-docx's paragraph list is a
+    # live view — indices shift as soon as one is deleted).
+    companion_paragraph = paragraphs[12]
+    hotels_intro_paragraph = paragraphs[13]
+    funding_paragraph = paragraphs[15]
+    attachment_paragraph = paragraphs[16]
+
+    # "along with my family" in the template — with the relation staff chose
+    # ("my wife", or their own wording) when there is a companion, and left
+    # out altogether when the applicant travels alone. Several companions:
+    # each is named by their own relation ("my wife, my son and my daughter").
+    companions = _companion_list(companion)
+    if companions:
+        relations = _relations_for(companions, fields, "family")
+        along_with = "along with " + _join_simple([phrase for phrase, _bare in relations])
+    else:
+        along_with = ""
+    para10_map = {
+        "[Passenger 1 Name]": letter_shared.display_name(applicant),
+        "[Passport Number]": applicant.get("passportNumber") or "—",
+        "[Place of Issue]": applicant.get("placeOfIssue") or "—",
+        "[Passport Issue Date]": applicant.get("passportIssueDate") or "—",
+        "[Travel Start Date]": fields.get("travelStartDate") or "—",
+        "[Travel End Date]": fields.get("travelEndDate") or "—",
+    }
+    docx_utils.apply_token_map_to_paragraph(paragraphs[10], para10_map)
     docx_utils.apply_token_map_to_paragraph(
         paragraphs[10],
-        {
-            "[Passenger 1 Name]": letter_shared.display_name(applicant),
-            "[Passport Number]": applicant.get("passportNumber") or "—",
-            "[Place of Issue]": applicant.get("placeOfIssue") or "—",
-            "[Passport Issue Date]": applicant.get("passportIssueDate") or "—",
-            "[Travel Start Date]": fields.get("travelStartDate") or "—",
-            "[Travel End Date]": fields.get("travelEndDate") or "—",
-        },
+        {" along with my family": f" {along_with}" if along_with else ""},
     )
     docx_utils.apply_token_map_to_paragraph(
         paragraphs[11], {"[Employer / Occupation]": fields.get("applicantEmployerOccupation") or "—"}
     )
+    if companions:
+        # The template has one line per travelling companion ("[Relation]
+        # [Passenger 2 Name] ... [Occupation]"); it is repeated for each
+        # additional companion, in the same position and formatting.
+        extra_elements = docx_utils.clone_and_insert_after(companion_paragraph._p, len(companions) - 1)
+        line_paragraphs = [companion_paragraph] + [
+            Paragraph(el, companion_paragraph._parent) for el in extra_elements
+        ]
+        for line, person, (_phrase, relation_bare) in zip(line_paragraphs, companions, relations):
+            occupation = person.get("occupation") or (
+                fields.get("companionOccupation") if len(companions) == 1 else ""
+            )
+            if not occupation and len(companions) > 1:
+                # Not everyone travelling works (children, parents): drop the
+                # "is [Occupation]" tail instead of printing "is —".
+                docx_utils.apply_token_map_to_paragraph(line, {" is [Occupation]": ""})
+            docx_utils.apply_token_map_to_paragraph(
+                line,
+                {
+                    "[Relation]": relation_bare[:1].upper() + relation_bare[1:],
+                    "[Passenger 2 Name]": letter_shared.display_name(person),
+                    "[Passport Number]": person.get("passportNumber") or "—",
+                    "[Place of Issue]": person.get("placeOfIssue") or "—",
+                    "[Passport Issue Date]": person.get("passportIssueDate") or "—",
+                    "[Occupation]": occupation or "—",
+                    # The template's own human-authored instruction — never shown
+                    # to a client (see module docstring).
+                    " [Add additional family member details here if applicable].": "",
+                },
+            )
+    else:
+        # Travelling alone: there is no companion sentence, and the template's
+        # "we / our" closing lines become "I / my".
+        docx_utils.delete_paragraph(companion_paragraph)
+        docx_utils.apply_token_map_to_paragraph(hotels_intro_paragraph, {"We will be": "I will be"})
+        docx_utils.apply_token_map_to_paragraph(funding_paragraph, {"All our travel": "All my travel"})
+        docx_utils.apply_token_map_to_paragraph(
+            attachment_paragraph,
+            {"attachment to our visa": "attachment to my visa", "issuance of our visa": "issuance of my visa"},
+        )
     docx_utils.apply_token_map_to_paragraph(
-        paragraphs[12],
-        {
-            "[Relation]": _relation_word_or_fallback(companion.get("relationToApplicant"), companion.get("sex")).capitalize(),
-            "[Passenger 2 Name]": letter_shared.display_name(companion),
-            "[Passport Number]": companion.get("passportNumber") or "—",
-            "[Place of Issue]": companion.get("placeOfIssue") or "—",
-            "[Passport Issue Date]": companion.get("passportIssueDate") or "—",
-            "[Occupation]": fields.get("companionOccupation") or "—",
-            # The template's own human-authored instruction — never shown
-            # to a client (see module docstring).
-            " [Add additional family member details here if applicable].": "",
-        },
-    )
-    docx_utils.apply_token_map_to_paragraph(
-        paragraphs[15], {"[Sponsor Name / Funding Arrangement]": fields.get("fundingArrangement") or "—"}
+        funding_paragraph, {"[Sponsor Name / Funding Arrangement]": fields.get("fundingArrangement") or "—"}
     )
     docx_utils.apply_token_map_to_paragraph(paragraphs[21], {"[Passenger 1 Name]": letter_shared.display_name(applicant)})
     docx_utils.apply_token_map_to_paragraph(paragraphs[22], {"[Phone Number]": _phone_or_dash(applicant.get("phone"))})
@@ -469,59 +646,15 @@ def compute_japan_field_layout(
 
 # ---------------------------------------------------------------------------
 # Singapore
+#
+# Singapore has its own two templates (single traveller / two or multiple
+# travellers) and its own engine, singapore_letter_engine.py — nothing else in
+# this module is shared with it. These wrappers keep the names the rest of the
+# app already calls; the single/multi choice is made from the companion list.
 # ---------------------------------------------------------------------------
 
-
-def _fill_singapore_passenger_table(document: Document, applicant: dict, companions: list[dict], occupations: dict) -> None:
-    table = document.tables[0]
-    header = [c.text.strip() for c in table.rows[0].cells]
-    if header != ["Sr no.", "Passengers Name", "Passport No", "Relation", "Occupation"]:
-        raise CoverLetterError(
-            f"Singapore Cover Letter template structure has changed (passenger table header was {header!r}) "
-            "— cannot safely fill it."
-        )
-    if len(table.rows) < 3:
-        raise CoverLetterError(
-            "Singapore Cover Letter template structure has changed (expected applicant + one example companion "
-            "row) — cannot safely fill it."
-        )
-
-    applicant_row_el = table.rows[1]._tr
-    companion_template_row_el = table.rows[2]._tr
-
-    applicant_cells = _cells_of_row_element(table, applicant_row_el)
-    docx_utils.set_cell_text(applicant_cells[0], "1")
-    docx_utils.set_cell_text(applicant_cells[1], letter_shared.display_name(applicant))
-    docx_utils.set_cell_text(applicant_cells[2], applicant.get("passportNumber") or "—")
-    # applicant_cells[3] ("Self") is fixed reference content — left untouched.
-    docx_utils.set_cell_text(applicant_cells[4], occupations.get(applicant.get("id"), "") or "—")
-
-    if not companions:
-        # No companion rows needed — remove the now-templateless row rather
-        # than leave literal "[Passenger 2 Name]" placeholder text in a
-        # real client-facing letter (same judgement call as Japan's empty
-        # hotel table above).
-        companion_template_row_el.getparent().remove(companion_template_row_el)
-        return
-
-    # Clone BEFORE the template row is touched further — it must still be
-    # attached to the table for clone_and_insert_after's addnext() to have
-    # somewhere to anchor the new siblings (the same working technique
-    # already proven in _fill_japan_hotel_table above; do not remove the
-    # template row first, that leaves addnext() with no parent to insert
-    # into).
-    clone_els = docx_utils.clone_and_insert_after(companion_template_row_el, len(companions) - 1)
-    row_els = [companion_template_row_el] + clone_els
-
-    for idx, (row_el, companion) in enumerate(zip(row_els, companions), start=2):
-        cells = _cells_of_row_element(table, row_el)
-        docx_utils.set_cell_text(cells[0], str(idx))
-        docx_utils.set_cell_text(cells[1], letter_shared.display_name(companion))
-        docx_utils.set_cell_text(cells[2], companion.get("passportNumber") or "—")
-        docx_utils.set_cell_text(
-            cells[3], _relation_word_or_fallback(companion.get("relationToApplicant"), companion.get("sex")).capitalize()
-        )
-        docx_utils.set_cell_text(cells[4], occupations.get(companion.get("id"), "") or "—")
+SINGAPORE_TEMPLATE_PATH = singapore_letter_engine.COVER_SINGLE_TEMPLATE_PATH
+SINGAPORE_MULTI_TEMPLATE_PATH = singapore_letter_engine.COVER_MULTI_TEMPLATE_PATH
 
 
 def generate_singapore_cover_letter_docx(
@@ -532,64 +665,23 @@ def generate_singapore_cover_letter_docx(
     edited_blocks: Optional[dict] = None,
     _shader: Optional["docx_utils.ProbeShader"] = None,
 ) -> bytes:
-    """`fields` keys used: recipientText, travelStartDate, travelEndDate,
-    fundingArrangement, hotelName, hotelAddress, occupations (a dict
-    keyed by person id)."""
-    if not applicant:
-        raise ValueError("At least the applicant is required to generate this letter.")
-
-    document = _load_template(SINGAPORE_TEMPLATE_PATH, "Singapore Cover Letter")
-    paragraphs = document.paragraphs
-
-    docx_utils.apply_token_map_to_paragraph(paragraphs[0], {"[Date]": letter_shared.format_letter_date(date_override)})
-    docx_utils.set_paragraph_text(paragraphs[2], (fields.get("recipientText") or "").strip() or "—")
-
-    family_clause = " along with my Family" if companions else ""
-    para7 = (
-        f"I, {letter_shared.display_name(applicant)} planning to visit Singapore for Tourism purposes"
-        f"{family_clause} & would like to travel on {fields.get('travelStartDate') or '—'} and will stay until "
-        f"{fields.get('travelEndDate') or '—'}."
-    )
-    docx_utils.set_paragraph_text(paragraphs[7], para7)
-
-    docx_utils.apply_token_map_to_paragraph(
-        paragraphs[9], {"[Funding Arrangement]": fields.get("fundingArrangement") or "—"}
-    )
-    docx_utils.apply_token_map_to_paragraph(
-        paragraphs[10],
-        {"[Hotel Name]": fields.get("hotelName") or "—", "[Hotel Address]": fields.get("hotelAddress") or "—"},
-    )
-    docx_utils.apply_token_map_to_paragraph(paragraphs[14], {"[Passenger 1 Name]": letter_shared.display_name(applicant)})
-    docx_utils.apply_token_map_to_paragraph(
-        paragraphs[15], {"[Email Address]": (applicant.get("email") or "").strip() or "—"}
-    )
-    docx_utils.apply_token_map_to_paragraph(paragraphs[16], {"[Contact No.]": _phone_or_dash(applicant.get("phone"))})
-
-    # The template's own second, broken/mislabeled duplicate signature
-    # block — deleted, not preserved (see module docstring). Captured by
-    # reference before any of the above edits shift nothing (paragraph
-    # indices 17-19 are untouched by any fill above), then removed last.
-    for idx in (17, 18, 19):
-        docx_utils.delete_paragraph(paragraphs[idx])
-
-    _fill_singapore_passenger_table(document, applicant, companions, fields.get("occupations") or {})
-
-    document_blocks.finalize(document, edited_blocks, _shader)
-    buf = io.BytesIO()
-    document.save(buf)
-    return buf.getvalue()
+    try:
+        return singapore_letter_engine.generate_cover_letter_docx(
+            applicant, companions, fields, date_override, edited_blocks=edited_blocks, _shader=_shader
+        )
+    except singapore_letter_engine.SingaporeLetterError as e:
+        raise CoverLetterError(str(e))
 
 
 def generate_singapore_cover_letter_pdf(
     applicant: dict, companions: list[dict], fields: dict, date_override: Optional[str] = None,
     edited_blocks: Optional[dict] = None,
 ) -> bytes:
-    docx_bytes = generate_singapore_cover_letter_docx(
-        applicant, companions, fields, date_override, edited_blocks=edited_blocks
-    )
     try:
-        return docx_utils.convert_docx_bytes_to_pdf(docx_bytes, base_name="singapore_cover_letter")
-    except docx_utils.DocxBuildError as e:
+        return singapore_letter_engine.generate_cover_letter_pdf(
+            applicant, companions, fields, date_override, edited_blocks=edited_blocks
+        )
+    except singapore_letter_engine.SingaporeLetterError as e:
         raise CoverLetterError(str(e))
 
 
@@ -599,12 +691,9 @@ def compute_singapore_field_layout(
 ) -> dict:
     """Where every block of the Singapore Cover Letter sits on the page of
     the real PDF, for the editable preview (see document_blocks)."""
-    shader = docx_utils.ProbeShader()
-    probe = generate_singapore_cover_letter_docx(
-        applicant, companions, fields, date_override, edited_blocks=edited_blocks, _shader=shader
-    )
     try:
-        pdf = docx_utils.convert_docx_bytes_to_pdf(probe, base_name="singapore_cover_letter_layout")
-    except docx_utils.DocxBuildError as e:
+        return singapore_letter_engine.compute_cover_letter_layout(
+            applicant, companions, fields, date_override, edited_blocks=edited_blocks
+        )
+    except singapore_letter_engine.SingaporeLetterError as e:
         raise CoverLetterError(str(e))
-    return shader.layout_from_pdf(pdf)

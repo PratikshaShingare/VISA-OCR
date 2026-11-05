@@ -66,8 +66,8 @@
    proper, clearly-distinguishable color/style instead of blending in as a
    plain .btn-secondary — it's a meaningfully different action from the
    other secondary buttons around it (it can discard the current
-   application's not-yet-saved work), so it reuses the existing warning/
-   amber design token rather than inventing a new color. */
+   application's not-yet-saved work), so it reuses the existing warning
+   design token (the brand red) rather than inventing a new color. */
 .btn-warning {
   background: var(--color-warning-soft);
   color: var(--color-warning);
@@ -84,17 +84,9 @@
   border-color: var(--color-danger);
 }
 .btn-danger:hover {
-  background: #a31f1f;
-  border-color: #a31f1f;
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
   color: #fff;
-}
-[data-theme="dark"] .btn-danger {
-  background: #c94a4a;
-  border-color: #c94a4a;
-}
-[data-theme="dark"] .btn-danger:hover {
-  background: #b23c3c;
-  border-color: #b23c3c;
 }
 
 .btn-danger-outline {
@@ -175,10 +167,8 @@
   }
 }
 
-/* Theme toggle as a profile-menu row: icon + the current theme's name
-   (sun + "Light" / moon + "Dark"). The icon switching rules above already
-   apply because the row also carries .theme-toggle; the names follow the
-   same dark-theme selectors so exactly one icon and one name show. */
+/* Dark mode as a profile-menu row: sun/moon icon (shows the current theme),
+   the name, and an on/off switch on the right (see .switch-track below). */
 .profile-menu__item.profile-menu__theme {
   display: flex;
   align-items: center;
@@ -189,27 +179,66 @@
   color: var(--color-text-muted);
 }
 
-/* Both sun and moon are display:none/block-switched above; the row itself
-   must be a flex row (needs the .profile-menu__item prefix to out-rank
-   that class's own display:block, which is declared later in this file). */
-
-.theme-label--dark {
-  display: none;
+.profile-menu__theme .switch-track {
+  margin-left: auto;
 }
 
-:root[data-theme="dark"] .theme-label--light {
-  display: none;
-}
-:root[data-theme="dark"] .theme-label--dark {
-  display: inline;
+/* ---------------- On/off switch ----------------
+   Used by the dark-mode switch. The element carrying role="switch" holds the
+   state (aria-checked); .switch-track is only the picture. On = brand blue
+   (lighter blue on the dark theme so it stays visible), off = grey. */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  flex: none;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .theme-label--light {
-    display: none;
-  }
-  :root:not([data-theme="light"]) .theme-label--dark {
-    display: inline;
+.switch-track {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  transition: background-color 0.18s ease;
+}
+
+.switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.18s ease;
+}
+
+[role="switch"][aria-checked="true"] .switch-track {
+  background: var(--color-primary);
+}
+
+[role="switch"][aria-checked="true"] .switch-track::after {
+  transform: translateX(18px);
+}
+
+[role="switch"]:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch-track,
+  .switch-track::after {
+    transition: none;
   }
 }
 
@@ -223,7 +252,7 @@
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
   gap: var(--space-4);
 }
 
@@ -290,21 +319,15 @@
   color: var(--color-text-muted);
 }
 
-.badge-success {
-  background: var(--color-success-soft);
-  color: var(--color-success);
-}
-.badge-warning {
-  background: var(--color-warning-soft);
-  color: var(--color-warning);
-}
-.badge-danger {
-  background: var(--color-danger-soft);
-  color: var(--color-danger);
-}
+.badge-success,
 .badge-info {
-  background: var(--color-info-soft);
-  color: var(--color-info);
+  background: var(--brand-blue);
+  color: var(--color-on-solid);
+}
+.badge-warning,
+.badge-danger {
+  background: var(--brand-red);
+  color: var(--color-on-solid);
 }
 
 /* ---------------- Status select (Phase 11) ----------------
@@ -341,20 +364,20 @@
 }
 
 .status-select.badge-success {
-  background-color: var(--color-success-soft);
-  color: var(--color-success);
+  background-color: var(--brand-blue);
+  color: var(--color-on-solid);
 }
 .status-select.badge-warning {
-  background-color: var(--color-warning-soft);
-  color: var(--color-warning);
+  background-color: var(--brand-red);
+  color: var(--color-on-solid);
 }
 .status-select.badge-danger {
-  background-color: var(--color-danger-soft);
-  color: var(--color-danger);
+  background-color: var(--brand-red);
+  color: var(--color-on-solid);
 }
 .status-select.badge-info {
-  background-color: var(--color-info-soft);
-  color: var(--color-info);
+  background-color: var(--brand-blue);
+  color: var(--color-on-solid);
 }
 
 /* ---------------- Notice banner ---------------- */
@@ -704,4 +727,94 @@ input[type="radio"] {
   font-size: 0.8rem;
   color: var(--color-text-faint);
   overflow-wrap: anywhere;
+}
+
+
+/* ==========================================================================
+   Form sections (Nov 2026 clarity pass): long letter forms are split into
+   numbered sections — "Who is travelling", "Letter details" — so staff always
+   know where they are. Shared by every letter page; plain markup, no script.
+   ========================================================================== */
+.form-step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin: var(--space-6) 0 var(--space-4);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border);
+}
+
+.form-step:first-child {
+  margin-top: var(--space-4);
+  padding-top: 0;
+  border-top: 0;
+}
+
+.form-step__num {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.form-step__title {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 650;
+  line-height: 24px;
+}
+
+.form-step__hint {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+/* Traveller rows: checkbox centred against the name, a little more air. */
+.auth-person-list {
+  margin-top: var(--space-3);
+}
+
+.auth-person-row {
+  align-items: center;
+  padding: 10px var(--space-3);
+}
+
+.auth-person-row .auth-person-row__meta {
+  margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  .auth-person-row .auth-person-row__meta {
+    margin-left: 0;
+    flex-basis: 100%;
+    padding-left: 26px;
+  }
+}
+
+/* Consecutive blocks of fields keep the same 16px rhythm as the rows inside
+   them (previously the next block started flush against the one above). */
+.field-grid + .field-grid,
+.field-grid + .field,
+.field-grid + .field-hint,
+.field-hint + .field-grid,
+.field + .field-grid {
+  margin-top: var(--space-4);
+}
+
+[data-cover-readiness] > .notice,
+[data-cover-error] > .notice {
+  margin-top: var(--space-4);
+}
+
+[data-cover-generate-bar] > .hotel-generate-bar:first-child {
+  margin-top: var(--space-4);
 }

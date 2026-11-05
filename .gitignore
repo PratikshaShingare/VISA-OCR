@@ -1,5 +1,58 @@
+# ======================================================================
+# Khanna Travels & Holidays - files that must NOT go to GitHub
+# (secrets, client/passport data, local databases, generated output)
+# ======================================================================
+
+# ---- Secrets (API keys: azapi, Google Places, CloudConvert, OpenRouter ...)
 .env
-*.pyc
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---- Client data: passports, vouchers, uploads, generated documents
+uploads/*
+!uploads/.gitkeep
+generated/*
+!generated/.gitkeep
+Hotel Vouchers Examples/
+scratch/
+Claude outputs/
+*.passport.json
+
+# ---- Local databases (staff accounts / password hashes)
+backend/python/data/*.db
+backend/python/data/*.sqlite
+backend/python/data/*.sqlite3
+*.db
+*.sqlite
+*.sqlite3
+
+# ---- Python
 __pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+
+# ---- Node / tooling
 node_modules/
+
+# ---- Hosting folders created by tools
+.vercel/
+
+# ---- Logs, temp, editor and OS files
+*.log
+*.tmp
+*.bak
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ---- Test output (screenshots, downloads)
+tests/e2e/output/
+tests/e2e/screenshots/

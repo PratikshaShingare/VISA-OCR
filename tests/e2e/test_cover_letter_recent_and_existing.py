@@ -274,7 +274,7 @@ async def main():
         n_rows = await rows.count()
         checks.check("Recent Cover Letters lists the saved cover letter", n_rows == 1, str(n_rows))
         row_text = await rows.first.inner_text()
-        checks.check("row shows applicant, country, dates", "Rahul Sharma" in row_text and "Norway" in row_text and "15" in row_text, row_text)
+        checks.check("row shows applicant, country, dates", "Rahul Sharma" in row_text and "Norway" in row_text and "→" in row_text, row_text)
         checks.check("row is titled with the applicant's name, not 'Untitled applicant'", "Untitled applicant" not in row_text, row_text)
         checks.check("row has Edit, Download, Delete", all(k in row_text for k in ("Edit", "Download", "Delete")), row_text)
 
@@ -340,12 +340,19 @@ async def main():
         checks.check("clicking Generate produces the preview", await page.locator("[data-voucher-preview] canvas").count() > 0)
         checks.check("no error shown", await page.locator("[data-voucher-error] .notice-danger").count() == 0)
 
-        # nothing complete -> still disabled, with the reason
+        # a hotel with missing details is still generated (the gaps print as a dash)
         await page.evaluate(
             f"(function(){{var a=KhannaState.getApplication('{hid}');KhannaState.updateHotel(a.id,a.hotels[0].id,{{city:''}},null);}})()"
         )
         await page.wait_for_timeout(400)
-        checks.check("with no complete hotel the button stays disabled", await page.locator("[data-action='generate-voucher']").is_disabled())
+        checks.check("with only incomplete hotels the button is still enabled", await page.locator("[data-action='generate-voucher']").is_enabled())
+
+        # no hotel at all -> disabled, with the reason
+        await page.evaluate(
+            f"(function(){{var a=KhannaState.getApplication('{hid}');a.hotels.slice().forEach(function(h){{KhannaState.removeHotel(a.id,h.id);}});}})()"
+        )
+        await page.wait_for_timeout(400)
+        checks.check("with no hotel at all the button stays disabled", await page.locator("[data-action='generate-voucher']").is_disabled())
         checks.check("...and says why", "Add at least one hotel" in await page.inner_text("[data-voucher-generate]"))
 
         real_errors = [e for e in console_errors if "favicon" not in e.lower()]

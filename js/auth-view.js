@@ -1,7 +1,7 @@
 /* ==========================================================================
    Khanna Travels & Holidays — Authentication-aware UI
-   Wires KhannaAuth into the header profile menu, the Login/Profile/Settings
-   views, and Admin-only visibility. Every element that should only appear
+   Wires KhannaAuth into the header profile menu, the Login and the merged
+   Profile & Settings views, and Admin-only visibility. Every element that should only appear
    for a signed-in (or admin) user is driven from here — nothing is shown
    decoratively.
    ========================================================================== */
@@ -52,7 +52,6 @@
     });
 
     renderProfileView();
-    renderSettingsView();
     renderAdminGate();
   }
 
@@ -80,7 +79,8 @@
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape") closeProfileDropdown();
     });
-    utils.on(document, "click", ".profile-menu__item", closeProfileDropdown);
+    // The dark-mode switch keeps the menu open so the switch visibly flips.
+    utils.on(document, "click", ".profile-menu__item:not(.profile-menu__theme)", closeProfileDropdown);
   }
 
   /* ---------------- Login form ---------------- */
@@ -91,29 +91,33 @@
       var form = this;
       var email = form.querySelector("#loginEmail").value;
       var password = form.querySelector("#loginPassword").value;
-      var result = auth.login(email, password);
       var errorBox = form.querySelector("[data-login-error]");
       var errorText = form.querySelector("[data-login-error-text]");
+      var submit = form.querySelector("[type='submit']");
+      if (submit) submit.disabled = true;
 
-      if (!result.ok) {
-        errorText.textContent = result.error;
-        errorBox.style.display = "flex";
-        return;
-      }
+      auth.login(email, password).then(function (result) {
+        if (submit) submit.disabled = false;
+        if (!result.ok) {
+          errorText.textContent = result.error;
+          errorBox.style.display = "flex";
+          return;
+        }
 
-      errorBox.style.display = "none";
-      form.reset();
+        errorBox.style.display = "none";
+        form.reset();
 
-      var intent = auth.consumeRedirectIntent();
-      // Replay whatever the user was trying to do before being redirected
-      // to log in, so they land back in the wizard with an actual
-      // application selected instead of an empty step 1.
-      if (intent.action === "new") {
-        global.KhannaState.createApplication(result.user.email);
-      } else if (intent.action === "open" && intent.actionArg) {
-        global.KhannaState.setActiveApplicationId(intent.actionArg);
-      }
-      global.KhannaRouter.navigate(intent.view, intent.step);
+        var intent = auth.consumeRedirectIntent();
+        // Replay whatever the user was trying to do before being redirected
+        // to log in, so they land back in the wizard with an actual
+        // application selected instead of an empty step 1.
+        if (intent.action === "new") {
+          global.KhannaState.createApplication(result.user.email);
+        } else if (intent.action === "open" && intent.actionArg) {
+          global.KhannaState.setActiveApplicationId(intent.actionArg);
+        }
+        global.KhannaRouter.navigate(intent.view, intent.step);
+      });
     });
   }
 
@@ -125,16 +129,17 @@
     });
   }
 
-  /* ---------------- Profile / Settings views ---------------- */
+  /* ---------------- Profile & Settings (one page) ---------------- */
 
-  function accountSummaryHtml(user) {
-    return (
-      '<div class="field"><label>Name</label><div>' + utils.escapeHtml(user.name) + "</div></div>" +
-      '<div class="field"><label>Email</label><div>' + utils.escapeHtml(user.email) + "</div></div>" +
-      '<div class="field"><label>Role</label><div><span class="badge ' +
-      (user.role === "admin" ? "badge-info" : "") +
-      '">' + utils.escapeHtml(user.role) + "</span></div></div>"
-    );
+  function showMessage(selector, kind, text) {
+    var box = utils.qs(selector);
+    if (!box) return;
+    if (!text) {
+      box.innerHTML = "";
+      return;
+    }
+    box.innerHTML =
+      '<div class="notice notice-' + kind + '" role="status"><span>' + utils.escapeHtml(text) + "</span></div>";
   }
 
   function renderProfileView() {
@@ -147,16 +152,71 @@
         '<a class="btn btn-primary btn-sm" href="#/auth" data-nav-link="auth" style="align-self:flex-start;">Log In</a>';
       return;
     }
-    container.innerHTML = accountSummaryHtml(user);
+    // Don't rebuild the form while the person is typing in it: a refresh
+    // triggered by something else (e.g. the session check finishing) would
+    // wipe an edit in progress.
+    var existing = container.querySelector("[data-profile-name-input]");
+    if (existing && document.activeElement === existing) return;
+
+    container.innerHTML =
+      '<form data-profile-form autocomplete="off">' +
+      '<div class="account-name-row">' +
+      '<div class="field"><label for="profileNameInput">Name</label>' +
+      '<input id="profileNameInput" data-profile-name-input type="text" required maxlength="80" value="' +
+      utils.escapeHtml(user.name) + '" /></div>' +
+      '<button class="btn btn-primary btn-sm" type="submit">Save name</button>' +
+      "</div></form>" +
+      '<div data-profile-message></div>' +
+      '<div class="account-fact"><span class="account-fact__label">Email (your login)</span><span>' +
+      utils.escapeHtml(user.email) + "</span></div>" +
+      '<div class="account-fact"><span class="account-fact__label">Role</span><span><span class="badge ' +
+      (user.role === "admin" ? "badge-info" : "") + '">' + utils.escapeHtml(user.role) + "</span></span></div>";
   }
 
-  function renderSettingsView() {
-    var container = utils.qs("[data-settings-account]");
-    if (!container) return;
-    var user = auth.getCurrentUser();
-    container.innerHTML = user
-      ? accountSummaryHtml(user)
-      : '<p style="margin:0;">Log in to see account settings.</p>';
+  function initProfileForms() {
+    utils.on(document, "submit", "[data-profile-form]", function (e) {
+      e.preventDefault();
+      var input = this.querySelector("[data-profile-name-input]");
+      var name = input.value.trim();
+      if (!name) {
+        showMessage("[data-profile-message]", "danger", "Enter your name.");
+        return;
+      }
+      global.KhannaApi.updateMyName(name).then(
+        function (body) {
+          auth.setCurrentUserName((body && body.user && body.user.name) || name);
+          showMessage("[data-profile-message]", "success", "Name saved.");
+        },
+        function (err) {
+          showMessage("[data-profile-message]", "danger", (err && err.message) || "Could not save the name.");
+        }
+      );
+    });
+
+    utils.on(document, "submit", "[data-password-form]", function (e) {
+      e.preventDefault();
+      var form = this;
+      var current = form.querySelector("#pwCurrent").value;
+      var next = form.querySelector("#pwNew").value;
+      var again = form.querySelector("#pwConfirm").value;
+      if (next !== again) {
+        showMessage("[data-password-message]", "danger", "The two new passwords do not match.");
+        return;
+      }
+      if (next.length < 8) {
+        showMessage("[data-password-message]", "danger", "The new password must be at least 8 characters.");
+        return;
+      }
+      global.KhannaApi.changeMyPassword(current, next).then(
+        function () {
+          form.reset();
+          showMessage("[data-password-message]", "success", "Password changed. Use it the next time you log in.");
+        },
+        function (err) {
+          showMessage("[data-password-message]", "danger", (err && err.message) || "Could not change the password.");
+        }
+      );
+    });
   }
 
   /* ---------------- Admin gate ---------------- */
@@ -192,6 +252,7 @@
     "checklist-letter",
     "invitation-letter",
     "upload-passport",
+    "upload-documents",
   ];
 
   function initRouteGuards() {
@@ -216,7 +277,9 @@
     auth.subscribe(renderAuthState);
     initProfileDropdown();
     initLoginForm();
+    initProfileForms();
     initLogout();
+    auth.verifySession();
     initRouteGuards();
   }
 

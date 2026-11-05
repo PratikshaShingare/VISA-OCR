@@ -164,10 +164,25 @@
 .doc-viewer__canvas {
   display: block;
 }
-.doc-viewer__overlay {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
+.doc-viewer__letter {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+}
+.doc-viewer__letter[hidden] {
+  display: none;
+}
+/* While Edit is on the editable letter replaces the PDF page, so the page and
+   its page / zoom controls are out of the way. */
+.doc-viewer.is-editing .doc-viewer__page,
+.doc-viewer.is-editing [data-dv='zoom-out'],
+.doc-viewer.is-editing [data-dv='zoom-in'],
+.doc-viewer.is-editing [data-dv='zoom-label'],
+.doc-viewer.is-editing [data-dv='fit'],
+.doc-viewer.is-editing [data-dv='prev-page'],
+.doc-viewer.is-editing [data-dv='next-page'],
+.doc-viewer.is-editing [data-dv='page-label'] {
+  display: none;
 }
 .doc-viewer__format {
   /* The Word-style ribbon (js/editor-ribbon.js) takes a full row of its own
@@ -199,8 +214,51 @@
 .doc-viewer__edit:disabled {
   cursor: not-allowed;
 }
-/* Fields are only live (and only visible) while Edit is on. */
-.doc-viewer:not(.is-editing) .doc-viewer__overlay {
+
+
+/* ---- Word (docx-preview) fallback view ------------------------------------ */
+.doc-viewer__note {
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.8rem;
+  color: var(--color-warning);
+  background: var(--color-surface-alt);
+  border-bottom: 1px solid var(--color-border);
+}
+.doc-viewer__note[hidden] {
   display: none;
 }
-/* (no outline boxes in edit mode — see preview-editor.css) */
+.doc-viewer__docx {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  overflow: visible;
+}
+.doc-viewer__docx[hidden] {
+  display: none;
+}
+/* docx-preview draws each A4 page as <section class="docx">; the viewer's own
+   body already provides the grey surround, so the library's wrapper padding
+   and background are removed and pages are centred. */
+.doc-viewer__docx .docx-wrapper {
+  background: transparent;
+  padding: 0;
+  align-items: center;
+}
+.doc-viewer__docx .docx-wrapper > section.docx {
+  background: #fff;
+  color: #000;
+  box-shadow: var(--shadow-md);
+  margin: 0 auto var(--space-4);
+}
+/* Keep the Word page "paper": black text on white in both themes. The app's
+   global `p` styling (muted colour, max-width) must not leak into the
+   document; :where() keeps this weaker than the document's own styles. */
+:where(.doc-viewer__docx section.docx) p,
+:where(.doc-viewer__docx section.docx) li,
+:where(.doc-viewer__docx section.docx) td {
+  color: inherit;
+  max-width: none;
+}
+.doc-viewer.is-editing .doc-viewer__docx {
+  display: none;
+}

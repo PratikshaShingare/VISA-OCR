@@ -121,7 +121,10 @@ def test_compose_hotel_editable_fields_matches_the_real_generated_text(sample_ho
     skip_if_missing(hve.TEMPLATE_PATH)
     fields = hve.compose_hotel_editable_fields(sample_hotel)
     assert set(fields.keys()) == set(hve._HOTEL_EDITABLE_FIELD_KEYS)
-    assert f"<p>{sample_hotel['hotelName']}</p>" == fields["hotelName"]
+    # The template highlights these values cyan: the seed carries the same highlight.
+    assert f"{sample_hotel['hotelName']}</span></p>" in fields["hotelName"]
+    assert "rgb(0, 255, 255)" in fields["hotelName"] and "rgb(0, 255, 255)" in fields["checkIn"]
+    assert "rgb(0, 255, 255)" not in fields["leadGuestName"]
     assert sample_hotel["confirmationNumber"] in fields["confirmationSentence"]
     assert "01 Dec 2026" in fields["checkIn"]
     assert "4 Night(s)" in fields["nights"]
@@ -146,7 +149,8 @@ def test_compose_hotel_editable_fields_guest_names_is_one_paragraph_per_name():
     skip_if_missing(hve.TEMPLATE_PATH)
     hotel = {"hotelName": "H", "guestNames": ["Alpha One", "Beta Two"]}
     fields = hve.compose_hotel_editable_fields(hotel)
-    assert fields["guestNames"] == "<p>Alpha One</p><p>Beta Two</p>"
+    cyan = '<span style="background-color: rgb(0, 255, 255);">{}</span>'
+    assert fields["guestNames"] == "<p>" + cyan.format("Alpha One") + "</p><p>" + cyan.format("Beta Two") + "</p>"
 
 
 def test_edited_field_replaces_only_that_cell_others_stay_auto_generated(sample_hotel):
@@ -370,3 +374,54 @@ def test_every_guest_line_keeps_the_templates_numbered_list_format():
     assert [p.text for p in paragraphs] == ["Lead", "B", "C", "D", "E"]
     for p in paragraphs:
         assert p._p.pPr is not None and p._p.pPr.numPr is not None, f"{p.text!r} lost its list numbering"
+
+
+def test_every_hotel_block_numbers_guests_and_policy_from_one(sample_hotels):
+    """Cloned blocks share the template's Word list, so Word kept counting
+    (guests 4,5,6 on hotel 2; policy 3,4). Each block must restart at 1."""
+    from docx.oxml.ns import qn
+
+    skip_if_missing(hve.TEMPLATE_PATH)
+    hotels = [dict(h, leadGuestName="Mr. Lead", guestNames=["Mrs. Wife"]) for h in (sample_hotels * 2)[:3]]
+    doc = Document(io.BytesIO(hve.generate_hotel_voucher_docx(hotels)))
+    numbering = doc.part.numbering_part.element
+    nums = {n.get(qn("w:numId")): n for n in numbering.findall(qn("w:num"))}
+    blocks = [t for t in doc.tables if t.rows and t.rows[0].cells[0].paragraphs and t.rows[0].cells[0].paragraphs[0].text.strip() == "HOTEL VOUCHER"]
+    assert len(blocks) == 3
+    seen_lists = []
+    for block in blocks:
+        ids = {el.get(qn("w:val")) for el in block._tbl.iter(qn("w:numId")) if el.get(qn("w:val")) != "0"}
+        assert ids, "the voucher block lost its numbered lists"
+        seen_lists.append(ids)
+        for i in ids:
+            overrides = nums[i].findall(qn("w:lvlOverride"))
+            if block is not blocks[0]:
+                assert overrides and all(o.find(qn("w:startOverride")).get(qn("w:val")) == "1" for o in overrides)
+    # No two blocks share a list id.
+    for a in range(3):
+        for b in range(a + 1, 3):
+            assert not (seen_lists[a] & seen_lists[b])
+
+
+def test_each_layout_rect_sits_on_the_cell_of_its_own_field(sample_hotels):
+    """The probe colours must be decoded in the order they were painted: a value's
+    rectangle must lie in ITS table cell (regression: everything after
+    "guestTotal" once sat on its neighbour's cell)."""
+    skip_if_missing(hve.TEMPLATE_PATH)
+    skip_if_missing_binary("soffice")
+    g = hve.compute_field_layout(sample_hotels[:1])["hotels"][0]
+    r = {k: v["rect"] for k, v in g.items() if not k.startswith("blk-")}
+    # left column / right column of the booking table, top to bottom
+    left = ["leadGuestName", "noOfRooms", "checkIn", "nights", "address"]
+    right = ["hotelName", "guestTotal", "phone", "checkOut", "city"]
+    for col in (left[:4], right):
+        tops = [r[k][1] for k in col]
+        assert tops == sorted(tops), f"values out of row order: {col}"
+    assert r["noOfRooms"][1] == pytest.approx(r["phone"][1], abs=1) and r["noOfRooms"][0] < r["phone"][0]
+    assert r["checkIn"][1] == pytest.approx(r["checkOut"][1], abs=1) and r["checkIn"][0] < r["checkOut"][0]
+    assert r["nights"][1] == pytest.approx(r["city"][1], abs=1) and r["nights"][0] < r["city"][0]
+    assert r["leadGuestName"][1] == pytest.approx(r["guestTotal"][1], abs=1)
+    # the guest table below: names | room type | count, left to right
+    assert r["guestNames"][0] < r["roomType"][0] < r["guestCounts"][0]
+    assert r["guestNames"][1] == pytest.approx(r["guestCounts"][1], abs=1)
+    assert r["guestNames"][1] > r["address"][3]

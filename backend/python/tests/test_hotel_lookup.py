@@ -33,6 +33,8 @@ GOOGLE_OK = {
 }
 OSM_OK = [
     {
+        "category": "tourism",
+        "type": "hotel",
         "name": "Sample Palace Hotel",
         "display_name": "Sample Palace Hotel, Testville",
         "address": {"road": "Test Road", "house_number": "1", "city": "Testville", "postcode": "400001", "country": "India"},
@@ -84,7 +86,7 @@ def test_google_rejection_falls_through_to_openstreetmap(monkeypatch):
 
 
 def test_a_different_hotel_is_not_accepted(monkeypatch):
-    other = [{"name": "Completely Unrelated Lodge", "display_name": "x", "address": {"city": "Elsewhere"}, "extratags": {}}]
+    other = [{"category": "tourism", "type": "hotel", "name": "Completely Unrelated Lodge", "display_name": "x", "address": {"city": "Elsewhere"}, "extratags": {}}]
     monkeypatch.setattr(hl.requests, "get", lambda *a, **k: FakeResp(200, other))
     res = hl.lookup_hotel("Sample Palace Hotel")
     assert res["status"] == "not_found"
@@ -103,3 +105,82 @@ def test_network_failure_never_raises(monkeypatch):
 def test_too_short_name_is_not_looked_up(monkeypatch):
     monkeypatch.setattr(hl.requests, "get", lambda *a, **k: pytest.fail("no request for an empty name"))
     assert hl.lookup_hotel("")["status"] == "not_found"
+
+
+# ---------------------------------------------------------------------------
+# Lodging-only, name cleaning, country conflict, website structured data
+# ---------------------------------------------------------------------------
+
+def test_a_square_that_shares_a_word_with_the_hotel_name_is_not_a_hotel(monkeypatch):
+    plaza = [{"category": "place", "type": "square", "name": "Plazoleta Leopoldo Lugones", "display_name": "Plazoleta Leopoldo Lugones, La Plata",
+              "address": {"city": "La Plata", "country": "Argentina"}, "extratags": {}}]
+    monkeypatch.setattr(hl.requests, "get", lambda *a, **k: FakeResp(200, plaza))
+    assert hl.lookup_hotel("B&B Leopoldo")["status"] == "not_found"
+
+
+def test_the_listing_name_is_returned_not_the_vouchers_wording(monkeypatch):
+    osm = [{"category": "tourism", "type": "hotel", "name": "Hotel Weisses Kreuz St. Gallen", "display_name": "x",
+            "address": {"road": "Engelgasse", "house_number": "9", "city": "St. Gallen", "postcode": "9000", "country": "Switzerland"},
+            "extratags": {"phone": "+41 71 223 28 43"}}]
+    monkeypatch.setattr(hl.requests, "get", lambda *a, **k: FakeResp(200, osm))
+    res = hl.lookup_hotel("Hotel Weisses Kreuz")
+    assert res["status"] == "ok" and res["name"] == "Hotel Weisses Kreuz St. Gallen"
+    assert res["phone"] == "+41 71 223 28 43" and res["city"] == "St. Gallen"
+
+
+def test_ocr_debris_is_cleaned_from_the_name():
+    assert hl._clean_name("B&B Hotel Zurich Airport Rimiang B&") == "B&B Hotel Zurich Airport Rimiang"
+    assert hl._clean_name("Ibis Styles Luzern (HTL) ★★★") == "Ibis Styles Luzern"
+    assert hl._clean_name("B&B Hotel Milano Ornato") == "B&B Hotel Milano Ornato"
+
+
+def test_a_hotel_of_that_name_in_another_country_is_not_used(monkeypatch):
+    osm = [{"category": "tourism", "type": "hotel", "name": "Sample Palace Hotel", "display_name": "x",
+            "address": {"city": "Paris", "country": "France"}, "extratags": {}}]
+    monkeypatch.setattr(hl.requests, "get", lambda *a, **k: FakeResp(200, osm))
+    res = hl.lookup_hotel("Sample Palace Hotel", country_hint="Italy")
+    assert res["status"] == "not_found"
+
+
+LD_PAGE = """<html><head><script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Hotel","name":"Sample Palace Hotel","telephone":"+39 02 1234 5678",
+ "address":{"@type":"PostalAddress","streetAddress":"Via Test 1","postalCode":"20100","addressLocality":"Milano","addressCountry":"IT"}}
+</script></head><body>x</body></html>"""
+
+
+def test_website_structured_data_gives_name_phone_and_address(monkeypatch):
+    html = ('<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.booking.com%2Fh">b</a>'
+            '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.samplepalace.example%2F">s</a>')
+
+    class Search(FakeResp):
+        text = html
+
+    monkeypatch.setattr(hl.requests, "get", lambda *a, **k: Search(200))
+    monkeypatch.setattr(hl, "_fetch_page", lambda url, timeout=6.0: LD_PAGE if "samplepalace" in url else pytest.fail("OTA page fetched: " + url))
+    res = hl.lookup_hotel("Sample Palace Hotel")
+    assert res["status"] == "ok" and res["source"] == "website"
+    assert res["phone"] == "+39 02 1234 5678" and res["city"] == "Milano" and "Via Test 1" in res["address"]
+
+
+def test_missing_phone_is_completed_from_the_hotels_own_site(monkeypatch):
+    osm = [{"category": "tourism", "type": "hotel", "name": "Sample Palace Hotel", "display_name": "x",
+            "address": {"road": "Via Test", "city": "Milano", "country": "Italy"},
+            "extratags": {"website": "https://www.samplepalace.example"}}]
+
+    def fake_get(url, **k):
+        if "nominatim" in url:
+            return FakeResp(200, osm)
+        return FakeResp(500, {})  # the search engine and photon are down
+
+    monkeypatch.setattr(hl.requests, "get", fake_get)
+    monkeypatch.setattr(hl, "_fetch_page", lambda url, timeout=6.0: LD_PAGE)
+    res = hl.lookup_hotel("Sample Palace Hotel")
+    assert res["status"] == "ok" and res["phone"] == "+39 02 1234 5678" and "website" in res["source"]
+    assert res["city"] == "Milano"
+
+
+def test_pages_on_private_networks_are_never_fetched(monkeypatch):
+    monkeypatch.setattr(hl.requests, "get", lambda *a, **k: pytest.fail("must not connect"))
+    assert hl._fetch_page("http://127.0.0.1:8000/secret") is None
+    assert hl._fetch_page("http://192.168.1.10/x") is None
+    assert hl._fetch_page("file:///etc/passwd") is None

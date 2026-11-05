@@ -83,6 +83,27 @@ def test_a_block_edit_replaces_exactly_that_paragraph():
     assert [t for t in before if not t.startswith("Thanking")] == [t for t in after if t != "Warm regards,"]
 
 
+def test_an_empty_edit_deletes_the_paragraph_but_a_blank_paragraph_keeps_the_line():
+    base = _passport_docx()
+    block = next(b for b in _blocks_of(base) if b.text.strip().startswith("Thanking You"))
+    deleted = _texts(_passport_docx({block.key: ""}))
+    blank = _texts(_passport_docx({block.key: "<p></p>"}))
+    before = _texts(base)
+    assert "Thanking You," not in deleted and len(deleted) == len(before) - 1
+    assert "Thanking You," not in blank and len(blank) == len(before)
+
+
+def test_an_empty_edit_inside_a_table_cell_only_empties_the_cell():
+    doc = Document()
+    table = doc.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "Keep me"
+    table.cell(0, 1).text = "Delete me"
+    blocks = document_blocks.enumerate_blocks(doc)
+    victim = next(b for b in blocks if b.text == "Delete me")
+    document_blocks.finalize(doc, {victim.key: ""})
+    assert [c.text for c in doc.tables[0].rows[0].cells] == ["Keep me", ""]
+
+
 def test_an_edit_can_add_paragraphs_a_list_and_a_table():
     base = _passport_docx()
     block = next(b for b in _blocks_of(base) if b.text.strip().startswith("Thanking You"))

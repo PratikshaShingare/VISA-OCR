@@ -27,6 +27,8 @@ from _common import (
     fill_ocr_person,
     fresh_load_and_login,
     pick_company_consulate,
+    preview_unit_text,
+    select_unit_text,
     set_edit_mode,
     start_guided_wizard_application,
     wait_preview_ready,
@@ -100,11 +102,16 @@ async def main():
         await wait_preview_ready(page, scope_pa)
         edit_btn = page.locator(f"{scope_pa} [data-dv='edit-toggle']")
         checks.check("The preview has an Edit button", await edit_btn.count() == 1 and await edit_btn.is_enabled())
-        checks.check("Nothing is editable (no live fields) while Edit is off", await page.locator(f"{scope_pa} .pe-field").first.is_hidden())
+        checks.check("Nothing is editable (no editor on the page) while Edit is off", await page.locator(f"{scope_pa} .lw-stage").count() == 0)
         await edit_btn.click()
+        await page.wait_for_selector(f"{scope_pa} .lw-stage .ql-editor")
         await page.wait_for_timeout(300)
-        n_fields = await page.locator(f"{scope_pa} .pe-field").count()
-        checks.check("Edit mode makes the whole Passport Authorization Letter editable (at least its 5 named values)", n_fields >= 5, str(n_fields))
+        n_fields = await page.evaluate(
+            "(sel) => new Set(Array.from(document.querySelectorAll(sel + ' .ql-editor [data-unit]')).map(e => e.getAttribute('data-unit'))).size",
+            f"{scope_pa} .lw-stage",
+        )
+        checks.check("Edit mode makes the whole Passport Authorization Letter editable as ONE page (at least its 5 named values)", n_fields >= 5, str(n_fields))
+        checks.check("...in a single editor, not one box per value", await page.locator(f"{scope_pa} .ql-editor").count() == 1)
 
         custom_sentence = "I, the undersigned applicant, hereby authorize Khanna Holidays Pvt. Ltd. to collect my original passport."
         seeded_text = await edit_value_on_preview(page, scope_pa, "applicantSentence", custom_sentence)
@@ -123,13 +130,13 @@ async def main():
             persisted is not None and custom_sentence in persisted,
             str(persisted),
         )
-        n_edited = await page.locator(f"{scope_pa} .pe-field.is-edited").count()
-        checks.check("The edited value shows on the page straight away", n_edited == 1, str(n_edited))
+        shown_now = await preview_unit_text(page, scope_pa, "applicantSentence")
+        checks.check("The edited value shows on the page straight away", custom_sentence in shown_now, shown_now)
 
-        # No overlay is offered for the signature/email block.
+        # The signature / email block is part of the one editable letter too.
         checks.check(
-            "No editable value exists for the signature/email block",
-            await page.locator(f"{scope_pa} .pe-field[data-pe-key='signature']").count() == 0,
+            "The signature / email block is editable as well (the whole letter is)",
+            await page.locator(f"{scope_pa} .ql-editor [data-unit^='doc|blk-']").count() > 3,
         )
 
         # Download DOCX regenerates first, so the edit is in the file.
@@ -154,15 +161,15 @@ async def main():
         # The page itself (PDF) now carries the edit after the regeneration.
         await page.wait_for_timeout(500)
         await wait_preview_ready(page, scope_pa)
-        n_edited = await page.locator(f"{scope_pa} .pe-field.is-edited").count()
-        checks.check("After regeneration the edit is part of the real PDF page", n_edited == 0, str(n_edited))
 
         # "Reset" restores the auto-generated wording and clears the override.
-        await page.locator(f"{scope_pa} .pe-field[data-pe-key='applicantSentence']").first.click()
-        await page.wait_for_timeout(700)
+        await set_edit_mode(page, scope_pa, True)
+        await page.wait_for_selector(f"{scope_pa} .lw-stage .ql-editor")
+        await page.wait_for_timeout(300)
+        await select_unit_text(page, scope_pa, "applicantSentence", whole=False)
         await page.click(f"{scope_pa} [data-pe='reset']")
-        await page.wait_for_timeout(700)
-        reset_text = (await page.inner_text(f"{scope_pa} .pe-field.is-active .ql-editor")).strip()
+        await page.wait_for_timeout(900)
+        reset_text = await preview_unit_text(page, scope_pa, "applicantSentence")
         checks.check(
             "'Reset' restores the real composed applicantSentence",
             applicant_name in reset_text and custom_sentence not in reset_text,
@@ -195,7 +202,11 @@ async def main():
         await page.click("[data-action='generate-authorization'][data-group='company']")
         await wait_preview_ready(page, scope_ca)
         await set_edit_mode(page, scope_ca, True)
-        n_company = await page.locator(f"{scope_ca} .pe-field").count()
+        await page.wait_for_selector(f"{scope_ca} .lw-stage .ql-editor")
+        n_company = await page.evaluate(
+            "(sel) => new Set(Array.from(document.querySelectorAll(sel + ' .ql-editor [data-unit]')).map(e => e.getAttribute('data-unit'))).size",
+            f"{scope_ca} .lw-stage",
+        )
         checks.check(
             f"Company Authorization is fully editable: date + recipient + one editable line per selected applicant ({company_count}) plus the other text blocks",
             n_company >= company_count + 2,

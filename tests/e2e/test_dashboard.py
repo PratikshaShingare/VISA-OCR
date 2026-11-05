@@ -60,7 +60,7 @@ async def mobile_pass(browser, w):
     checks.check(f"[{w}] 8 cards (stat + 7 documents), 2 columns", m["n"] == 8 and m["cols"] == 2, str(m))
     checks.check(f"[{w}] cards inside viewport, none clipped", m["minLeft"] >= 0 and m["maxRight"] <= m["cw"] and not m["clipped"], str(m))
     checks.check(f"[{w}] content uses full width (main = viewport)", m["main"] >= m["cw"] - 2, str(m))
-    ib = await page.evaluate("""() => Array.prototype.slice.call(document.querySelectorAll('.dashboard-icon-btn')).map(function (b) {
+    ib = await page.evaluate("""() => Array.prototype.slice.call(document.querySelectorAll("[data-view='dashboard'] .dashboard-icon-btn")).map(function (b) {
       var r = b.getBoundingClientRect(); var row = b.closest('.dashboard-recent-row').getBoundingClientRect();
       return { w: Math.round(r.width), h: Math.round(r.height), inRow: r.right <= row.right + 0.5 && r.left >= row.left } })""")
     checks.check(f"[{w}] icon buttons are >= 40px touch targets and stay inside their row",
@@ -71,7 +71,7 @@ async def mobile_pass(browser, w):
     mb = await page.evaluate("""() => { function shown(sel) { var e = document.querySelector(sel); return !!e && e.offsetParent !== null }
       var v = parseFloat(getComputedStyle(document.querySelector('.dashboard-stat-card .stat-card__value')).fontSize);
       var l = parseFloat(getComputedStyle(document.querySelector('.dashboard-stat-card .stat-card__label')).fontSize);
-      var name = document.querySelector('.dashboard-recent-row__name').textContent;
+      var name = document.querySelector("[data-view='dashboard'] .dashboard-recent-row__name").textContent;
       return { logo: shown('.brand__logo'), text: shown('.brand__text'), plus: shown('[data-new-app-menu-toggle]'), prof: shown('[data-profile-toggle]'), nav: shown('[data-nav-toggle]'),
                theme: shown('.header-actions > .btn-icon.theme-toggle'), v: v, l: l, name: name } }""")
     checks.check(f"[{w}] phone header: only logo, '+', profile icon and menu button (no company name text)",
@@ -96,7 +96,7 @@ async def mobile_pass(browser, w):
     hrefs = await page.evaluate("""() => Array.prototype.slice.call(document.querySelectorAll('[data-mobile-nav] [data-nav-link]'))
         .filter(function (a) { return a.offsetParent !== null; }).map(function (a) { return a.getAttribute('data-nav-link'); })""")
     expected = {"dashboard", "hotel-blocking", "cover-letter", "company-authorization", "passport-authorization",
-                "checklist-letter", "invitation-letter", "upload-passport", "profile", "settings"}
+                "checklist-letter", "invitation-letter", "upload-passport", "profile"}
     checks.check(f"[{w}] drawer lists all expected items", expected.issubset(set(hrefs)), str(hrefs))
     for nav in hrefs:
         if not await page.evaluate("document.querySelector('[data-mobile-nav]').classList.contains('is-open')"):
@@ -196,14 +196,14 @@ async def desktop_pass(browser, w):
     await page.wait_for_timeout(300)
 
     # Recent Applications: View / Delete.
-    rows = await page.locator(".dashboard-recent-row").count()
+    rows = await page.locator("[data-view='dashboard'] .dashboard-recent-row").count()
     checks.check(f"[{w}] Recent Applications shows 4 rows", rows == 4, str(rows))
-    btns = await page.evaluate("""() => Array.prototype.slice.call(document.querySelectorAll('.dashboard-recent-row')).every(function (r) {
+    btns = await page.evaluate("""() => Array.prototype.slice.call(document.querySelectorAll("[data-view='dashboard'] .dashboard-recent-row")).every(function (r) {
       return !!r.querySelector("[data-action='dashboard-view-application']") && !!r.querySelector("[data-action='dashboard-delete-application']") })""")
     checks.check(f"[{w}] every row has a View and a Delete button", btns)
-    meta = await page.evaluate("""() => { var m = document.querySelector('.dashboard-recent-row__meta'); var sp = m.querySelectorAll('span');
+    meta = await page.evaluate("""() => { var m = document.querySelector("[data-view='dashboard'] .dashboard-recent-row__meta"); var sp = m.querySelectorAll('span');
       var a = sp[0].getBoundingClientRect(), b = sp[1].getBoundingClientRect();
-      return { text: m.innerText, spans: sp.length, stacked: b.top >= a.bottom - 1, row: document.querySelector('.dashboard-recent-row').innerText } }""")
+      return { text: m.innerText, spans: sp.length, stacked: b.top >= a.bottom - 1, row: document.querySelector("[data-view='dashboard'] .dashboard-recent-row").innerText } }""")
     checks.check(f"[{w}] Recent Applications: 'Updated …' and the document status sit on two lines",
                  meta["spans"] == 2 and meta["stacked"] and meta["text"].startswith("Updated"), str(meta))
     checks.check(f"[{w}] Recent Applications: no APP_… number shown in the list", "APP_" not in meta["row"], meta["row"])
@@ -214,8 +214,8 @@ async def desktop_pass(browser, w):
         return { text: b.textContent.trim(), svg: !!b.querySelector('svg'), label: b.getAttribute('aria-label'), title: b.getAttribute('title'),
           border: ['Top','Right','Bottom','Left'].map(function (k) { return parseFloat(cs['border' + k + 'Width']) || 0 }).reduce(function (a, x) { return a + x }, 0),
           bg: cs.backgroundColor, shadow: cs.boxShadow, color: cs.color, w: b.getBoundingClientRect().width, h: b.getBoundingClientRect().height }; }
-      return { view: info(".dashboard-recent-row [data-action='dashboard-view-application']"),
-               del: info(".dashboard-recent-row [data-action='dashboard-delete-application']"),
+      return { view: info("[data-view='dashboard'] .dashboard-recent-row [data-action='dashboard-view-application']"),
+               del: info("[data-view='dashboard'] .dashboard-recent-row [data-action='dashboard-delete-application']"),
                primary: tok('--color-primary'), danger: tok('--color-danger') } }""")
     for key, tokname in (("view", "primary"), ("del", "danger")):
         b = ic[key]
@@ -226,11 +226,11 @@ async def desktop_pass(browser, w):
     checks.check(f"[{w}] bin (Delete) icon is red (--color-danger)", ic["del"]["color"] == ic["danger"], str((ic["del"]["color"], ic["danger"])))
 
     if w == 1366:
-        first_id = await page.locator(".dashboard-recent-row [data-action='dashboard-delete-application']").first.get_attribute("data-app-id")
-        first_name = await page.locator(".dashboard-recent-row__name").first.inner_text()
+        first_id = await page.locator("[data-view='dashboard'] .dashboard-recent-row [data-action='dashboard-delete-application']").first.get_attribute("data-app-id")
+        first_name = await page.locator("[data-view='dashboard'] .dashboard-recent-row__name").first.inner_text()
         # View on an application with no generated document must not open the
         # wizard (the full flow is covered in test_dashboard_view_preview.py).
-        await page.locator(".dashboard-recent-row [data-action='dashboard-view-application']").first.click()
+        await page.locator("[data-view='dashboard'] .dashboard-recent-row [data-action='dashboard-view-application']").first.click()
         await page.wait_for_timeout(400)
         checks.check(f"[{w}] View never opens the full wizard", "new-application" not in await page.evaluate("location.hash"),
                      await page.evaluate("location.hash"))
@@ -238,7 +238,7 @@ async def desktop_pass(browser, w):
         await page.wait_for_timeout(300)
 
         # Delete: cancel keeps it, confirm removes it, count + list update.
-        await page.locator(".dashboard-recent-row [data-action='dashboard-delete-application']").first.click()
+        await page.locator("[data-view='dashboard'] .dashboard-recent-row [data-action='dashboard-delete-application']").first.click()
         await page.wait_for_timeout(200)
         modal_visible = await page.locator("[data-dash-delete-confirm]").is_visible()
         checks.check(f"[{w}] Delete asks for confirmation first", modal_visible)
@@ -248,7 +248,7 @@ async def desktop_pass(browser, w):
         await page.wait_for_timeout(200)
         checks.check(f"[{w}] Cancel keeps the application", await page.evaluate("KhannaState.getApplications().length") == 5)
 
-        await page.locator(".dashboard-recent-row [data-action='dashboard-delete-application']").first.click()
+        await page.locator("[data-view='dashboard'] .dashboard-recent-row [data-action='dashboard-delete-application']").first.click()
         await page.wait_for_timeout(200)
         await page.locator("[data-dash-delete-confirm]").click()
         await page.wait_for_timeout(300)
@@ -258,7 +258,7 @@ async def desktop_pass(browser, w):
         checks.check(f"[{w}] Total Applications count updates to 4", total.strip() == "4", total)
         stored = await page.evaluate("JSON.stringify(Object.keys(localStorage).map(function (k) { return localStorage.getItem(k) }))")
         checks.check(f"[{w}] deletion is persisted (gone from localStorage)", first_id not in stored)
-        names = await page.locator(".dashboard-recent-row__name").all_inner_texts()
+        names = await page.locator("[data-view='dashboard'] .dashboard-recent-row__name").all_inner_texts()
         checks.check(f"[{w}] deleted applicant no longer listed in Recent Applications", first_name not in names, str(names))
 
         # Dashboard-only: Applications page's own instant delete untouched.

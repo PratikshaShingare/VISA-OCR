@@ -1,16 +1,16 @@
 /* ==========================================================================
    Khanna Travels & Holidays — Authentication state
    -----------------------------------------------------------------------
-   IMPORTANT / HONEST LIMITATION: there is no backend server yet (it lands
-   alongside Passport OCR in a later phase), so this checks credentials
-   against a small local "staff directory" defined below and stores the
-   resulting session in localStorage. This is a working login (it actually
-   gates the UI, actually persists a session, actually restricts the Admin
-   area) but it is NOT server-enforced security — anyone with browser dev
-   tools could inspect this file or edit localStorage directly. Per the
-   project's own Phase 39: "Admin authorization must eventually be enforced
-   server-side." This module is the client-side half of that; the other
-   half arrives once /backend/python/app.py exists.
+   Real login: credentials are checked by the backend (backend/python/
+   auth_service.py — hashed passwords, server-side sessions). This module
+   keeps the signed-in user and the session token in this browser
+   (localStorage) so a refresh does not sign anyone out, and re-checks the
+   token with the backend when the page opens. Only an admin can create or
+   remove staff accounts: the backend enforces it, the UI merely hides the
+   controls from everyone else.
+
+   No password is ever stored in the browser — only {email, name, role,
+   token}.
    ========================================================================== */
 
 (function (global) {
@@ -20,15 +20,7 @@
   var storage = utils.storage;
   var SESSION_KEY = "khanna_session_v1";
 
-  // Local demo staff directory — replace with a real backend call once
-  // /backend/python/app.py exists. Passwords never get written to
-  // localStorage; only the resulting {email, name, role} session does.
-  var STAFF_DIRECTORY = [
-    { email: "admin@khannatravels.com", password: "admin123", name: "Admin", role: "admin" },
-    { email: "customercare@khannatravels.com", password: "khanna123", name: "Visa Team", role: "staff" },
-  ];
-
-  var currentUser = null; // { email, name, role } | null
+  var currentUser = null; // { email, name, role, token } | null
   var redirectIntent = null; // { view, step } | null
   var subscribers = [];
 
@@ -44,27 +36,73 @@
 
   function init() {
     currentUser = storage.get(SESSION_KEY, null);
+    if (currentUser && !currentUser.token) currentUser = null; // a session from before real logins
+    if (!currentUser) storage.remove(SESSION_KEY);
   }
 
+  // Asks the backend whether the saved session is still good (and refreshes
+  // the name/role). Only a definite "no" signs the user out — a backend that
+  // is simply not running right now leaves them where they are.
+  function verifySession() {
+    if (!currentUser || !global.KhannaApi) return Promise.resolve();
+    return global.KhannaApi.getMe().then(
+      function (body) {
+        if (body && body.user && currentUser) {
+          currentUser = Object.assign({}, currentUser, body.user);
+          storage.set(SESSION_KEY, currentUser);
+          notify();
+        }
+      },
+      function () { /* 401 is handled by sessionEnded(); anything else: keep the session */ }
+    );
+  }
+
+  // Returns a Promise of { ok: true, user } or { ok: false, error }.
   function login(email, password) {
-    var normalizedEmail = String(email || "").trim().toLowerCase();
-    var match = STAFF_DIRECTORY.find(function (u) {
-      return u.email.toLowerCase() === normalizedEmail && u.password === password;
-    });
+    var api = global.KhannaApi;
+    if (!api) return Promise.resolve({ ok: false, error: "The app is still loading — try again." });
+    return api.login(String(email || "").trim(), password || "").then(
+      function (body) {
+        currentUser = { email: body.user.email, name: body.user.name, role: body.user.role, token: body.token };
+        storage.set(SESSION_KEY, currentUser);
+        notify();
+        return { ok: true, user: currentUser };
+      },
+      function (err) {
+        return { ok: false, error: (err && err.message) || "Could not log in." };
+      }
+    );
+  }
 
-    if (!match) {
-      return { ok: false, error: "Invalid email or password." };
-    }
-
-    currentUser = { email: match.email, name: match.name, role: match.role };
-    storage.set(SESSION_KEY, currentUser);
+  function clearSession() {
+    currentUser = null;
+    storage.remove(SESSION_KEY);
     notify();
-    return { ok: true, user: currentUser };
   }
 
   function logout() {
-    currentUser = null;
-    storage.remove(SESSION_KEY);
+    var api = global.KhannaApi;
+    if (currentUser && api) api.logoutOnServer().catch(function () {});
+    clearSession();
+  }
+
+  // The backend said this session is no longer valid.
+  function sessionEnded() {
+    if (!currentUser) return;
+    clearSession();
+    if (global.KhannaToast) global.KhannaToast.show("Your session has ended. Please log in again.", { type: "error" });
+    if (global.KhannaRouter) global.KhannaRouter.navigate("auth");
+  }
+
+  function getToken() {
+    return currentUser ? currentUser.token : null;
+  }
+
+  // Name changed on the Profile & Settings page.
+  function setCurrentUserName(name) {
+    if (!currentUser) return;
+    currentUser = Object.assign({}, currentUser, { name: name });
+    storage.set(SESSION_KEY, currentUser);
     notify();
   }
 
@@ -87,23 +125,6 @@
         return f !== fn;
       });
     };
-  }
-
-  /**
-   * Phase 11 — read-only accessor for the Admin dashboard's Staff Directory
-   * card. Deliberately returns {email, name, role} only — never the
-   * password field — and deliberately has no matching add/edit/remove
-   * function: this directory is still the hardcoded array at the top of
-   * this file (the same honest limitation documented there and on the
-   * Login view since Phase 3), so a real CRUD UI here would silently not
-   * persist anything and would be exactly the kind of decorative,
-   * non-functional control project rule 9 rules out. Real user management
-   * arrives once a real backend auth service exists (Phase 39).
-   */
-  function getStaffDirectory() {
-    return STAFF_DIRECTORY.map(function (u) {
-      return { email: u.email, name: u.name, role: u.role };
-    });
   }
 
   /**
@@ -143,7 +164,10 @@
     subscribe: subscribe,
     requireLogin: requireLogin,
     consumeRedirectIntent: consumeRedirectIntent,
-    getStaffDirectory: getStaffDirectory,
+    getToken: getToken,
+    verifySession: verifySession,
+    sessionEnded: sessionEnded,
+    setCurrentUserName: setCurrentUserName,
   };
 
   // Load any persisted session immediately, same pattern as KhannaState, so

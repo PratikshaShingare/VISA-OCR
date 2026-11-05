@@ -25,7 +25,15 @@ import pypdfium2 as pdfium
 from docx import Document
 from playwright.async_api import async_playwright
 
-from _common import BASE, Checks, fresh_load_and_login, start_guided_wizard_application
+from _common import (
+    BASE,
+    Checks,
+    fresh_load_and_login,
+    preview_unit_keys,
+    preview_unit_text,
+    select_unit_text,
+    start_guided_wizard_application,
+)
 
 checks = Checks()
 
@@ -108,7 +116,7 @@ async def main():
 
         edit_btn = page.locator("[data-voucher-preview] [data-dv='edit-toggle']")
         checks.check("The preview has an Edit button at the top of the Preview section", await edit_btn.count() == 1 and await edit_btn.is_visible())
-        checks.check("Overlays are not live (not visible) while Edit is off", await page.locator("[data-voucher-preview] .pe-field").first.is_hidden())
+        checks.check("No editor is on the page while Edit is off", await page.locator("[data-voucher-preview] .lw-stage").count() == 0)
         checks.check("The formatting toolbar is hidden while Edit is off", await page.locator("[data-voucher-preview] [data-dv='format-tools']").is_hidden())
         await edit_btn.click()
         await page.wait_for_timeout(300)
@@ -122,25 +130,21 @@ async def main():
         )
         for ctl in ("font", "size", "bold", "italic", "underline", "color", "highlight", "align-left", "align-center", "align-right", "align-justify", "bullet", "ordered", "table-menu", "spacing-menu"):
             checks.check(f"Toolbar has a '{ctl}' control", await page.locator(f"[data-voucher-preview] [data-pe='{ctl}']").count() == 1)
-        checks.check("Toolbar is disabled until a value is clicked", await page.locator("[data-voucher-preview] [data-pe='bold']").is_disabled())
 
-        n_overlays = await page.locator("[data-voucher-preview] .pe-field").count()
-        checks.check("Page 1 is editable as a whole document (every text block, not just the 14 value areas)", n_overlays >= 14, str(n_overlays))
-        checks.check(
-            "No overlay sits on a fixed label/heading (only values)",
-            await page.locator("[data-voucher-preview] .pe-field[data-pe-key='confirmationSentence']").count() == 1,
-        )
+        voucher = "[data-voucher-preview]"
+        keys = await preview_unit_keys(page, voucher)
+        checks.check("The whole voucher is one editable page (every text block, not just the 14 value areas)", len(keys) >= 14, str(len(keys)))
+        checks.check("...in a single editor", await page.locator(f"{voucher} .ql-editor").count() == 1)
+        checks.check("The named values are in it", "confirmationSentence" in keys and "hotelName" in keys, str(keys[:20]))
 
         # ---- edit hotel 1's name, with formatting ----
-        field = page.locator("[data-voucher-preview] .pe-field[data-pe-key='hotelName']").first
-        await field.click()
-        await page.wait_for_timeout(700)
-        checks.check("Clicking a value enables the toolbar", not await page.locator("[data-voucher-preview] [data-pe='bold']").is_disabled())
-        seeded = (await page.inner_text("[data-voucher-preview] .pe-field.is-active .ql-editor")).strip()
-        checks.check("The value opens seeded with the real current text", seeded == "The Grand Meridian", seeded)
-        await page.keyboard.press("Control+A")
+        checks.check("The toolbar is enabled while editing", not await page.locator("[data-voucher-preview] [data-pe='bold']").is_disabled())
+        seeded = await preview_unit_text(page, voucher, "hotelName")
+        checks.check("The value is shown with the real current text", seeded == "The Grand Meridian", seeded)
+        await select_unit_text(page, voucher, "hotelName")
         await page.keyboard.type("Grand Meridian Lake View")
-        await page.keyboard.press("Control+A")
+        await page.wait_for_timeout(300)
+        await select_unit_text(page, voucher, "hotelName")
         await page.click("[data-voucher-preview] [data-pe='bold']")
         await page.select_option("[data-voucher-preview] [data-pe='size']", "20pt")
         await page.select_option("[data-voucher-preview] [data-pe='font']", "Arial")
@@ -149,10 +153,9 @@ async def main():
         await page.click("[data-voucher-preview] [data-pe='highlight-menu']")
         await page.click(".pe-pop [data-hex='#FFFF00']")
         await page.wait_for_timeout(500)
-        html = await page.inner_text("[data-voucher-preview] .pe-field.is-active .ql-editor")
+        html = await preview_unit_text(page, voucher, "hotelName")
         checks.check("Typed text is in the editor", "Grand Meridian Lake View" in html, html)
-        await page.locator("[data-voucher-preview] .pe-field[data-pe-key='city']").first.click()  # commit by moving on
-        await page.wait_for_timeout(500)
+        await page.wait_for_timeout(900)  # saved a moment after the last change
         saved = await page.evaluate("(KhannaState.getActiveApplication().hotels[0].editedFields || {}).hotelName || null")
         checks.check("The edit is saved into the hotel record", saved is not None and "Grand Meridian Lake View" in saved, str(saved))
         checks.check("Saved HTML carries bold", saved is not None and "<strong" in saved, str(saved))
@@ -160,18 +163,14 @@ async def main():
         checks.check("Saved HTML carries the colour", saved is not None and ("255, 0, 0" in saved or "#ff0000" in saved.lower()), str(saved))
         checks.check("Saved HTML carries the highlight", saved is not None and "255, 255, 0" in saved, str(saved))
         checks.check("Saved HTML carries the font", saved is not None and "Arial" in saved, str(saved))
-        checks.check(
-            "The edited value shows over the stale PDF text until regenerated",
-            await page.locator("[data-voucher-preview] .pe-field[data-pe-key='hotelName'].is-edited").count() == 1,
-        )
 
         # ---- Regenerate bakes the edit into the real PDF ----
         await page.click("[data-voucher-preview] [data-dv='regenerate']")
         await page.wait_for_timeout(500)
         await _wait_preview_ready(page)
         checks.check(
-            "After Regenerate the overlay is transparent again (edit lives in the real PDF)",
-            await page.locator("[data-voucher-preview] .pe-field.is-edited").count() == 0,
+            "After Regenerate the editor still shows the edit (it now lives in the real PDF)",
+            "Grand Meridian Lake View" in await preview_unit_text(page, voucher, "hotelName"),
         )
 
         async with page.expect_download() as dl_info:
@@ -185,9 +184,7 @@ async def main():
         checks.check("Downloaded PDF keeps the fixed Hotel Policy text", "Early check out will attract full cancellation charge" in text)
 
         # ---- Download without pressing Regenerate: unsaved edit is still included ----
-        await page.locator("[data-voucher-preview] .pe-field[data-pe-key='leadGuestName']").first.click()
-        await page.wait_for_timeout(700)
-        await page.keyboard.press("Control+A")
+        await select_unit_text(page, voucher, "leadGuestName")
         await page.keyboard.type("Rohan Q Mehta")
         await page.wait_for_timeout(500)
         async with page.expect_download() as dl_info:
@@ -223,11 +220,11 @@ async def main():
         checks.check("Print opens the print dialog with one image per PDF page (2 hotels = 2 pages)", calls == [2], str(calls))
 
         # ---- Reset restores the auto-generated text ----
-        await page.locator("[data-voucher-preview] .pe-field[data-pe-key='hotelName']").first.click()
-        await page.wait_for_timeout(700)
+        await page.wait_for_selector(f"{voucher} .lw-stage .ql-editor")
+        await select_unit_text(page, voucher, "hotelName", whole=False)
         await page.click("[data-voucher-preview] [data-pe='reset']")
-        await page.wait_for_timeout(700)
-        reset_text = (await page.inner_text("[data-voucher-preview] .pe-field.is-active .ql-editor")).strip()
+        await page.wait_for_timeout(900)
+        reset_text = await preview_unit_text(page, voucher, "hotelName")
         checks.check("Reset restores the real composed value", reset_text == "The Grand Meridian", reset_text)
         cleared = await page.evaluate("(KhannaState.getActiveApplication().hotels[0].editedFields || {}).hotelName")
         checks.check("Reset clears the saved override", cleared is None, str(cleared))

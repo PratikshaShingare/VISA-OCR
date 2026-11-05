@@ -7,9 +7,10 @@
 
      - Invitation Letter: written by a person already living abroad (the
        inviter — entered freely here, since they are NOT one of this
-       application's own applicant/travellers) inviting exactly 2 of this
-       application's own people, matching the real reference template's
-       fixed "my Parents" wording.
+       application's own applicant/travellers) inviting any number of this
+       application's own people. The reference template's fixed "my
+       Parents" wording is kept for two; for other counts staff can name
+       the relation (default "my family").
      - Initors Covering Letter (the user's own "Spouse-Accompanying Cover
        Letter" framing, Phase 0): for a married couple travelling
        together, invited by the same person abroad. Each spouse signs and
@@ -157,7 +158,7 @@
 
   function useExistingHtml(which) {
     if (!isStandalonePage()) return "";
-    return (
+    var existing =
       '<div class="cover-use-existing" data-inv-use-existing="' + which + '">' +
       '<button type="button" class="btn btn-secondary btn-sm" data-inv-use-existing-toggle aria-haspopup="true" aria-expanded="false">' +
       "Use Existing Details " +
@@ -170,7 +171,9 @@
       "</div>" +
       '<div class="cover-existing-list" data-inv-existing-list hidden></div>' +
       "</div>" +
-      "</div>" +
+      "</div>";
+    return (
+      global.KhannaAddTraveller.sourceChoiceHtml(existing, "invitation") +
       '<div class="cover-existing-status" data-inv-existing-status role="status" aria-live="polite" hidden></div>'
     );
   }
@@ -230,7 +233,9 @@
       setExistingStatus(which, name + " is already selected on this letter.", true);
       return;
     }
-    if (ids.length >= 2) {
+    // Only the Initors covering letter is for exactly two people (a married
+    // couple); the Invitation Letter takes any number of invitees.
+    if (which === "initors" && ids.length >= 2) {
       rerenderCard(which);
       setExistingStatus(which, "This letter takes exactly 2 people. Untick one below before adding another.", true);
       return;
@@ -343,7 +348,7 @@
     if (!app || !auth) return false;
     var state = invitationState(app);
     var invitees = selectedInvitees(app);
-    if (invitees.length !== 2) return false;
+    if (invitees.length < 1) return false;
     if (!invitees.every(auth.personHasCoreFields)) return false;
     if (!inviterHasCoreFields(state.inviter)) return false;
     return ["travelStartDate", "travelEndDate", "purpose", "accommodationDetails", "returnDate", "fundingArrangement"].every(
@@ -366,7 +371,7 @@
     return people
       .map(function (p) {
         var checked = selectedIds.indexOf(p.id) !== -1;
-        var atMax = !checked && selectedIds.length >= 2;
+        var atMax = false; // any number of invitees
         var incomplete = !auth.personHasCoreFields(p);
         return (
           '<label class="auth-person-row' + (atMax ? " is-disabled" : "") + '">' +
@@ -439,7 +444,11 @@
       fieldRowHtml("invitation-field", "top", "fundingArrangement", "Expenses covered by", state.fundingArrangement, true, {
         placeholder: "e.g. the invitees",
       }) +
-      "</div>"
+      fieldRowHtml("invitation-field", "top", "inviteeRelation", "Invitees are the inviter's… (optional)", state.inviteeRelation, false, {
+        placeholder: "e.g. parents, mother, family",
+      }) +
+      "</div>" +
+      '<p class="field-hint">Leave blank for the usual wording: "my parents" for two invitees, "my family" for one or three or more.</p>'
     );
   }
 
@@ -496,8 +505,10 @@
           passportNumber: p.passportNumber || "",
           placeOfIssue: p.placeOfIssue || "",
           passportIssueDate: p.passportIssueDate || "",
+          sex: p.sex || "",
         };
       }),
+      inviteeRelation: (state.inviteeRelation || "").trim(),
       travelStartDate: state.travelStartDate || "",
       travelEndDate: state.travelEndDate || "",
       purpose: state.purpose || "",
@@ -563,7 +574,7 @@
       ? ""
       : '<div class="notice notice-warning">' +
         '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>' +
-        "<span>Select exactly 2 invitees (each with a name and passport number on file), fill in the inviter's own details and every trip field above, to generate this letter.</span>" +
+        "<span>Select the invitees (each with a name and passport number on file), fill in the inviter's own details and every trip field above, to generate this letter.</span>" +
         "</div>";
   }
 
@@ -1213,6 +1224,35 @@
       if (dd) dd.classList.add("has-list");
     });
 
+    // "+ Add another traveller": typed in here, saved as a real traveller on
+    // the application and ticked on this card (the Initors letter takes exactly 2).
+    utils.on(r, "click", "[data-action='add-another-traveller']", function (e, target) {
+      var row = target.closest(".use-existing-row");
+      var wrap = row && row.querySelector("[data-inv-use-existing]");
+      var which = wrap && wrap.getAttribute("data-inv-use-existing");
+      if (!which || !global.KhannaAddTraveller) return;
+      closeUseExistingMenus();
+      global.KhannaAddTraveller.open(function (travellerId, info) {
+        var app = getApp();
+        if (!app) return;
+        var cfg = selectionConfig(which);
+        var ids = (cfg.state(app)[cfg.idsKey] || []).slice();
+        if (which === "initors" && ids.length >= 2) {
+          rerenderCard(which);
+          setExistingStatus(which, "Added " + info.fullName + " to the application. This letter takes exactly 2 people — untick one below to select them.", true);
+          return;
+        }
+        ids.push(travellerId);
+        var patch = {};
+        patch[cfg.section] = {};
+        patch[cfg.section][cfg.idsKey] = ids;
+        global.KhannaState.updateApplication(app.id, patch, null);
+        rerenderCard(which);
+        setExistingStatus(which, "Added " + info.fullName + " and selected them on this letter.", false);
+        if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
+      }, { docKey: "invitation" });
+    });
+
     utils.on(r, "click", "[data-inv-existing-pick]", function (e, target) {
       var wrap = target.closest("[data-inv-use-existing]");
       var which = wrap && wrap.getAttribute("data-inv-use-existing");
@@ -1243,13 +1283,7 @@
       var personId = target.getAttribute("data-person-id");
       var idx = ids.indexOf(personId);
       if (target.checked) {
-        if (idx === -1) {
-          if (ids.length >= 2) {
-            target.checked = false; // guard, in addition to the disabled attribute
-            return;
-          }
-          ids.push(personId);
-        }
+        if (idx === -1) ids.push(personId);
       } else if (idx !== -1) {
         ids.splice(idx, 1);
       }

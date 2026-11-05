@@ -179,3 +179,25 @@ def test_lookup_is_skipped_without_a_hotel_name():
     called = []
     res = h.enrich_with_hotel_lookup({"fields": {"hotelName": None}}, lookup=lambda *a, **k: called.append(1))
     assert not called and res["lookup"]["status"] == "skipped"
+
+
+def test_guest_names_never_swallow_the_label_on_the_next_line():
+    """A name ends at the end of its line: the first word of the next line
+    ("Guests:", "Check-in:") used to be glued on, e.g. 'Mrs. Anita Kumar Check-in'."""
+    text = (
+        "HOTEL BOOKING VOUCHER\n"
+        "Hotel Name: Grand Alpine Resort\n"
+        "Lead Guest Name: Mr Rajesh Kumar\n"
+        "Guests: Mr Rajesh Kumar, Mrs Anita Kumar\n"
+        "Check-in: 12 Dec 2026\n"
+        "Check-out: 16 Dec 2026\n"
+    )
+    out = h.extract_hotel_voucher_fields(text)
+    assert out["fields"]["leadGuestName"] == "Mr. Rajesh Kumar"
+    assert "Mrs. Anita Kumar" in out["guestNames"]
+    assert not any("Check" in g or "Guests" in g for g in out["guestNames"])
+
+
+def test_name_is_cut_at_a_label_word_on_the_same_line():
+    out = h._titled_names("Mrs Anita Kumar Check-in Date 12 Dec")
+    assert out == ["Mrs. Anita Kumar"]

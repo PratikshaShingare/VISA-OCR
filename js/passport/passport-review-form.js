@@ -256,6 +256,11 @@
     if (meta) meta.textContent = metaText || "";
   }
 
+  function isAzapiSource(wrap) {
+    var source = wrap && wrap.dataset.ocrSource;
+    return source === "azapi" || source === "mrz+azapi";
+  }
+
   function isManual(container, path) {
     var wrap = utils.qs('[data-field-wrap="' + path + '"]', container);
     return !!(wrap && wrap.classList.contains("field-manual"));
@@ -271,6 +276,9 @@
   function applyOcrField(container, path, ocrField, opts) {
     opts = opts || {};
     if (isManual(container, path)) return false;
+    // A value read by azapi OCR (the paid reader) is never replaced by the
+    // weaker local read of another page of the same passport.
+    if (ocrField && ocrField.source === "viz" && isAzapiSource(utils.qs('[data-field-wrap="' + path + '"]', container))) return false;
     if (!ocrField || ocrField.value === null || ocrField.value === undefined || ocrField.value === "") {
       if (!opts.quiet && !getFieldValue(container, path)) {
         setFieldState(container, path, "missing", "Not detected by OCR — please enter manually.");
@@ -280,10 +288,17 @@
     setFieldValue(container, path, ocrField.value);
     var pct = Math.round((ocrField.confidence || 0) * 100);
     var sourceLabel =
+      ocrField.source === "mrz+azapi" ? "machine-readable zone, confirmed by azapi OCR" :
+      ocrField.source === "azapi" ? "azapi OCR" :
       ocrField.source === "mrz" ? "machine-readable zone" :
       ocrField.source === "derived" ? "worked out from passport data" :
       "visual inspection zone";
-    if (ocrField.needsReview) {
+    if (!ocrField.needsReview && container.dataset.azapiRead === "1") {
+      // azapi read this passport and nothing is wrong with the value: no
+      // colour and no per-field note. The coloured boxes are for readings
+      // that need attention, or for when azapi was not used.
+      setFieldState(container, path, null, "");
+    } else if (ocrField.needsReview) {
       setFieldState(
         container,
         path,
@@ -294,7 +309,10 @@
       setFieldState(container, path, "ok", "OCR extracted (" + pct + "% confidence, " + sourceLabel + ").");
     }
     var wrap = utils.qs('[data-field-wrap="' + path + '"]', container);
-    if (wrap) wrap.dataset.ocrTouched = "1";
+    if (wrap) {
+      wrap.dataset.ocrTouched = "1";
+      wrap.dataset.ocrSource = ocrField.source || "";
+    }
     return true;
   }
 
@@ -413,12 +431,8 @@
         "</div>" +
         "</details>";
     }
-    if (info.length) {
-      html +=
-        '<ul class="ocr-notices">' +
-        info.map(function (n) { return "<li>" + utils.escapeHtml(n) + "</li>"; }).join("") +
-        "</ul>";
-    }
+    // `notices` (which OCR engine answered, etc.) are deliberately not shown on
+    // the page any more; only real verification problems (above) are.
     box.innerHTML = html;
   }
 
@@ -638,9 +652,12 @@
 
     var score = bioScore(result);
     var current = container.dataset.bioScore;
+    var azapiRead = !!(result.azapi && result.azapi.used);
     var samePage = opts.pageIndex !== undefined && String(opts.pageIndex) === container.dataset.bioPage;
     if (!opts.force && current !== undefined && !samePage && score <= Number(current)) return;
     container.dataset.bioScore = String(score);
+    if (azapiRead) container.dataset.azapiRead = "1";
+    else delete container.dataset.azapiRead;
     if (opts.pageIndex !== undefined) container.dataset.bioPage = String(opts.pageIndex);
     container.dataset.pagesApplied = "1";
 
@@ -697,6 +714,7 @@
     utils.qsa("[data-field-wrap]", container).forEach(function (wrap) {
       wrap.classList.remove("field-ok", "field-review", "field-missing", "field-manual");
       delete wrap.dataset.ocrTouched;
+      delete wrap.dataset.ocrSource;
     });
     utils.qsa("[data-field-meta]", container).forEach(function (m) {
       m.textContent = "";
@@ -711,6 +729,7 @@
     renderWarnings(container, [], []);
     setBanner(container, null);
     delete container.dataset.bioScore;
+    delete container.dataset.azapiRead;
     delete container.dataset.bioPage;
     delete container.dataset.pagesApplied;
   }

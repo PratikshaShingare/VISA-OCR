@@ -283,6 +283,17 @@ _HOTEL_EDITABLE_FIELD_KEYS = (
 )
 
 
+# The reference template highlights these generated values cyan (like the
+# confirmation number). The editor's seed carries the same highlight so an
+# edited value looks — and is written back — exactly like the generated page.
+_TEMPLATE_HIGHLIGHTED_KEYS = ("hotelName", "checkIn", "checkOut", "city")
+_CYAN_SPAN = '<span style="background-color: rgb(0, 255, 255);">{}</span>'
+
+
+def _mark(escaped_text: str) -> str:
+    return _CYAN_SPAN.format(escaped_text) if escaped_text else escaped_text
+
+
 def compose_hotel_editable_fields(hotel: dict) -> dict:
     """The Word-like body editor's seed values for ONE hotel block, as real
     Quill-ready HTML — the exact same shared-compose-function pattern the
@@ -298,7 +309,9 @@ def compose_hotel_editable_fields(hotel: dict) -> dict:
     for key in _HOTEL_EDITABLE_FIELD_KEYS:
         value = values[key]
         if key == "guestNames":
-            fields[key] = "".join(f"<p>{_html_mod.escape(line)}</p>" for line in value)
+            fields[key] = "".join(f"<p>{_mark(_html_mod.escape(line))}</p>" for line in value)
+        elif key in _TEMPLATE_HIGHLIGHTED_KEYS:
+            fields[key] = f"<p>{_mark(_html_mod.escape(value))}</p>"
         elif key == "confirmationSentence":
             fields[key] = (
                 f"<p>{_html_mod.escape(values['confirmationFirstLine'])}<strong>{_html_mod.escape(values['confirmationBoldTail'])}</strong></p>"
@@ -433,6 +446,52 @@ class _HotelBlockProbe:
             docx_utils.shade_element_fill(p_el.get_or_add_pPr(), docx_utils.probe_rgb(idx))
 
 
+def _restart_numbering(document: Document, block_el) -> None:
+    """Makes every numbered list inside this cloned hotel block count from 1
+    again. The blocks are deep copies of one template table, so they all point
+    at the SAME Word list (w:numId) and Word keeps counting: the second hotel's
+    guests would read 4), 5), 6) and its policy 3., 4. Each distinct list used
+    in the block gets its own w:num that reuses the same abstract definition
+    (same look) with a start override of 1 on every level."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    try:
+        numbering = document.part.numbering_part.element
+    except Exception:  # noqa: BLE001 — a template without numbering has nothing to restart
+        return
+    nums = {n.get(qn("w:numId")): n for n in numbering.findall(qn("w:num"))}
+    if not nums:
+        return
+    next_id = max(int(i) for i in nums) + 1
+    mapping: dict = {}
+    for num_id_el in block_el.iter(qn("w:numId")):
+        old = num_id_el.get(qn("w:val"))
+        if old not in nums or old == "0":
+            continue
+        if old not in mapping:
+            abstract = nums[old].find(qn("w:abstractNumId"))
+            if abstract is None:
+                continue
+            new_num = OxmlElement("w:num")
+            new_num.set(qn("w:numId"), str(next_id))
+            abs_el = OxmlElement("w:abstractNumId")
+            abs_el.set(qn("w:val"), abstract.get(qn("w:val")))
+            new_num.append(abs_el)
+            for lvl in range(9):
+                ov = OxmlElement("w:lvlOverride")
+                ov.set(qn("w:ilvl"), str(lvl))
+                start = OxmlElement("w:startOverride")
+                start.set(qn("w:val"), "1")
+                ov.append(start)
+                new_num.append(ov)
+            last_num = list(numbering.findall(qn("w:num")))[-1]
+            last_num.addnext(new_num)
+            mapping[old] = str(next_id)
+            next_id += 1
+        num_id_el.set(qn("w:val"), mapping[old])
+
+
 def generate_hotel_voucher_docx(hotels: list[dict], _probe: bool = False, _block_registry: Optional[dict] = None) -> bytes:
     """Builds the Hotel Voucher .docx for one or more hotel bookings.
     Returns raw .docx bytes. Raises HotelVoucherError / ValueError on any
@@ -462,6 +521,7 @@ def generate_hotel_voucher_docx(hotels: list[dict], _probe: bool = False, _block
             last_el = new_spacer_el
         new_table_el = copy.deepcopy(table_el)
         last_el.addnext(new_table_el)
+        _restart_numbering(document, new_table_el)
         blocks_el.append(new_table_el)
         last_el = new_table_el
 
@@ -550,8 +610,12 @@ def _shade_editable_cells(table: Table, hotel_index: int) -> None:
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
 
-    for field_index, (_key, cell) in enumerate(_editable_cells(table)):
-        r, g, b = docx_utils.probe_rgb(hotel_index * len(LAYOUT_FIELD_KEYS) + field_index)
+    for key, cell in _editable_cells(table):
+        # The colour index is the key's place in LAYOUT_FIELD_KEYS — the order the
+        # reader decodes by. (The cells are listed in the template's own order,
+        # which differs; using that order moved every rectangle after "guestTotal"
+        # onto its neighbour's cell.)
+        r, g, b = docx_utils.probe_rgb(hotel_index * len(LAYOUT_FIELD_KEYS) + LAYOUT_FIELD_KEYS.index(key))
         tc_pr = cell._tc.get_or_add_tcPr()
         for old in tc_pr.findall(qn("w:shd")):
             tc_pr.remove(old)

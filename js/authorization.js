@@ -10,13 +10,11 @@
    and the combined step-6 "Continue" gate (isStep6Complete), which asks
    both modules whether they're ready.
 
-   Passport Authorization is intentionally capped at 1-2 selected people:
-   the two real reference letters on file cover exactly those cases (a
-   single traveller, or a traveller + spouse/companion), and there is no
-   reference example for a group of 3+ to build from — offering more would
-   mean inventing a document design that doesn't exist (project rule 9).
-   Company Authorization has no such cap; its template's one applicant line
-   is cloned once per selected person.
+   Neither letter limits how many people can be selected (frontend rework,
+   Stage 2). Passport Authorization uses the single-traveller reference
+   letter for one person and the "two or multiple travellers" reference
+   letter for two or more (its clause repeated per extra person); Company
+   Authorization's one applicant line is cloned once per selected person.
 
    Re-render discipline: the person checklist and the Generate bar (no
    persistent text input in either) redraw freely on every KhannaState
@@ -121,6 +119,93 @@
   }
 
   /* ---------------------------------------------------------------------
+   * Singapore's own authorization letters. Singapore does not use the
+   * standard Passport / Company letters: on the Passport page it is the
+   * "Authorisation Letter for Visa Application" (the applicants authorise
+   * the agency's representative) and on the Company page it is the
+   * "Sub-Agent Declaration Form" (the agency hands the documents to the
+   * Authorised Visa Agent). Which one a page produces follows the
+   * country: the Passport page's "Destination country" and the Company
+   * page's "Consulate country". Until a country is chosen there, it follows
+   * the application's destination (cover letter / travel details), so a
+   * Singapore application switches by itself. There is no separate
+   * "letter format" box any more.
+   * The starting names below are the agency staff printed on its own
+   * Singapore samples; they stay editable on the form.
+   * ------------------------------------------------------------------- */
+
+  var SINGAPORE_DEFAULTS = {
+    representativeName: "Mr. Amol Sonawane",
+    contactPerson: "Esha Sharma",
+    designation: "Visa Consultant",
+  };
+
+  var SINGAPORE_LETTER_LABELS = {
+    passport: "Singapore \u2014 Authorisation Letter for Visa Application",
+    company: "Singapore \u2014 Sub-Agent Declaration Form",
+  };
+
+  function isSingaporeApplication(app) {
+    var cover = app.coverLetter || {};
+    var travel = app.travel || {};
+    var checklist = app.checklist || {};
+    return (
+      cover.region === "Singapore" ||
+      /singapore/i.test(String(travel.destination || "")) ||
+      checklist.destination === "Singapore"
+    );
+  }
+
+  // The country that decides this page's letter: its own chosen country,
+  // otherwise "" (the application's destination then decides).
+  function groupCountry(app, group) {
+    var st = authState(app, group);
+    return (group === "passport" ? st.country : st.consulateCountry) || "";
+  }
+
+  function letterFormat(app, group) {
+    var country = groupCountry(app, group);
+    if (country) return country === "Singapore" ? "singapore" : "standard";
+    return isSingaporeApplication(app) ? "singapore" : "standard";
+  }
+
+  function isSingaporeLetter(app, group) {
+    return letterFormat(app, group) === "singapore";
+  }
+
+  function singaporeValue(state, key) {
+    var typed = state[key];
+    return typed == null || typed === "" ? SINGAPORE_DEFAULTS[key] || "" : typed;
+  }
+
+  function letterTitle(app, group) {
+    if (isSingaporeLetter(app, group)) return SINGAPORE_LETTER_LABELS[group];
+    return group === "passport" ? "Passport Authorization Letter" : "Company Authorization Letter";
+  }
+
+  // Passport Authorization's country box. The letter's format follows it
+  // (Singapore has its own), so there is nothing else to choose.
+  function passportCountryHtml(app) {
+    var C = global.KhannaConsulate;
+    var country = groupCountry(app, "passport") || (isSingaporeApplication(app) ? "Singapore" : "");
+    return (
+      '<div class="field-grid">' +
+      C.comboHtml({ key: "passport", id: "auth-passport-country", label: "Destination country", value: country, required: false }) +
+      '<p class="field-hint" style="grid-column:1/-1;margin:0;">Choosing Singapore switches this letter to the Singapore format automatically.</p>' +
+      "</div>"
+    );
+  }
+
+  function readinessHint(app, group) {
+    if (isSingaporeLetter(app, group)) {
+      return "Select the applicants (each with a name and passport number on file) to generate this Singapore letter.";
+    }
+    return group === "passport"
+      ? "Select the travellers (each with a name and passport number on file), and fill the centre and collector fields, to generate this letter."
+      : "Select at least one applicant (with a name and passport number on file) and choose the consulate country to generate this letter.";
+  }
+
+  /* ---------------------------------------------------------------------
    * Frontend rework, Phase E — "group of applicants" (Company
    * Authorization Letter only, as explicitly requested). This letter's
    * own generator (backend/python/authorization_letter_engine.py's
@@ -207,6 +292,7 @@
         if (group === "passport") {
           return api
             .composePassportFields({
+              letterFormat: letterFormat(currentApp, "passport"),
               people: orderPeopleForLetter(selected).map(personToPassportPayload),
               recipientCentreName: state.recipientCentreName || "",
               recipientAddress: state.recipientAddress || "",
@@ -216,6 +302,7 @@
         }
         return api
           .composeCompanyFields({
+            letterFormat: letterFormat(currentApp, "company"),
             people: selected.map(personToCompanyPayload),
             recipientText: state.recipientText || "",
           })
@@ -250,9 +337,9 @@
   function passportReadiness(app) {
     var state = authState(app, "passport");
     var selected = selectedPeopleFor(app, "passport");
+    if (isSingaporeLetter(app, "passport")) return selected.length >= 1 && selected.every(personHasCoreFields);
     return (
       selected.length >= 1 &&
-      selected.length <= 2 &&
       selected.every(personHasCoreFields) &&
       !!(state.recipientCentreName && state.recipientCentreName.trim()) &&
       !!(state.collectorName && state.collectorName.trim())
@@ -262,6 +349,7 @@
   function companyReadiness(app) {
     var state = authState(app, "company");
     var selected = selectedPeopleFor(app, "company");
+    if (isSingaporeLetter(app, "company")) return selected.length >= 1 && selected.every(personHasCoreFields);
     return selected.length >= 1 && selected.every(personHasCoreFields) && !!(state.recipientText && state.recipientText.trim());
   }
 
@@ -378,12 +466,31 @@
     var box = utils.qs('[data-auth-readiness="' + group + '"]', activeGroupRoot(group));
     if (!app || !box) return;
     var ready = group === "passport" ? passportReadiness(app) : companyReadiness(app);
-    box.innerHTML = ready
-      ? ""
-      : '<div class="notice notice-warning">' +
-        '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>' +
-        "<span>" + utils.escapeHtml(message) + "</span>" +
-        "</div>";
+    var missing = global.KhannaAddTraveller.missingDetailsHtml(
+      docKeyFor(group),
+      group === "passport" ? orderPeopleForLetter(selectedPeopleFor(app, group)) : selectedPeopleFor(app, group),
+      'data-complete-group="' + group + '"'
+    );
+    box.innerHTML =
+      (ready
+        ? ""
+        : '<div class="notice notice-warning">' +
+          '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>' +
+          "<span>" + utils.escapeHtml(message) + "</span>" +
+          "</div>") + missing;
+  }
+
+  // "Complete details" beside a person with an empty required detail.
+  function onCompleteDetailsClick(e, target) {
+    var group = target.getAttribute("data-complete-group");
+    var personId = target.getAttribute("data-complete-details");
+    if (!group || !personId) return;
+    global.KhannaAddTraveller.open(function () {
+      var app = getApp();
+      if (!app) return;
+      if (group === "passport") renderPassportCard(app);
+      else renderCompanyCard(app);
+    }, { docKey: docKeyFor(group), personId: personId });
   }
 
   function showAuthError(group, message) {
@@ -420,9 +527,17 @@
     return global.KhannaSavedDetails;
   }
 
+  // Which people-fields this page's letter prints (js/data/document-person-fields.js).
+  function docKeyFor(group) {
+    var app = getApp();
+    var singapore = app ? isSingaporeLetter(app, group) : false;
+    if (group === "passport") return singapore ? "passportAuthSingapore" : "passportAuth";
+    return singapore ? "companyAuthSingapore" : "companyAuth";
+  }
+
   function useExistingHtml(group) {
     if (!isStandaloneGroup(group)) return "";
-    return (
+    var existing =
       '<div class="cover-use-existing" data-auth-use-existing="' + group + '">' +
       '<button type="button" class="btn btn-secondary btn-sm" data-auth-use-existing-toggle aria-haspopup="true" aria-expanded="false">' +
       "Use Existing Details " +
@@ -434,7 +549,9 @@
       "</div>" +
       '<div class="cover-existing-list" data-auth-existing-list hidden></div>' +
       "</div>" +
-      "</div>" +
+      "</div>";
+    return (
+      global.KhannaAddTraveller.sourceChoiceHtml(existing, docKeyFor(group)) +
       '<div class="cover-existing-status" data-auth-existing-status role="status" aria-live="polite" hidden></div>'
     );
   }
@@ -471,10 +588,6 @@
       setExistingStatus(group, name + " is already selected on this letter.", true);
       return;
     }
-    if (group === "passport" && ids.length >= 2) {
-      setExistingStatus(group, "This letter takes 1 or 2 people. Untick one below before adding another.", true);
-      return;
-    }
     var id = existing ? existing.id : savedDetails().addSavedPersonAsTraveller(app, src);
     ids.push(id);
     var patch = { authorization: {} };
@@ -487,6 +600,21 @@
         (src.row.passportNumber ? "" : " No passport number is saved for this person — add it on their passport page before generating."),
       !src.row.passportNumber
     );
+  }
+
+  // A traveller typed in through "+ Add another traveller" (js/add-traveller.js)
+  // is already a real traveller on the application; this only ticks them on
+  // the letter, (no limit on how many).
+  function addTypedTraveller(group, travellerId, info) {
+    var app = getApp();
+    if (!app) return;
+    var state = authState(app, group);
+    var ids = (state.selectedPersonIds || []).slice();
+    ids.push(travellerId);
+    var patch = { authorization: {} };
+    patch.authorization[group] = selectionPatch(state, group, ids);
+    global.KhannaState.updateApplication(app.id, patch, null);
+    setExistingStatus(group, "Added " + info.fullName + " and selected them on this letter.", false);
   }
 
   var useExistingDocHandlersWired = false;
@@ -517,6 +645,16 @@
       list.hidden = false;
       var dd = utils.qs("[data-auth-use-existing-dropdown]", wrap);
       if (dd) dd.classList.add("has-list");
+    });
+    utils.on(r, "click", "[data-action='add-another-traveller']", function (e, target) {
+      var row = target.closest(".use-existing-row");
+      var wrap = row && row.querySelector("[data-auth-use-existing]");
+      var group = wrap && wrap.getAttribute("data-auth-use-existing");
+      if (!group || !global.KhannaAddTraveller) return;
+      closeUseExistingMenus();
+      global.KhannaAddTraveller.open(function (travellerId, info) {
+        addTypedTraveller(group, travellerId, info);
+      }, { docKey: docKeyFor(group) });
     });
     utils.on(r, "click", "[data-auth-existing-pick]", function (e, target) {
       var wrap = target.closest("[data-auth-use-existing]");
@@ -632,30 +770,39 @@
     );
   }
 
+  function C_combo_company(app, state) {
+    var country = state.consulateCountry || (isSingaporeApplication(app) ? "Singapore" : "");
+    return global.KhannaConsulate.comboHtml({ key: "company", id: "auth-company-consulateCountry", label: "Consulate country", value: country, required: true });
+  }
+
   function renderPassportCard(app) {
     var r = activeGroupRoot("passport");
     var box = utils.qs("[data-passport-auth-card]", r);
     if (!box) return;
     var state = authState(app, "passport");
     box.innerHTML =
-      "<h3>Passport Authorization Letter</h3>" +
+      "<h3>" + utils.escapeHtml(letterTitle(app, "passport")) + "</h3>" +
+      passportCountryHtml(app) +
+      utils.stepHeadingHtml(1, "Who is authorising", "Pick travellers already on this application, or add someone manually.") +
       useExistingHtml("passport") +
       '<div class="auth-person-list" data-auth-checklist="passport"></div>' +
+      utils.stepHeadingHtml(2, "Letter details", "Fields marked * are needed before the letter can be generated.") +
       '<div class="field-grid">' +
-      fieldRowHtml("passport", "recipientCentreName", "Visa application centre", state.recipientCentreName, true, "e.g. Germany Visa Application Centre") +
-      fieldRowHtml("passport", "recipientAddress", "Centre address", state.recipientAddress, false, "e.g. Andheri, Mumbai") +
-      fieldRowHtml("passport", "collectorName", "Collected by (staff name)", state.collectorName, true, "e.g. Mr. Suresh Patil") +
+      (isSingaporeLetter(app, "passport")
+        ? fieldRowHtml("passport", "representativeName", "Authorised representative", singaporeValue(state, "representativeName"), false, "e.g. Mr. Amol Sonawane") +
+          fieldRowHtml("passport", "feePerApplicant", "Visa fee per applicant (INR)", state.feePerApplicant, false, "e.g. 8000") +
+          '<p class="field-hint" style="grid-column:1/-1;margin:0;">The letter prints the fee \u00D7 the number of applicants. Leave the fee empty to write it by hand.</p>'
+        : fieldRowHtml("passport", "recipientCentreName", "Visa application centre", state.recipientCentreName, true, "e.g. Germany Visa Application Centre") +
+          fieldRowHtml("passport", "recipientAddress", "Centre address", state.recipientAddress, false, "e.g. Andheri, Mumbai") +
+          fieldRowHtml("passport", "collectorName", "Collected by (staff name)", state.collectorName, true, "e.g. Mr. Suresh Patil")) +
       "</div>" +
       '<div data-auth-readiness="passport"></div>' +
       '<div data-generate-bar="passport"></div>' +
       '<div data-auth-error="passport"></div>' +
       '<div data-doc-preview="passport" style="margin-top:var(--space-4);"></div>';
-    refreshChecklist("passport", 2);
+    refreshChecklist("passport", null);
     refreshGenerateBar("passport");
-    refreshReadinessNotice(
-      "passport",
-      "Select 1 or 2 travellers (each with a name and passport number on file), and fill the centre and collector fields, to generate this letter."
-    );
+    refreshReadinessNotice("passport", readinessHint(app, "passport"));
   }
 
   function renderCompanyCard(app) {
@@ -664,13 +811,19 @@
     if (!box) return;
     var state = authState(app, "company");
     box.innerHTML =
-      "<h3>Company Authorization Letter</h3>" +
+      "<h3>" + utils.escapeHtml(letterTitle(app, "company")) + "</h3>" +
+      utils.stepHeadingHtml(1, "Who is authorising", "Pick travellers already on this application, or add someone manually.") +
       useExistingHtml("company") +
       '<div class="auth-person-list" data-auth-checklist="company"></div>' +
       manualApplicantFormHtml() +
       companyGroupToolbarHtml(app) +
+      utils.stepHeadingHtml(2, "Letter details", "Fields marked * are needed before the letter can be generated.") +
       '<div class="field-grid">' +
-      consulateFieldsHtml(state) +
+      (isSingaporeLetter(app, "company")
+        ? C_combo_company(app, state) +
+          fieldRowHtml("company", "contactPerson", "Contact person (signs the form)", singaporeValue(state, "contactPerson"), false, "e.g. Esha Sharma") +
+          fieldRowHtml("company", "designation", "Designation", singaporeValue(state, "designation"), false, "e.g. Visa Consultant")
+        : consulateFieldsHtml(state)) +
       "</div>" +
       '<div data-auth-readiness="company"></div>' +
       '<div data-generate-bar="company"></div>' +
@@ -678,10 +831,7 @@
       '<div data-doc-preview="company" style="margin-top:var(--space-4);"></div>';
     refreshChecklist("company", null);
     refreshGenerateBar("company");
-    refreshReadinessNotice(
-      "company",
-      "Select at least one applicant (with a name and passport number on file) and choose the consulate country to generate this letter."
-    );
+    refreshReadinessNotice("company", readinessHint(app, "company"));
   }
 
   function renderCards() {
@@ -735,14 +885,18 @@
     var applicantName = [app.applicant.firstName, app.applicant.lastName].filter(Boolean).join(" ") || "Application";
     var state = authState(app, group);
     var selected = selectedPeopleFor(app, group);
+    var singapore = isSingaporeLetter(app, group);
     if (group === "passport") {
       return {
         download: api.downloadPassportAuthorization,
         payload: {
+          letterFormat: singapore ? "singapore" : "standard",
           people: orderPeopleForLetter(selected).map(personToPassportPayload),
           recipientCentreName: state.recipientCentreName || "",
           recipientAddress: state.recipientAddress || "",
           collectorName: state.collectorName || "",
+          representativeName: singapore ? (singaporeValue(state, "representativeName") || "").trim() : "",
+          feePerApplicant: singapore ? (state.feePerApplicant || "").trim() : "",
           applicantName: applicantName,
           editedFields: state.editedFields || undefined,
         },
@@ -751,8 +905,11 @@
     return {
       download: api.downloadCompanyAuthorization,
       payload: {
+        letterFormat: singapore ? "singapore" : "standard",
         people: selected.map(personToCompanyPayload),
         recipientText: state.recipientText || "",
+        contactPerson: singapore ? (singaporeValue(state, "contactPerson") || "").trim() : "",
+        designation: singapore ? (singaporeValue(state, "designation") || "").trim() : "",
         applicantName: applicantName,
         editedFields: state.editedFields || undefined,
       },
@@ -781,7 +938,7 @@
     var handle = viewerHandles.get(previewBox);
     if (!handle) {
       handle = global.KhannaDocumentViewer.mount(previewBox, {
-        title: group === "passport" ? "Passport Authorization Letter" : "Company Authorization Letter",
+        title: letterTitle(app, group),
         editor: makeAuthorizationEditor(group),
         loadPdf: function () {
           return loadAuthorizationPreview(group, getApp());
@@ -867,6 +1024,7 @@
     utils.on(r, "change", "[data-auth-person]", onAuthPersonChange);
     utils.on(r, "change", "[data-auth-field]", onAuthFieldChange);
     utils.on(r, "click", "[data-action='generate-authorization']", onGenerateAuthorizationClick);
+    utils.on(r, "click", "[data-complete-details]", onCompleteDetailsClick);
     wireCompanyGroupHandlers(r);
     global.KhannaConsulate.wire(r, onConsulateCountryChosen);
   }
@@ -909,10 +1067,6 @@
     var idx = ids.indexOf(personId);
     if (target.checked) {
       if (idx === -1) {
-        if (group === "passport" && ids.length >= 2) {
-          target.checked = false; // guard, in addition to the disabled attribute
-          return;
-        }
         ids.push(personId);
       }
     } else if (idx !== -1) {
@@ -958,36 +1112,49 @@
     }
   }
 
+  // A country was picked on the Passport ("passport") or Company ("company")
+  // page. If that flips the page between the standard letter and Singapore's
+  // own, the card is rebuilt (its boxes differ) and the old format's hand
+  // edits are dropped with it; otherwise only the consulate wording follows.
   function onConsulateCountryChosen(key, country) {
     var app = getApp();
-    if (!app || key !== "company") return;
+    if (!app || (key !== "company" && key !== "passport")) return;
     var C = global.KhannaConsulate;
-    var st = authState(app, "company");
-    var address = C.addressOrDefault(st.consulateAddress);
-    var r = activeGroupRoot("company");
-    var addrInput = utils.qs('[data-auth-field="company:consulateAddress"]', r);
-    if (addrInput) address = addrInput.value;
-    global.KhannaState.updateApplication(
-      app.id,
-      {
-        authorization: {
-          company: {
-            consulateCountry: country,
-            consulateAddress: address,
-            recipientText: C.composeRecipient(C.consulateName(country), address),
-            editedFields: { recipient: null },
-          },
-        },
-      },
-      null
-    );
-    var hintEl = utils.qs("[data-consulate-hint]", r);
-    if (hintEl) refreshConsulateHint();
-    refreshGenerateBar("company");
-    refreshReadinessNotice(
-      "company",
-      "Select at least one applicant (with a name and passport number on file) and choose the consulate country to generate this letter."
-    );
+    var before = letterFormat(app, key);
+    var patch = { authorization: {} };
+    if (key === "passport") {
+      patch.authorization.passport = { country: country };
+    } else {
+      var st = authState(app, "company");
+      var address = C.addressOrDefault(st.consulateAddress);
+      var addrInput = utils.qs('[data-auth-field="company:consulateAddress"]', activeGroupRoot("company"));
+      if (addrInput) address = addrInput.value;
+      patch.authorization.company = {
+        consulateCountry: country,
+        consulateAddress: address,
+        recipientText: C.composeRecipient(C.consulateName(country), address),
+        editedFields: { recipient: null },
+      };
+    }
+    var probe = Object.assign({}, app, {
+      authorization: Object.assign({}, app.authorization, {
+        [key]: Object.assign({}, authState(app, key), key === "passport" ? { country: country } : { consulateCountry: country }),
+      }),
+    });
+    var flipped = letterFormat(probe, key) !== before;
+    if (flipped) patch.authorization[key].editedFields = null;
+    global.KhannaState.updateApplication(app.id, patch, null);
+    if (flipped) {
+      var fresh = getApp();
+      if (key === "passport") renderPassportCard(fresh);
+      else renderCompanyCard(fresh);
+    } else if (key === "company") {
+      refreshConsulateHint();
+      refreshGenerateBar("company");
+      refreshReadinessNotice("company", readinessHint(getApp(), "company"));
+    } else {
+      refreshGenerateBar("passport");
+    }
     if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
   }
 
@@ -1158,11 +1325,10 @@
     utils.on(r, "change", "[data-auth-person]", onAuthPersonChange);
     utils.on(r, "change", "[data-auth-field]", onAuthFieldChange);
     utils.on(r, "click", "[data-action='generate-authorization']", onGenerateAuthorizationClick);
+    utils.on(r, "click", "[data-complete-details]", onCompleteDetailsClick);
     wireUseExistingHandlers(r);
-    if (group === "company") {
-      wireCompanyGroupHandlers(r);
-      global.KhannaConsulate.wire(r, onConsulateCountryChosen);
-    }
+    if (group === "company") wireCompanyGroupHandlers(r);
+    global.KhannaConsulate.wire(r, onConsulateCountryChosen);
   }
 
   function renderStandalone(group) {
@@ -1228,13 +1394,13 @@
         (standaloneRoot("passport") && standaloneRoot("passport").dataset.mounted) ||
         (standaloneRoot("company") && standaloneRoot("company").dataset.mounted);
       if (!mountedAnywhere) return;
-      refreshChecklist("passport", 2);
+      refreshChecklist("passport", null);
       refreshChecklist("company", null);
       refreshGenerateBar("passport");
       refreshGenerateBar("company");
       refreshReadinessNotice(
         "passport",
-        "Select 1 or 2 travellers (each with a name and passport number on file), and fill the centre and collector fields, to generate this letter."
+        "Select the travellers (each with a name and passport number on file), and fill the centre and collector fields, to generate this letter."
       );
       refreshReadinessNotice(
         "company",
@@ -1258,6 +1424,24 @@
     personDisplayName: personDisplayName,
     personHasCoreFields: personHasCoreFields,
     orderPeopleForLetter: orderPeopleForLetter,
+    // The real letter for ANY saved application (not only the active one),
+    // built from its saved data only. Rejects with `notReady: true` and the
+    // reason while required details are missing — used by Upload Documents.
+    downloadFor: function (appId, group, format) {
+      var target = global.KhannaState.getApplication(appId);
+      if (!target) return Promise.reject(new Error("That application no longer exists."));
+      var ready = group === "company" ? companyReadiness(target) : passportReadiness(target);
+      if (!ready) {
+        var err = new Error(
+          group === "company"
+            ? "Select at least one applicant with a name and passport number, and the consulate country."
+            : "Select at least one traveller with a name and passport number, and enter the recipient centre and collector."
+        );
+        err.notReady = true;
+        return Promise.reject(err);
+      }
+      return buildAuthorizationPayload(group, target, format || "docx");
+    },
   };
 
   if (document.readyState === "loading") {

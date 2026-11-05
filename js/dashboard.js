@@ -109,6 +109,43 @@
     }).join("");
   }
 
+  // One application row — shared by the Dashboard's Recent Applications and
+  // the admin-side Applications / All Applications lists, so "View" (the eye)
+  // and "Delete" (the bin, with its confirmation popup) behave identically
+  // everywhere. The click handlers are document-level (see init()).
+  function rowHtml(app) {
+    var docCount = collectGeneratedTimestamps(app).length;
+    var docLabel = docCount === 0 ? "No documents yet" : docCount === 1 ? "1 document generated" : docCount + " documents generated";
+    var id = utils.escapeHtml(app.id);
+    var label = utils.escapeHtml(applicantLabel(app));
+    return (
+      '<div class="dashboard-recent-row">' +
+      '<div class="dashboard-recent-row__info">' +
+      '<div class="dashboard-recent-row__name">' + label + "</div>" +
+      // Two stacked lines (reads cleanly on a phone). The APP_… id is
+      // not shown here — it appears in the document preview bar.
+      '<div class="dashboard-recent-row__meta">' +
+      "<span>Updated " + utils.formatDateTime(app.updatedAt) + "</span>" +
+      "<span>" + docLabel + "</span>" +
+      "</div>" +
+      "</div>" +
+      '<div class="dashboard-recent-row__actions">' +
+      // Icon-only buttons: no border or box, blue eye to view, red bin to
+      // delete. aria-label + title carry the accessible name.
+      // "View" opens the generated document's PREVIEW only (not the full
+      // wizard / form) — see openPreview() below.
+      '<button class="btn-icon dashboard-icon-btn dashboard-icon-btn--view" type="button" data-action="dashboard-view-application" data-app-id="' + id + '" aria-label="View application ' + label + '" title="View documents">' + EYE_ICON + "</button>" +
+      // Asks for confirmation first, then calls KhannaState.deleteApplication.
+      '<button class="btn-icon dashboard-icon-btn dashboard-icon-btn--delete" type="button" data-action="dashboard-delete-application" data-app-id="' + id + '" aria-label="Delete application ' + label + '" title="Delete application">' + TRASH_ICON + "</button>" +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function listHtml(apps) {
+    return '<div class="card dashboard-recent-list">' + apps.map(rowHtml).join("") + "</div>";
+  }
+
   function renderRecent() {
     var container = utils.qs("[data-dashboard-recent]");
     if (!container) return;
@@ -125,42 +162,7 @@
     }
 
     container.innerHTML =
-      '<div class="card dashboard-recent-list">' +
-      apps
-        .map(function (app) {
-          var docCount = collectGeneratedTimestamps(app).length;
-          var docLabel = docCount === 0 ? "No documents yet" : docCount === 1 ? "1 document generated" : docCount + " documents generated";
-          var id = utils.escapeHtml(app.id);
-          var label = utils.escapeHtml(applicantLabel(app));
-          return (
-            '<div class="dashboard-recent-row">' +
-            '<div class="dashboard-recent-row__info">' +
-            '<div class="dashboard-recent-row__name">' + label + "</div>" +
-            // Two stacked lines (reads cleanly on a phone). The APP_… id is
-            // not shown here — it appears in the document preview bar.
-            '<div class="dashboard-recent-row__meta">' +
-            "<span>Updated " + utils.formatDateTime(app.updatedAt) + "</span>" +
-            "<span>" + docLabel + "</span>" +
-            "</div>" +
-            "</div>" +
-            '<div class="dashboard-recent-row__actions">' +
-            // Icon-only buttons: no border or box, blue eye to view, red
-            // bin to delete. The visible text is gone, so aria-label + title
-            // carry the accessible name.
-            // "View" opens the generated document's PREVIEW only (not the
-            // full wizard / form) — see openPreview() below.
-            '<button class="btn-icon dashboard-icon-btn dashboard-icon-btn--view" type="button" data-action="dashboard-view-application" data-app-id="' + id + '" aria-label="View application ' + label + '" title="View documents">' + EYE_ICON + "</button>" +
-            // A dashboard-specific action name (NOT the Applications list's
-            // "delete-application", which deletes instantly): this one asks
-            // for confirmation first, then calls the same
-            // KhannaState.deleteApplication.
-            '<button class="btn-icon dashboard-icon-btn dashboard-icon-btn--delete" type="button" data-action="dashboard-delete-application" data-app-id="' + id + '" aria-label="Delete application ' + label + '" title="Delete application">' + TRASH_ICON + "</button>" +
-            "</div>" +
-            "</div>"
-          );
-        })
-        .join("") +
-      "</div>" +
+      listHtml(apps) +
       // Applications is an admin-only page (section 3) — no point showing a
       // link to it a non-admin can't actually open.
       (all.length > 4 && global.KhannaAuth && global.KhannaAuth.isAdmin()
@@ -358,6 +360,8 @@
       if (e.detail.view === "dashboard") render();
     });
   }
+
+  global.KhannaDashboard = { rowHtml: rowHtml, listHtml: listHtml };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);

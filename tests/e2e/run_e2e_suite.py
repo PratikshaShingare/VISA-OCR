@@ -47,6 +47,8 @@ UP_SCRIPTS = [
     "test_accessibility.py",
     "test_device_emulation.py",
     "test_hotel_voucher_batch_upload.py",
+    "test_hotel_voucher_two_types_order.py",
+    "test_add_another_traveller.py",
     "test_cover_letter_editable_preview.py",
     "test_hotel_blocking_body_editor.py",
     "test_add_hotel_once.py",
@@ -63,13 +65,25 @@ UP_SCRIPTS = [
     "test_editor_ribbon_whole_document.py",
     "test_hotel_use_existing_applicant.py",
     "test_authorization_use_existing.py",
-    "test_group_selection_and_blank_lines.py",
-    "test_hotel_blocking_table_resize_and_select_all.py",
     "test_consulate_country_selector.py",
     "test_hotel_voucher_lookup_ui.py",
     "test_recent_passports_and_empty_saves.py",
     "test_multi_page_passport_preview.py",
+    "test_azapi_field_priority.py",
+    "test_docx_preview_fallback.py",
+    "test_generate_documents_and_quick_add.py",
+    "test_narrow_screens.py",
     "test_cover_letter_corrections.py",
+    "test_cover_letter_solo_relation_and_redirect.py",
+    "test_accounts_profile_and_staff.py",
+    "test_multi_traveller_letters.py",
+    "test_upload_documents.py",
+    "test_singapore_letters.py",
+    "test_whole_letter_editor.py",
+    "test_edit_matches_view.py",
+    "test_hotel_order_and_lookup.py",
+    "test_voucher_cell_editing.py",
+    "test_form_clarity.py",
 ]
 DOWN_SCRIPTS = ["test_backend_down_resilience.py"]
 
@@ -127,10 +141,18 @@ def start_static_server_if_needed():
     )
 
 
+# Every run uses its own throwaway accounts database so the staff accounts
+# the tests create never end up in the real one.
+import tempfile
+
+TEST_AUTH_DB = os.path.join(tempfile.mkdtemp(prefix="khanna_e2e_auth_"), "users.db")
+
+
 def start_backend():
     return subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", BACKEND_PORT],
         cwd=BACKEND_DIR,
+        env=dict(os.environ, KHANNA_AUTH_DB=TEST_AUTH_DB),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

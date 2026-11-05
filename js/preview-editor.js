@@ -1,24 +1,36 @@
 /* ==========================================================================
-   Khanna Travels & Holidays — Editable document preview (every document page)
-   The preview stays the REAL generated PDF (js/document-viewer.js). This
-   module lays a transparent, clickable "field" over every editable value of
-   that page — hotel name, dates, guests, etc., never the fixed labels,
-   headings or Hotel Policy text, which always come from the reference
-   template (project rule 5). Clicking a field turns it into a small
-   Word-like editor (Quill) right where the value is printed; the shared
-   toolbar in the viewer's title line applies font, size, bold, italic,
-   underline, text colour, highlight and alignment to whatever field is open.
+   Khanna Travels & Holidays — Whole-letter editor (every document page)
+   The preview stays the REAL generated PDF (js/document-viewer.js). Pressing
+   Edit swaps the PDF page for ONE continuous, Word-like page holding the whole
+   letter: every paragraph, list and table row of it, in reading order, in a
+   single editor (Quill) — so the caret, selection, Enter, Backspace, Delete,
+   copy / paste and undo work across the entire letter exactly as in Word or
+   Notepad, never "one box at a time". The shared ribbon in the viewer's title
+   line applies font, size, bold, italic, underline, colour, highlight,
+   alignment, lists, spacing and tables to whatever is selected.
 
-   Edits are saved straight into the hotel record (hotel.editedFields[key] =
-   HTML — the same shape the backend's replace_paragraph_range_with_html
-   already consumes), so they survive closing the page. They show up in the
-   real PDF when "Regenerate" is pressed; Download PDF / Download DOCX / Print
-   regenerate first if there are unsaved-to-PDF edits, so what is downloaded
-   or printed is always what is on screen.
+   The letterhead (logo, header, footer) is never part of the editable text: it
+   always comes from the reference template (project rule 5) and appears on the
+   finished page.
 
-   Where each field sits on the page comes from the backend
-   (hotel_voucher_engine.compute_field_layout) — read from the very same
-   LibreOffice rendering as the PDF, so overlays line up exactly.
+   How edits are saved. The backend splits a generated letter into "units" —
+   each engine's named values (date, recipient, hotel name …) and, for the rest
+   of the text, one "blk-…" unit per paragraph (backend/python/document_blocks.py).
+   Every line in the editor remembers which unit it belongs to (a block-level
+   attribute, data-unit). Typing inside a line, pressing Enter (the new line
+   keeps the unit), merging two lines or deleting several all keep that link,
+   so a unit's edited HTML is simply "all the lines that carry its id". A unit
+   whose lines are all gone was deleted ("" for a paragraph). Units still equal
+   to the auto-generated wording are never stored. Edits go into
+   record.editedFields[key] = HTML — the same shape the backend's
+   replace_paragraph_range_with_html already consumes — and show up in the real
+   PDF when Edit is turned off ("Done editing") or the page is regenerated;
+   Download PDF / DOCX / Print regenerate first if anything is unsaved-to-PDF,
+   so what is downloaded or printed is always what was edited.
+
+   Where each unit sits (page, reading order, table row) comes from the
+   backend's layout probe (docx_utils.ProbeShader) — read from the very same
+   LibreOffice rendering as the PDF.
 
    Used by js/hotels.js (several records on one document — one per hotel):
      var editor = KhannaPreviewEditor.create({
@@ -29,19 +41,17 @@
      KhannaDocumentViewer.mount(box, { ..., editor: editor });
 
    Every single-document page (Passport/Company Authorization, Invitation,
-   Required Document Letter, Europe Cover Letter) uses the one-record
-   shortcut:
+   Required Document Letter, Cover Letters) uses the one-record shortcut:
      var editor = KhannaPreviewEditor.createForDocument({
        getEditedFields: function () { return {key: html} | null; },
        composeFields:   function () { return Promise<{key: html}>; },
        onFieldChange:   function (key, htmlOrNull) { ... persist ... },
-       fieldLabel:      function (key) { return "…"; },   // optional, for screen readers
+       fieldLabel:      function (key) { return "…"; },   // optional
      });
    and its loadPdf resolves {blob, filename, layout, hotelIds: ["doc"]} where
    `layout` is the JSON the backend's `format: "layout"` request returns.
 
-   The viewer owns the "Edit" toggle (top of the Preview section): the
-   fields are only live while it is on.
+   The viewer owns the "Edit" toggle (top of the Preview section).
    ========================================================================== */
 (function (global) {
   "use strict";
@@ -84,6 +94,9 @@
       var blockScope = { scope: Parchment.Scope.BLOCK };
       Quill.register(
         {
+          // Which unit of the letter (a named value or one paragraph) a line
+          // belongs to. Block-scope, so Enter copies it to the new line.
+          "formats/unit": new Parchment.Attributor("unit", "data-unit", blockScope),
           "formats/size": Size,
           "formats/font": Font,
           "formats/lineheight": new Parchment.StyleAttributor("lineheight", "line-height", blockScope),
@@ -99,7 +112,7 @@
 
   var QUILL_FORMATS = [
     "bold", "italic", "underline", "strike", "script", "color", "background", "font", "size",
-    "align", "indent", "list", "lineheight", "spacebefore", "spaceafter", "table",
+    "align", "indent", "list", "lineheight", "spacebefore", "spaceafter", "table", "unit",
   ];
 
   // A pdf font name (e.g. "DejaVuSans-Bold", "ArialMT") -> a CSS font stack
@@ -116,15 +129,100 @@
     return (a == null ? null : String(a)) === (b == null ? null : String(b));
   }
 
+  // A run's font that is not installed on this computer must not make the browser
+  // fall back to its default (a serif) font: every font gets a sans-serif
+  // fallback while editing, and the fallback is stripped again when saving.
+  var FONT_FALLBACK = ", Arial, sans-serif";
+  var FONT_FALLBACK_RE = /,\s*Arial,\s*sans-serif/g;
+
+  var INLINE_FORMATS = ["bold", "italic", "underline", "strike", "script", "color", "background", "font", "size"];
+
+  // Splits every "\n" of an inserted string into its own op (Delta merges "a\n"
+  // into one op when the attributes match) and drops inline formats from the
+  // newline itself, so each line's end can carry block formats on its own.
+  function normaliseOps(ops) {
+    var out = [];
+    ops.forEach(function (op) {
+      if (typeof op.insert !== "string") {
+        out.push(op);
+        return;
+      }
+      var parts = op.insert.split("\n");
+      parts.forEach(function (piece, i) {
+        if (piece) out.push({ insert: piece, attributes: op.attributes ? Object.assign({}, op.attributes) : undefined });
+        if (i < parts.length - 1) {
+          var attrs = Object.assign({}, op.attributes || {});
+          INLINE_FORMATS.forEach(function (f) { delete attrs[f]; });
+          out.push({ insert: "\n", attributes: attrs });
+        }
+      });
+    });
+    out.forEach(function (op) {
+      if (op.attributes && !Object.keys(op.attributes).length) delete op.attributes;
+    });
+    if (!out.length || out[out.length - 1].insert !== "\n") out.push({ insert: "\n" });
+    return out;
+  }
+
+  // Cells hold one line each in Quill: a unit that is several paragraphs is
+  // joined into one line inside a table cell.
+  function flattenToOneLine(ops) {
+    var lastNewline = -1;
+    ops.forEach(function (op, i) { if (op.insert === "\n") lastNewline = i; });
+    return ops.map(function (op, i) {
+      return op.insert === "\n" && i !== lastNewline ? { insert: " " } : op;
+    });
+  }
+
+  function lineClean(domNode) {
+    var clone = domNode.cloneNode(true);
+    clone.removeAttribute("data-unit");
+    // where the stage put the line is not part of the letter's text
+    ["position", "left", "top", "width", "margin-top", "counter-reset"].forEach(function (p) { clone.style.removeProperty(p); });
+    if (!clone.getAttribute("style")) clone.removeAttribute("style");
+    return clone;
+  }
+
+  // One line of the editor as the HTML the backend reads (Quill-style).
+  function lineHtml(domNode) {
+    var tag = domNode.tagName;
+    var clone = lineClean(domNode);
+    var html;
+    if (tag === "LI") {
+      html = "<ol>" + clone.outerHTML + "</ol>";
+    } else if (tag === "TD") {
+      var cls = (domNode.className || "").split(/\s+/).filter(function (c) { return /^ql-(align|indent)/.test(c); }).join(" ");
+      html = "<p" + (cls ? ' class="' + cls + '"' : "") + ">" + clone.innerHTML + "</p>";
+    } else {
+      html = clone.outerHTML;
+    }
+    return html.replace(/<p([^>]*)><br><\/p>/g, "<p$1></p>").replace(FONT_FALLBACK_RE, "");
+  }
+
+  // Reading order of the units: by page, then top-to-bottom, then left-to-right
+  // (a table row reads left to right). The editor's lines follow this order so
+  // the caret, selection and arrow keys move through the letter as it reads.
+  function sortUnits(units) {
+    return units.slice().sort(function (a, b) {
+      var ra = a.info.rect, rb = b.info.rect;
+      // units on the same printed row (within a third of the smaller height) read left to right
+      var sameRow = a.info.page === b.info.page &&
+        Math.min(ra[3], rb[3]) - Math.max(ra[1], rb[1]) > 0.6 * Math.min(ra[3] - ra[1], rb[3] - rb[1]);
+      if (a.info.page !== b.info.page) return a.info.page - b.info.page;
+      if (sameRow) return ra[0] - rb[0];
+      return ra[1] - rb[1] || ra[0] - rb[0];
+    });
+  }
+
   function create(cfg) {
     var viewer = null;
     var getRecords = cfg.getRecords || cfg.getHotels;
-    var layout = null; // {pages, hotels:[{key:{page,rect,fontSize,bold,fontName,align}}]}
+    var layout = null; // {pages, groups|hotels:[{key:{page,rect,fontSize,bold,fontName,align,html?}}]}
     var hotelIds = []; // ids in the order the CURRENT pdf was generated from
     var baked = {}; // "hotelId|key" -> html|null as of the current PDF
     var composed = {}; // hotelId -> {key: html}
     var composePromise = Promise.resolve();
-    var active = null; // {el, quill, hotelId, key, touched, lastRange, saveTimer}
+    var letter = null; // the open whole-letter editor, see openLetter()
     var ribbon = null;
 
     function hotelById(id) {
@@ -137,8 +235,15 @@
       var v = h && h.editedFields ? h.editedFields[key] : null;
       return v == null ? null : v;
     }
-    function dataKey(key) {
-      return key;
+
+    // Hotel Voucher's layout lists one entry per hotel under "hotels"; every
+    // single-document letter's lists its one entry under "groups".
+    function layoutGroups() {
+      return layout ? layout.groups || layout.hotels || null : null;
+    }
+
+    function isBlockKey(key) {
+      return typeof key === "string" && key.indexOf("blk-") === 0;
     }
 
     /* ---------------- ribbon (js/editor-ribbon.js) ------------------------ */
@@ -147,7 +252,7 @@
       syncResetAll();
     }
 
-    // "Reset all" does not need a field to be open — it only needs something
+    // "Reset all" does not need anything selected — it only needs something
     // to reset.
     function editedCount() {
       var n = 0;
@@ -163,364 +268,670 @@
       if (ribbon) ribbon.setResetAllCount(editedCount());
     }
 
+    function syncToolbarState() {
+      if (ribbon) ribbon.sync();
+    }
+
     function resetAll() {
-      active = null;
       (getRecords() || []).forEach(function (rec) {
         if (hotelIds.indexOf(rec.id) === -1) return;
         Object.keys(rec.editedFields || {}).forEach(function (k) {
           if (rec.editedFields[k] != null) cfg.onFieldChange(rec.id, k, null);
         });
       });
+      // What is on the page is being thrown away: it must not be saved again
+      // when the regenerated letter replaces it.
+      if (letter) {
+        clearTimeout(letter.saveTimer);
+        letter.quill = null;
+      }
       return viewer ? viewer.refresh() : Promise.resolve();
     }
 
-    function syncToolbarState() {
-      if (ribbon) ribbon.sync();
+    /* ---------------- units: what the editor is made of -------------------- */
+    // The auto-generated wording of a unit (never a hand edit): the engine's
+    // composed text for a named value, else the block's own original content
+    // exported with the layout.
+    function autoSource(rid, key, info) {
+      var map = composed[rid] || {};
+      if (map[key]) return { html: map[key], seeded: false };
+      if (info && info.html) return { html: info.html, seeded: true };
+      return { html: "<p>—</p>", seeded: false };
     }
 
-    /* ---------------- field overlays -------------------------------------- */
-    // The value an editor starts from: a hand edit if there is one, else the
-    // engine's composed wording (named fields), else the block's original
-    // content exported with the layout (whole-document blocks).
-    function layoutInfo(hotelId, key) {
+    function collectUnits() {
       var groups = layoutGroups();
-      var idx = hotelIds.indexOf(hotelId);
-      return groups && idx !== -1 && groups[idx] ? groups[idx][key] || null : null;
-    }
-    function baseHtmlFor(hotelId, key) {
-      var override = editedHtml(hotelId, dataKey(key));
-      if (override != null) return { html: override, fromOverride: true };
-      var map = composed[hotelId] || {};
-      if (map[dataKey(key)]) return { html: map[dataKey(key)], fromOverride: false };
-      var info = layoutInfo(hotelId, key);
-      if (info && info.html) return { html: info.html, fromOverride: false, seeded: true };
-      return { html: "<p>—</p>", fromOverride: false };
-    }
-
-    function isBlockKey(key) {
-      return typeof key === "string" && key.indexOf("blk-") === 0;
-    }
-
-    function isEditedUnbaked(hotelId, key) {
-      return !htmlEqual(editedHtml(hotelId, dataKey(key)), baked[hotelId + "|" + dataKey(key)]);
-    }
-
-    // The text inside a field is laid out at its natural size (1pt = 4/3 px,
-    // so the document's own point sizes — also the ones the ribbon sets — mean
-    // what they say) and the whole thing is zoomed to the page's current
-    // scale; the field's own box is in on-screen pixels.
-    function fieldStyle(info, scale) {
-      var pt = info.fontSize || 11;
-      return (
-        "font-size:" + pt + "pt;" +
-        "font-family:" + cssFontStack(info.fontName) + ";" +
-        (info.bold && !info.html ? "font-weight:700;" : "")
-      );
-    }
-
-    function staticView(el) {
-      // An edited-but-not-yet-regenerated value: show the user's text over
-      // the (stale) PDF text so they can see what they typed.
-      var hotelId = el.getAttribute("data-pe-hotel");
-      var key = el.getAttribute("data-pe-key");
-      var holder = el.querySelector(".pe-field__text");
-      var edited = isEditedUnbaked(hotelId, key);
-      el.classList.toggle("is-edited", edited);
-      if (edited) holder.innerHTML = baseHtmlFor(hotelId, key).html;
-      else holder.innerHTML = "";
-    }
-
-    // The page colour under a value (so an edited value can cover the stale
-    // PDF text behind it). Samples a small grid inside the value's rectangle
-    // and takes the LIGHTEST opaque pixel: a single pixel can land on a letter
-    // (dark), and a canvas that is still being redrawn after a zoom is fully
-    // transparent (reads as black) — either used to turn the open value black.
-    // Anything that is not clearly a light page colour falls back to white.
-    function samplePageColour(ctx, canvas, rect, scale) {
-      try {
-        var dpr = global.devicePixelRatio || 1;
-        var c2d = canvas.getContext("2d");
-        var best = null;
-        var bestLum = -1;
-        for (var iy = 0; iy < 3; iy++) {
-          for (var ix = 0; ix < 3; ix++) {
-            var fx = rect[0] + (rect[2] - rect[0]) * (0.06 + 0.44 * ix);
-            var fy = rect[1] + (rect[3] - rect[1]) * (0.06 + 0.44 * iy);
-            var px = Math.max(0, Math.min(canvas.width - 1, Math.round(fx * scale * dpr)));
-            var py = Math.max(0, Math.min(canvas.height - 1, Math.round(fy * scale * dpr)));
-            var d = c2d.getImageData(px, py, 1, 1).data;
-            if (d[3] < 250) continue; // not painted (yet)
-            var lum = 0.299 * d[0] + 0.587 * d[1] + 0.114 * d[2];
-            if (lum > bestLum) {
-              bestLum = lum;
-              best = d;
-            }
-          }
-        }
-        if (!best || bestLum < 170) return "#fff";
-        return "rgb(" + best[0] + "," + best[1] + "," + best[2] + ")";
-      } catch (err) {
-        return "#fff";
-      }
-    }
-
-    function buildOverlays(ctxInfo) {
-      var overlayEl = ctxInfo.overlayEl;
-      overlayEl.innerHTML = "";
-      if (!layout || !layoutGroups()) return;
-      var scale = ctxInfo.scale;
-      layoutGroups().forEach(function (fields, hIdx) {
-        var hotelId = hotelIds[hIdx];
-        if (!hotelId) return;
+      var units = [];
+      if (!groups) return units;
+      groups.forEach(function (fields, hIdx) {
+        var rid = hotelIds[hIdx];
+        if (!rid) return;
         Object.keys(fields).forEach(function (key) {
-          var info = fields[key];
-          if (info.page !== ctxInfo.pageNumber - 1) return;
-          var r = info.rect;
-          var el = document.createElement("div");
-          el.className = "pe-field" + (isBlockKey(key) ? " pe-field--block" : "");
-          el.setAttribute("data-pe-hotel", hotelId);
-          el.setAttribute("data-pe-key", key);
-          el.setAttribute("data-pe-hotel-index", String(hIdx));
-          el.style.left = r[0] * scale + "px";
-          el.style.top = r[1] * scale + "px";
-          el.style.width = (r[2] - r[0]) * scale + "px";
-          el.style.height = (r[3] - r[1]) * scale + "px";
-          el.style.setProperty("--pe-pad", (4 * scale).toFixed(1) + "px");
-          el.style.setProperty("--pe-bg", samplePageColour(null, ctxInfo.canvasEl, r, scale));
-          el._peResample = function () {
-            el.style.setProperty("--pe-bg", samplePageColour(null, ctxInfo.canvasEl, r, scale));
-          };
-          el.style.setProperty("--pe-h", ((r[3] - r[1]) * scale).toFixed(1) + "px");
-          el.setAttribute("tabindex", "0");
-          el.setAttribute("role", "textbox");
-          var plain = isBlockKey(key)
-            ? (info.html || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 60)
-            : "";
-          el.setAttribute(
-            "aria-label",
-            isBlockKey(key)
-              ? "Edit text: " + (plain || "paragraph")
-              : cfg.fieldLabel
-              ? "Edit " + cfg.fieldLabel(key, hIdx)
-              : "Edit " + key.replace(/([A-Z])/g, " $1").toLowerCase() + " of hotel " + (hIdx + 1)
-          );
-          el.title = "Click to edit";
-          var text = document.createElement("div");
-          text.className = "pe-field__text";
-          text.style.cssText = fieldStyle(info, scale);
-          text.style.zoom = String(scale / PX_PER_PT);
-          text.style.width = ((r[2] - r[0]) - 8) * PX_PER_PT + "px";
-          el.appendChild(text);
-          overlayEl.appendChild(el);
-          staticView(el);
+          units.push({ rid: rid, key: key, id: rid + "|" + key, info: fields[key], block: isBlockKey(key) });
         });
       });
+      return units;
     }
 
-    // Hotel Voucher's layout lists one entry per hotel under "hotels"; every
-    // single-document letter's lists its one entry under "groups".
-    function layoutGroups() {
-      return layout ? layout.groups || layout.hotels || null : null;
-    }
-
-    function fieldInfo(el) {
-      var hIdx = parseInt(el.getAttribute("data-pe-hotel-index"), 10);
-      var groups = layoutGroups();
-      return groups && groups[hIdx] ? groups[hIdx][el.getAttribute("data-pe-key")] : null;
-    }
-
-    // opts.caret: "start" | "end" (keyboard moves between fields) or
-    // {x, y} (a mouse click) — where the caret goes once the editor is open.
-    function activate(el, opts) {
-      if (active && active.el === el) return;
-      commit();
-      var hotelId = el.getAttribute("data-pe-hotel");
-      var key = el.getAttribute("data-pe-key");
-      var info = fieldInfo(el) || {};
-      Promise.all([ensureQuill(), composePromise]).then(function (res) {
-        var Quill = res[0];
-        if (!el.isConnected) return; // page re-rendered while loading
-        if (active && active.el === el) return;
-        var holder = el.querySelector(".pe-field__text");
-        holder.innerHTML = "";
-        if (el._peResample) el._peResample(); // the page is painted by now
-        el.classList.add("is-active");
-        var mount = document.createElement("div");
-        holder.appendChild(mount);
-        var q = new Quill(mount, {
-          formats: QUILL_FORMATS,
-          modules: { toolbar: false, table: true, history: { userOnly: true } },
-          placeholder: "—",
-        });
-        var base = baseHtmlFor(hotelId, key);
-        q.setContents(q.clipboard.convert({ html: base.html }), "silent");
-        if (!base.fromOverride && !base.seeded) {
-          // A freshly-seeded NAMED value must carry the template's own look as
-          // EXPLICIT formatting: the backend writes an edited value as new
-          // runs that copy the template's font/size/colour but not its
-          // bold/alignment, so anything the template shows bold or centred
-          // has to be stated here to survive the round trip. (Whole-document
-          // blocks are seeded from the .docx with every format explicit.)
-          var len = q.getLength();
-          if (info.bold) q.formatText(0, len, "bold", true, "silent");
-          if (info.align && info.align !== "left") q.formatLine(0, len, "align", info.align, "silent");
-        }
-        q.history.clear();
-        active = { el: el, quill: q, hotelId: hotelId, key: key, touched: false, lastRange: null, saveTimer: null, baseSize: info.fontSize || null };
-        // A value that was only touched (typed then undone) and is still what
-        // the auto-generated text would be is not a hand edit — never stored.
-        active.initialHtml = base.fromOverride ? null : currentHtml(active);
-        q.on("text-change", function (delta, old, source) {
-          if (source !== "user") return;
-          active.touched = true;
-          clearTimeout(active.saveTimer);
-          active.saveTimer = setTimeout(persistActive, 250);
-          syncToolbarState();
-        });
-        q.on("selection-change", function (range) {
-          if (range) active.lastRange = range;
-          syncToolbarState();
-        });
-        q.root.addEventListener("keydown", onEditorKey);
-        setToolbarEnabled(true);
-        q.focus();
-        placeCaret(q, opts && opts.caret);
-        active.lastRange = q.getSelection();
-        syncToolbarState();
-      });
-    }
-
-    function placeCaret(q, where) {
-      var end = Math.max(0, q.getLength() - 1);
-      if (where === "start") return q.setSelection(0, 0, "silent");
-      if (where && typeof where === "object") {
-        // The point the user clicked, inside the freshly opened editor.
-        var range = null;
-        if (document.caretPositionFromPoint) {
-          var pos = document.caretPositionFromPoint(where.x, where.y);
-          if (pos) {
-            range = document.createRange();
-            range.setStart(pos.offsetNode, pos.offset);
+    // The Delta of the whole letter. `useOverrides` false builds the pristine,
+    // auto-generated letter (what "Reset" returns to).
+    function buildOps(Quill, q, units, useOverrides) {
+      var ops = [];
+      units.forEach(function (u) {
+        var override = useOverrides ? editedHtml(u.rid, u.key) : null;
+        var auto = autoSource(u.rid, u.key, u.info);
+        var html = override != null ? override : auto.html;
+        var unitOps = normaliseOps(q.clipboard.convert({ html: html }).ops);
+        unitOps.forEach(function (op) {
+          if (op.attributes && typeof op.attributes.font === "string" && op.attributes.font.indexOf(FONT_FALLBACK) === -1) {
+            op.attributes.font = op.attributes.font.replace(/;+\s*$/, "") + FONT_FALLBACK;
           }
-        } else if (document.caretRangeFromPoint) {
-          range = document.caretRangeFromPoint(where.x, where.y);
+        });
+        // A freshly-composed NAMED value must carry the template's own look
+        // as EXPLICIT formatting: the backend writes an edited value as new
+        // runs that copy the template's font/size/colour but not its
+        // bold/alignment, so anything the template shows bold or centred
+        // has to be stated here to survive the round trip. (Whole-document
+        // blocks are seeded from the .docx with every format explicit.)
+        if (override == null && !auto.seeded) {
+          unitOps.forEach(function (op) {
+            if (op.insert === "\n") {
+              if (u.info.align && u.info.align !== "left" && !(op.attributes && op.attributes.align)) {
+                op.attributes = Object.assign({}, op.attributes, { align: u.info.align });
+              }
+            } else if (u.info.bold && typeof op.insert === "string") {
+              op.attributes = Object.assign({ bold: true }, op.attributes);
+            }
+          });
         }
-        if (range && q.root.contains(range.startContainer)) {
-          var sel = global.getSelection();
-          sel.removeAllRanges();
-          range.collapse(true);
-          sel.addRange(range);
-          q.getSelection(); // lets Quill read the native selection
+        unitOps.forEach(function (op) {
+          if (op.insert !== "\n") return;
+          op.attributes = Object.assign({}, op.attributes, { unit: u.id });
+        });
+        ops = ops.concat(unitOps);
+      });
+      return ops;
+    }
+
+    // Every unit's current HTML, read from the editor's lines.
+    function serialize(q, unitIds) {
+      var out = {};
+      var tablesDone = [];
+      var lastId = unitIds[0] || null;
+      q.getLines().forEach(function (line) {
+        var dn = line.domNode;
+        var id = dn.getAttribute && dn.getAttribute("data-unit");
+        var html;
+        if (dn.tagName === "TD" && !id) {
+          // A table the user inserted: its cells belong to no unit of their own,
+          // so the whole table is kept as one piece of the unit before it.
+          var table = dn.closest("table");
+          var keyed = table && table.querySelector("td[data-unit]");
+          if (table && !keyed) {
+            if (tablesDone.indexOf(table) !== -1) return;
+            tablesDone.push(table);
+            var tc = table.cloneNode(true);
+            tc.removeAttribute("style"); // the stage's placement, not the table's
+            html = tc.outerHTML;
+          } else {
+            html = lineHtml(dn);
+          }
+        } else {
+          html = lineHtml(dn);
+        }
+        if (id && unitIds.indexOf(id) !== -1) lastId = id;
+        else id = lastId; // a line with no (or an unknown) unit joins the unit before it
+        if (!id) return;
+        out[id] = (out[id] || "") + html;
+      });
+      return out;
+    }
+
+    // Per-unit look: the printed font and size.
+    function unitCss(units) {
+      return units.map(function (u) {
+        var rules = [];
+        if (u.info.fontSize) rules.push("font-size:" + u.info.fontSize + "pt");
+        rules.push("font-family:" + cssFontStack(u.info.fontName));
+        rules.push("line-height:1.2");
+        if (/\|guestNames$/.test(u.id)) rules.push("counter-increment:lwnum");
+        return '.lw-stage [data-unit="' + u.id + '"]{' + rules.join(";") + "}";
+      }).join("\n");
+    }
+
+    /* ---------------- the whole-letter editor ------------------------------ */
+    function unitAtSelection() {
+      if (!letter || !letter.quill) return null;
+      var range = letter.quill.getSelection() || letter.lastRange;
+      if (!range) return null;
+      var found = letter.quill.getLine(range.index);
+      var line = found && found[0];
+      var id = line && line.domNode.getAttribute("data-unit");
+      return id && letter.units[id] ? letter.units[id] : null;
+    }
+
+    function openLetter(pane) {
+      closeLetter();
+      if (!pane || !layoutGroups()) return Promise.resolve();
+      var token = {};
+      letter = { token: token, pane: pane, quill: null, units: {}, shown: {}, orig: {}, saveTimer: null, lastRange: null };
+      pane.innerHTML = '<p class="field-hint lw-status">Opening the letter…</p>';
+      return Promise.all([ensureQuill(), composePromise]).then(function (res) {
+        if (!letter || letter.token !== token) return;
+        buildLetter(res[0]);
+      });
+    }
+
+    /* ---------------- the page stage -------------------------------------- */
+    // Edit mode looks exactly like the finished page: each page of the real PDF
+    // is drawn as the background WITHOUT its text (pdf.js is told to skip glyphs;
+    // shading, borders, logo, header and footer stay), and the editor's lines
+    // sit exactly where the printed text was. The letterhead is therefore
+    // visible, in place, while editing — never a different-looking "paper".
+    var STAGE_GAP = 16; // px between pages
+    var BACKDROP_RES = 2; // canvas pixels per CSS pixel of the page
+
+    function pageHeightsPx() {
+      return ((layout && layout.pages) || []).map(function (pg) { return Math.round(pg.height * PX_PER_PT); });
+    }
+
+    function renderBackdrop(pdfDoc, pageIndex, rectsPt) {
+      return pdfDoc.getPage(pageIndex + 1).then(function (page) {
+        var vp = page.getViewport({ scale: PX_PER_PT * BACKDROP_RES });
+        var withText = document.createElement("canvas");
+        var base = document.createElement("canvas");
+        withText.width = base.width = Math.ceil(vp.width);
+        withText.height = base.height = Math.ceil(vp.height);
+        var ctxText = withText.getContext("2d");
+        var ctxBase = base.getContext("2d");
+        // Every glyph is drawn through fillText / strokeText: no-op'ing them
+        // leaves only shading, borders and images.
+        ctxBase.fillText = function () {};
+        ctxBase.strokeText = function () {};
+        return Promise.all([
+          page.render({ canvasContext: ctxText, viewport: vp }).promise,
+          page.render({ canvasContext: ctxBase, viewport: vp }).promise,
+        ]).then(function () {
+          var k = PX_PER_PT * BACKDROP_RES;
+          var out = document.createElement("canvas");
+          out.width = base.width;
+          out.height = base.height;
+          var c = out.getContext("2d");
+          c.drawImage(base, 0, 0);
+          // Anything that is NOT an editable unit (rare) keeps its printed text.
+          c.save();
+          c.beginPath();
+          c.rect(0, 0, out.width, out.height);
+          rectsPt.forEach(function (r) { c.rect(r[0] * k, r[1] * k, (r[2] - r[0]) * k, (r[3] - r[1]) * k); });
+          c.clip("evenodd");
+          c.drawImage(withText, 0, 0);
+          c.restore();
+          // Each unit's area is cleared to the colour around it, so the template's
+          // own highlight behind a value does not stay behind once it is edited
+          // (the editor draws the highlight itself).
+          var probe = base.getContext("2d");
+          function lum(d) { return 0.299 * d[0] + 0.587 * d[1] + 0.114 * d[2]; }
+          rectsPt.forEach(function (r) {
+            var x0 = r[0] * k, y0 = r[1] * k, x1 = r[2] * k, y1 = r[3] * k;
+            var ym = (y0 + y1) / 2, xm = (x0 + x1) / 2, pad = 2.2 * k, inset = 1.4 * k;
+            // The colour of the cell itself: its four corners (a highlight sits
+            // behind the text only), the most common light colour wins; else
+            // the colour just outside the box.
+            var corners = [[x0 + inset, y0 + inset], [x1 - inset, y0 + inset], [x0 + inset, y1 - inset], [x1 - inset, y1 - inset]];
+            var spots = corners.concat([[x0 - pad, ym], [x1 + pad, ym], [xm, y0 - pad], [xm, y1 + pad]]);
+            var chosen = null;
+            var votes = {};
+            for (var i = 0; i < spots.length; i++) {
+              var sx = Math.round(spots[i][0]), sy = Math.round(spots[i][1]);
+              if (sx < 0 || sy < 0 || sx >= base.width || sy >= base.height) continue;
+              var d = probe.getImageData(sx, sy, 1, 1).data;
+              if (lum(d) < 140) continue; // a border line is dark: not a background
+              if (i < 4) {
+                var ck = d[0] + "," + d[1] + "," + d[2];
+                votes[ck] = votes[ck] || { n: 0, d: d };
+                votes[ck].n += 1;
+              } else if (!chosen) {
+                chosen = d;
+              }
+            }
+            var best = null;
+            Object.keys(votes).forEach(function (ck) { if (!best || votes[ck].n > best.n) best = votes[ck]; });
+            if (best) chosen = best.d;
+            if (!chosen) return;
+            c.fillStyle = "rgb(" + chosen[0] + "," + chosen[1] + "," + chosen[2] + ")";
+            c.fillRect(x0 + 0.5 * k, y0 + 0.5 * k, Math.max(0, x1 - x0 - k), Math.max(0, y1 - y0 - k));
+          });
+          return out;
+        });
+      });
+    }
+
+    // Puts every line of the editor where its unit was printed. A unit that has
+    // grown (more lines than before) pushes the units printed below it down by
+    // the same amount, keeping the printed gaps; the real page is regenerated
+    // when editing is finished.
+    function placeLines() {
+      if (!letter || !letter.quill || !letter.stage) return;
+      var q = letter.quill;
+      var tops = letter.pageTops;
+      var groups = [];
+      var byUnit = {};
+      var lastGroup = null;
+      q.getLines().forEach(function (line) {
+        var dn = line.domNode;
+        var id = dn.getAttribute && dn.getAttribute("data-unit");
+        if (dn.tagName === "TD") {
+          var table = dn.closest("table");
+          if (!table || table.getAttribute("data-lw-seen") === "1") return;
+          table.setAttribute("data-lw-seen", "1");
+          groups.push({ table: table, lines: [], prev: lastGroup });
           return;
         }
-      }
-      q.setSelection(end, 0, "silent");
-    }
-
-    // Arrow keys carry the caret from one block of the page to the next, the
-    // way they do through a Word document.
-    function neighbourField(dir) {
-      if (!active || !viewer || !viewer.overlayEl) return null;
-      var fields = Array.prototype.slice.call(viewer.overlayEl.querySelectorAll(".pe-field"));
-      var rect = function (f) { return f.getBoundingClientRect(); };
-      fields.sort(function (a, b) {
-        var ra = rect(a);
-        var rb = rect(b);
-        return Math.abs(ra.top - rb.top) < 2 ? ra.left - rb.left : ra.top - rb.top;
+        if (!id || !letter.units[id]) id = lastGroup && lastGroup.id;
+        if (!id) return;
+        var g = byUnit[id];
+        if (!g) {
+          g = byUnit[id] = { id: id, unit: letter.units[id], lines: [] };
+          groups.push(g);
+        }
+        g.lines.push(dn);
+        lastGroup = g;
       });
-      var i = fields.indexOf(active.el);
-      return i === -1 ? null : fields[i + dir] || null;
-    }
-    function onEditorKey(e) {
-      if (!active || !active.quill || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
-      var q = active.quill;
-      var sel = q.getSelection();
-      if (!sel || sel.length) return;
-      var last = Math.max(0, q.getLength() - 1);
-      var forward = false;
-      var backward = false;
-      if (e.key === "ArrowRight") forward = sel.index >= last;
-      else if (e.key === "ArrowLeft") backward = sel.index <= 0;
-      else if (e.key === "ArrowDown") forward = Math.abs(q.getBounds(sel.index).top - q.getBounds(last).top) < 2;
-      else if (e.key === "ArrowUp") backward = Math.abs(q.getBounds(sel.index).top - q.getBounds(0).top) < 2;
-      if (!forward && !backward) return;
-      var next = neighbourField(forward ? 1 : -1);
-      if (!next) return;
-      e.preventDefault();
-      activate(next, { caret: forward ? "start" : "end" });
+      q.root.querySelectorAll("table[data-lw-seen]").forEach(function (t) { t.removeAttribute("data-lw-seen"); });
+
+      var placed = {}; // page -> [{x0,x1,origBottom,newBottom}]
+      groups.forEach(function (g) {
+        var base = g.unit || (g.prev && g.prev.unit);
+        if (!base) return;
+        var info = base.info;
+        var page = info.page;
+        var rect = info.rect;
+        var textBox = info.text || null; // where the printed text sat inside its box
+        // The cell's own padding: the editor's lines keep the printed margins.
+        var pad = textBox ? Math.max(0, Math.min(7.5, textBox[0] - rect[0])) : 0;
+        var numbered = /\|guestNames$/.test(base.id); // its "1)" numbers sit left of the names
+        if (numbered && textBox) pad = textBox[0] - rect[0];
+        var left = (rect[0] + pad) * PX_PER_PT;
+        var width = Math.max(30, (rect[2] - rect[0] - 2 * pad) * PX_PER_PT);
+        var origTop = (textBox ? textBox[1] : rect[1]) * PX_PER_PT;
+        var origBottom = (textBox ? textBox[3] : rect[3]) * PX_PER_PT;
+        var fsPx = (info.fontSize || letter.baseSize || 11) * PX_PER_PT;
+        // The printed baselines (first and last line) pin the text exactly,
+        // whatever glyphs it holds; the ink box is only the fallback.
+        var bl = info.baseline || null;
+        if (bl) {
+          origTop = bl[0] * PX_PER_PT - 0.8 * fsPx;
+          origBottom = bl[1] * PX_PER_PT + 0.25 * fsPx;
+        }
+        // A paragraph that was printed over several lines wrapped where the
+        // printed text ended (its right indent is not in the layout): wrap at the
+        // same place, so the lines break exactly as on the finished page.
+        var printedLines = bl ? (bl[1] - bl[0]) * PX_PER_PT > 0.8 * fsPx : (textBox && (textBox[3] - textBox[1]) * PX_PER_PT > 1.7 * fsPx);
+        if (textBox && !numbered && printedLines) {
+          width = Math.min(width, (textBox[2] - textBox[0]) * PX_PER_PT + 0.4 * fsPx);
+          width = Math.max(width, 30);
+        }
+        // The first printed line's tallest glyph starts at origTop; the line box
+        // starts that far above the glyph (so the baseline lands where it was).
+        var shift = (bl ? 0.8 : 0.75) * fsPx - baselineOffset(base);
+        if (g.table) { // a table inserted by the user follows the unit before it
+          origTop = origBottom = g.prev ? (g.prev.origBottom != null ? g.prev.origBottom : origBottom) : origBottom;
+          if (g.prev && g.prev.newTop != null) { left = g.prev.left; width = g.prev.width; }
+          shift = 0;
+        }
+        // how far the units above (that overlap sideways) have grown
+        var top = origTop;
+        (placed[page] || []).forEach(function (p) {
+          if (Math.min(p.x1, left + width) - Math.max(p.x0, left) <= 2) return;
+          var need = p.newBottom + Math.max(0, origTop - p.origBottom);
+          if (origTop >= p.origBottom - 0.5 && need > top) top = need;
+        });
+        var growth = 0;
+        if (g.table) {
+          var t = g.table;
+          t.style.cssText = "position:absolute;left:" + left + "px;top:" + (letter.pageTops[page] + top) + "px;width:" + width + "px;";
+          growth = Math.max(0, t.offsetHeight);
+        } else {
+          var y = top + shift;
+          var lastBaseline = y;
+          var bo = baselineOffset(base);
+          g.lines.forEach(function (dn, i) {
+            if (numbered) { dn.style.counterReset = i === 0 ? "lwnum" : ""; }
+            dn.style.position = "absolute";
+            dn.style.left = left + "px";
+            dn.style.width = width + "px";
+            dn.style.top = tops[page] + y + "px";
+            dn.style.marginTop = "0px";
+            lastBaseline = y + bo;
+            y += dn.offsetHeight + (i < g.lines.length - 1 ? parseFloat(getComputedStyle(dn).marginBottom) || 0 : 0);
+          });
+          // Growth is only what goes beyond the printed bottom (a descender's
+          // worth of slack is not growth).
+          var printedLast = bl ? bl[1] * PX_PER_PT : origBottom - 0.25 * fsPx;
+          growth = Math.max(0, lastBaseline - (printedLast + (top - origTop)) - 0.15 * fsPx);
+        }
+        g.origBottom = origBottom;
+        g.newTop = top;
+        g.left = left;
+        g.width = width;
+        var newBottom = origBottom + (top - origTop) + growth;
+        (placed[page] = placed[page] || []).push({ x0: left, x1: left + width, origBottom: origBottom, newBottom: newBottom });
+      });
     }
 
-    function currentHtml(a) {
-      var html = a.quill.root.innerHTML;
-      return html === "<p><br></p>" ? "<p></p>" : html;
+    // Distance from the top of a line box to its baseline, for the unit's font
+    // (measured once per font and size in the stage itself).
+    function baselineOffset(unit) {
+      var info = unit.info;
+      var key = (info.fontName || "") + "|" + (info.fontSize || "");
+      letter.baselines = letter.baselines || {};
+      if (letter.baselines[key] != null) return letter.baselines[key];
+      var probe = document.createElement("div");
+      probe.setAttribute("aria-hidden", "true");
+      probe.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;left:0;top:0;line-height:1.2;" +
+        "font-size:" + (info.fontSize || letter.baseSize || 11) + "pt;font-family:" + cssFontStack(info.fontName) + ";";
+      probe.innerHTML = 'Hg<span style="display:inline-block;width:0;height:0"></span>';
+      letter.stage.appendChild(probe);
+      var off = probe.lastChild.offsetTop;
+      letter.stage.removeChild(probe);
+      letter.baselines[key] = off;
+      return off;
     }
 
-    function persistActive() {
-      if (!active || !active.touched) return;
-      clearTimeout(active.saveTimer);
-      if (active.initialHtml != null && currentHtml(active) === active.initialHtml) {
-        // Back to the untouched wording: drop any override this editing session created.
-        if (editedHtml(active.hotelId, dataKey(active.key)) != null) cfg.onFieldChange(active.hotelId, dataKey(active.key), null);
-        syncResetAll();
-        return;
+    function applyStageScale() {
+      if (!letter || !letter.stage) return;
+      var avail = letter.pane.clientWidth || letter.stageWidth;
+      // The page keeps the size it has in the viewer (so switching to Edit does
+      // not resize the letter), unless the pane is too narrow to hold it.
+      var wanted = viewer && viewer.scale ? viewer.scale / PX_PER_PT : 1.1;
+      var s = Math.max(0.25, Math.min(wanted, (avail - 4) / letter.stageWidth));
+      letter.stage.style.transform = "scale(" + s + ")";
+      letter.scaler.style.width = Math.round(letter.stageWidth * s) + "px";
+      letter.scaler.style.height = Math.round(letter.stageHeight * s) + "px";
+    }
+
+    function buildLetter(Quill) {
+      var pane = letter.pane;
+      var Delta = Quill.import("delta");
+      var list = sortUnits(collectUnits());
+      var pages = (layout.pages && layout.pages.length) ? layout.pages : [{ width: 595, height: 842 }];
+      var heights = pageHeightsPx();
+      var pageW = Math.round(pages[0].width * PX_PER_PT);
+      var pageTops = [];
+      var total = 0;
+      heights.forEach(function (h, i) { pageTops[i] = total; total += h + (i < heights.length - 1 ? STAGE_GAP : 0); });
+      var sizes = list.map(function (u) { return u.info.fontSize; }).filter(Boolean).sort(function (a, b) { return a - b; });
+      var baseSize = sizes.length ? sizes[Math.floor(sizes.length / 2)] : 11; // the usual size: the median
+
+      letter.units = {};
+      list.forEach(function (u) { letter.units[u.id] = u; });
+      var unitIds = list.map(function (u) { return u.id; });
+      letter.unitIds = unitIds;
+      letter.pageTops = pageTops;
+      letter.stageWidth = pageW;
+      letter.stageHeight = total;
+
+      pane.innerHTML =
+        '<div class="lw">' +
+        '<div class="lw-scaler" data-lw-scaler>' +
+        '<div class="lw-stage" data-lw-stage style="width:' + pageW + "px;height:" + total + 'px;">' +
+        "<style data-lw-style></style>" +
+        heights.map(function (h, i) {
+          return '<div class="lw-page" style="top:' + pageTops[i] + "px;height:" + h + 'px;" data-lw-page="' + i + '"></div>';
+        }).join("") +
+        '<div class="lw-quill" data-lw-quill></div>' +
+        "</div></div></div>";
+      pane.querySelector("[data-lw-style]").textContent = unitCss(list);
+      letter.stage = pane.querySelector("[data-lw-stage]");
+      letter.scaler = pane.querySelector("[data-lw-scaler]");
+      applyStageScale();
+      if (global.ResizeObserver) {
+        letter.resizer = new global.ResizeObserver(function () { applyStageScale(); });
+        letter.resizer.observe(pane);
       }
-      cfg.onFieldChange(active.hotelId, dataKey(active.key), currentHtml(active));
-      syncResetAll();
-    }
 
-    function commit() {
-      if (!active) return;
-      var a = active;
-      persistActive();
-      active = null;
-      a.el.classList.remove("is-active");
-      if (a.quill) a.quill = null;
-      if (a.el.isConnected) {
-        staticView(a.el);
-        // Its mirror (the same value printed twice on the voucher) must show the edit too.
-        refreshMirrors();
+      // The page backgrounds are drawn from the real PDF (when it is loaded).
+      var pdfDoc = viewer && viewer.pdfDoc;
+      var token = letter.token;
+      if (pdfDoc) {
+        heights.forEach(function (h, i) {
+          var rects = list.filter(function (u) { return u.info.page === i; }).map(function (u) { return u.info.rect; });
+          renderBackdrop(pdfDoc, i, rects).then(function (canvas) {
+            if (!letter || letter.token !== token) return;
+            var host = letter.stage.querySelector('[data-lw-page="' + i + '"]');
+            if (!host) return;
+            canvas.className = "lw-page__bg";
+            host.appendChild(canvas);
+          }, function () { /* the page simply stays white */ });
+        });
       }
-      setToolbarEnabled(false);
+
+      var mount = pane.querySelector("[data-lw-quill]");
+      var q = new Quill(mount, {
+        formats: QUILL_FORMATS,
+        modules: { toolbar: false, table: true, history: { userOnly: true } },
+        placeholder: "",
+      });
+      q.root.setAttribute("aria-label", "Letter text — edit like a Word document");
+      installEditGuards(q);
+      q.setContents(new Delta(buildOps(Quill, q, list, true)), "silent");
+      q.history.clear();
+      letter.quill = q;
+      letter.baseSize = baseSize;
+      letter.shown = serialize(q, unitIds);
+      // What each unit is when nothing is edited by hand: only needed when
+      // something already is (otherwise what is shown IS the original).
+      var anyOverride = list.some(function (u) { return editedHtml(u.rid, u.key) != null; });
+      if (!anyOverride) {
+        letter.orig = Object.assign({}, letter.shown);
+      } else {
+        var holder = document.createElement("div");
+        holder.style.cssText = "position:fixed;left:-99999px;top:0;width:600px;";
+        document.body.appendChild(holder);
+        var scratch = new Quill(holder, { formats: QUILL_FORMATS, modules: { toolbar: false, table: true } });
+        scratch.setContents(new Delta(buildOps(Quill, scratch, list, false)), "silent");
+        letter.orig = serialize(scratch, unitIds);
+        document.body.removeChild(holder);
+      }
+
+      function relayout() {
+        if (!letter || letter.quill !== q) return;
+        cancelAnimationFrame(letter.layoutFrame);
+        letter.layoutFrame = requestAnimationFrame(function () { placeLines(); });
+      }
+      letter.relayout = relayout;
+      q.on("text-change", function (delta, old, source) {
+        relayout();
+        if (source !== "user") return;
+        clearTimeout(letter.saveTimer);
+        letter.saveTimer = setTimeout(persistLetter, 350);
+        syncToolbarState();
+      });
+      q.on("selection-change", function (range) {
+        if (range) letter.lastRange = range;
+        syncToolbarState();
+      });
+      placeLines();
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(relayout);
+      setToolbarEnabled(true);
+      q.focus({ preventScroll: true });
+      q.setSelection(0, 0, "silent");
+      letter.lastRange = q.getSelection();
       syncToolbarState();
     }
 
-    function refreshMirrors() {
-      var overlayEl = viewer && viewer.overlayEl;
-      if (!overlayEl) return;
-      Array.prototype.forEach.call(overlayEl.querySelectorAll(".pe-field"), function (f) {
-        if (!f.classList.contains("is-active")) staticView(f);
+    /* ---------------- editing rules ------------------------------------- */
+    // Pasted text is always plain text that takes on the formatting at the
+    // caret: what a web page or another program brings along (a dark
+    // background, its own font and size, colours) never reaches the letter.
+    // On a document laid out in cells (the Hotel Voucher: cfg.cellUnits) every
+    // value belongs to its own cell: nothing typed, pasted, deleted or merged
+    // can move into the cell next to it, and a cell can be emptied but never
+    // removed.
+    function lineUnit(line) {
+      return line && line.domNode && line.domNode.getAttribute ? line.domNode.getAttribute("data-unit") : null;
+    }
+
+    function inlineFormatsAt(q, range) {
+      var fmt = {};
+      var f = q.getFormat(range.index, Math.max(0, range.length || 0)) || {};
+      INLINE_FORMATS.forEach(function (k) { if (f[k] != null && f[k] !== false) fmt[k] = f[k]; });
+      return fmt;
+    }
+
+    // Deletes the selection but keeps every cell: for each unit the selection
+    // touches, its text goes and the unit's last line break stays.
+    function deleteKeepingCells(q, range) {
+      var lines = q.getLines(range.index, range.length);
+      var end = range.index + range.length;
+      var groups = [];
+      lines.forEach(function (line) {
+        var id = lineUnit(line) || "";
+        var g = groups[groups.length - 1];
+        if (!g || g.id !== id) { g = { id: id, lines: [] }; groups.push(g); }
+        g.lines.push(line);
+      });
+      groups.slice().reverse().forEach(function (g) {
+        var first = g.lines[0];
+        var last = g.lines[g.lines.length - 1];
+        var from = Math.max(range.index, q.getIndex(first));
+        var lastNewline = q.getIndex(last) + last.length() - 1; // index of the unit's final line break
+        var to = Math.min(end, lastNewline);
+        if (to > from) q.deleteText(from, to - from, "user");
       });
     }
 
-    function resetActive() {
-      if (!active) return;
-      var a = active;
-      clearTimeout(a.saveTimer);
-      cfg.onFieldChange(a.hotelId, dataKey(a.key), null);
-      var el = a.el;
-      active = null;
-      el.classList.remove("is-active");
-      staticView(el);
-      refreshMirrors();
-      setToolbarEnabled(false);
-      activate(el);
+    function pastePlain(q, text) {
+      var range = q.getSelection(true);
+      if (!range) return;
+      var cells = !!cfg.cellUnits;
+      if (cells) text = text.replace(/\s*[\r\n]+\s*/g, " ").trim();
+      text = text.replace(/[\u200b\u200c\u200d\ufeff]/g, "");
+      var fmt = inlineFormatsAt(q, range);
+      var found = q.getLine(range.index);
+      var unitId = found && found[0] ? lineUnit(found[0]) : null;
+      if (range.length) {
+        if (cells) deleteKeepingCells(q, range);
+        else q.deleteText(range.index, range.length, "user");
+      }
+      if (!text) { q.setSelection(range.index, 0, "user"); return; }
+      q.insertText(range.index, text, fmt, "user");
+      if (!cells && unitId && text.indexOf("\n") !== -1) {
+        // lines made by the paste belong to the unit they were pasted into
+        q.formatLine(range.index, text.length, "unit", unitId, "user");
+      }
+      q.setSelection(range.index + text.length, 0, "user");
     }
 
-    function onOverlayClick(e) {
-      var el = e.target.closest(".pe-field");
-      if (!el || !viewer.overlayEl.contains(el)) return;
-      if (el.classList.contains("is-active")) return; // a click inside the open editor is just editing
-      activate(el, { caret: { x: e.clientX, y: e.clientY } });
-    }
-    function onOverlayKey(e) {
-      if ((e.key === "Enter" || e.key === " ") && e.target.classList && e.target.classList.contains("pe-field")) {
+    function installEditGuards(q) {
+      var cells = !!cfg.cellUnits;
+      q.root.addEventListener("paste", function (e) {
+        var cd = e.clipboardData;
+        if (!cd) return;
+        var text = cd.getData("text/plain");
+        if (!text && (!cd.types || Array.prototype.indexOf.call(cd.types, "text/html") === -1)) return; // files etc.: not ours
         e.preventDefault();
-        activate(e.target);
-      } else if (e.key === "Escape" && active) {
-        var el = active.el;
-        commit();
-        el.focus();
+        e.stopImmediatePropagation();
+        pastePlain(q, text || "");
+      }, true);
+      if (!cells) return;
+
+      function addFirst(key, handler) {
+        q.keyboard.addBinding({ key: key }, handler);
+        var list = q.keyboard.bindings[key];
+        list.unshift(list.pop()); // ahead of the editor's own Backspace / Delete
       }
+      function guard(back) {
+        return function (range) {
+          if (range.length) {
+            deleteKeepingCells(q, range);
+            q.setSelection(range.index, 0, "user");
+            return false;
+          }
+          var found = q.getLine(range.index);
+          var line = found && found[0];
+          if (!line) return true;
+          var offset = found[1];
+          if (back && offset === 0) {
+            var prev = line.prev;
+            return !!prev && lineUnit(prev) === lineUnit(line); // never merge into another cell
+          }
+          if (!back && offset === line.length() - 1) {
+            var next = line.next;
+            return !!next && lineUnit(next) === lineUnit(line);
+          }
+          return true;
+        };
+      }
+      addFirst("Backspace", guard(true));
+      addFirst("Delete", guard(false));
+
+      // typing over, cutting or dragging away a selection (which can reach into
+      // other cells): done here, so each cell keeps its own line
+      q.root.addEventListener("beforeinput", function (e) {
+        var type = e.inputType || "";
+        var range = q.getSelection();
+        if (!range || !range.length) return;
+        var isInsert = type === "insertText" || type === "insertReplacementText";
+        var isDelete = /^(deleteByCut|deleteContent|deleteByDrag|insertParagraph|insertLineBreak)/.test(type);
+        if (!isInsert && !isDelete) return;
+        e.preventDefault();
+        var fmt = inlineFormatsAt(q, range);
+        deleteKeepingCells(q, range);
+        var at = range.index;
+        if (isInsert && e.data) {
+          q.insertText(at, e.data, fmt, "user");
+          at += e.data.length;
+        }
+        q.setSelection(at, 0, "user");
+      }, true);
+    }
+
+    function persistLetter() {
+      if (!letter || !letter.quill) return;
+      clearTimeout(letter.saveTimer);
+      var now = serialize(letter.quill, letter.unitIds);
+      letter.unitIds.forEach(function (id) {
+        var u = letter.units[id];
+        var html = now[id];
+        if (html == null) html = u.block ? "" : "<p></p>"; // every line of it was deleted
+        if (html === letter.shown[id]) return; // untouched since the last save
+        letter.shown[id] = html;
+        var target = html === letter.orig[id] ? null : html;
+        if (!htmlEqual(target, editedHtml(u.rid, u.key))) cfg.onFieldChange(u.rid, u.key, target);
+      });
+      syncResetAll();
+    }
+
+    function closeLetter() {
+      if (!letter) return;
+      persistLetter();
+      var pane = letter.pane;
+      if (letter.resizer) letter.resizer.disconnect();
+      cancelAnimationFrame(letter.layoutFrame);
+      letter = null;
+      if (pane) pane.innerHTML = "";
+      setToolbarEnabled(false);
+    }
+
+    // "Reset" in the ribbon: the unit under the caret goes back to the
+    // auto-generated wording.
+    function resetActive() {
+      var unit = unitAtSelection();
+      if (!letter || !unit) return;
+      persistLetter();
+      cfg.onFieldChange(unit.rid, unit.key, null);
+      rebuildLetter();
+    }
+
+    function rebuildLetter() {
+      if (!letter) return Promise.resolve();
+      var pane = letter.pane;
+      var scroller = pane.closest(".doc-viewer__body");
+      var top = scroller ? scroller.scrollTop : 0;
+      return openLetter(pane).then(function () {
+        if (scroller) scroller.scrollTop = top;
+      });
     }
 
     /* ---------------- hooks the viewer calls ------------------------------- */
@@ -529,19 +940,21 @@
       if (ribbon) ribbon.destroy();
       ribbon = global.KhannaEditorRibbon.create({
         host: v.formatToolsEl,
-        getQuill: function () { return active ? active.quill : null; },
-        getLastRange: function () { return active ? active.lastRange : null; },
-        getBaseSize: function () { return active ? active.baseSize : null; },
+        getQuill: function () { return letter ? letter.quill : null; },
+        getLastRange: function () { return letter ? letter.lastRange : null; },
+        getBaseSize: function () {
+          var u = unitAtSelection();
+          return (u && u.info.fontSize) || (letter && letter.baseSize) || null;
+        },
         onReset: resetActive,
         onResetAll: resetAll,
       });
-      v.overlayEl.addEventListener("click", onOverlayClick);
-      v.overlayEl.addEventListener("keydown", onOverlayKey);
       setToolbarEnabled(false);
       v.formatToolsEl.hidden = false;
     }
 
     function onResult(result) {
+      var wasOpen = letter ? letter.pane : null;
       commit();
       layout = result.layout || null;
       hotelIds = result.hotelIds || [];
@@ -558,7 +971,7 @@
       composed = {};
       var snapshot = hotels.filter(function (h) { return hotelIds.indexOf(h.id) !== -1; });
       // The compose endpoint must see the hotels WITHOUT edits so the seed is
-      // always the auto-generated wording (edits are layered on top above).
+      // always the auto-generated wording (edits are layered on top).
       var plain = snapshot.map(function (h) {
         return Object.assign({}, h, { editedFields: null });
       });
@@ -569,18 +982,20 @@
                 composed[snapshot[i].id] = f;
               });
             },
-            function () { /* overlays fall back to an em dash; the PDF itself is unaffected */ }
+            function () { /* named values fall back to an em dash; the PDF itself is unaffected */ }
           )
         : Promise.resolve();
+      // A regeneration while Edit is on (Reset all) re-opens the letter on the new layout.
+      if (wasOpen && viewer && viewer.editing) openLetter(wasOpen);
     }
 
-    function onPageRendered(ctxInfo) {
-      commit();
-      buildOverlays(ctxInfo);
-      setToolbarEnabled(false);
+    // Kept for the viewer's per-page callback: nothing is laid over the PDF any more.
+    function commit() {
+      persistLetter();
     }
 
     function isDirty() {
+      persistLetter();
       for (var i = 0; i < hotelIds.length; i++) {
         var h = hotelById(hotelIds[i]);
         var ef = (h && h.editedFields) || {};
@@ -614,12 +1029,10 @@
       editedCount: editedCount,
       resetAll: resetAll,
       onResult: onResult,
-      onPageRendered: onPageRendered,
+      openLetter: openLetter,
+      closeLetter: closeLetter,
       commit: commit,
-      isDirty: function () {
-        persistActive();
-        return isDirty();
-      },
+      isDirty: isDirty,
       hasLayout: function () { return !!layout; },
     };
   }

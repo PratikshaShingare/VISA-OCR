@@ -39,11 +39,13 @@ output or used as sample/demo data (project rule 11).
 
 from __future__ import annotations
 
+import copy
 import os
 from typing import Optional
 
 from docx import Document
 from docx.text.paragraph import Paragraph
+from docx.text.run import Run
 
 import document_blocks
 import docx_utils
@@ -62,7 +64,6 @@ COMPANY_TEMPLATE_PATH = os.path.join(
     _REFERENCE_ROOT, "Company Authorization Letter", "Company Authorization Letter.docx"
 )
 
-MAX_PASSPORT_AUTH_PEOPLE = 2  # matches the two available reference templates exactly
 
 
 class AuthorizationLetterError(docx_utils.DocxBuildError):
@@ -209,6 +210,32 @@ def _fill_passport_multiple(
         runs[7].text = f" & {relation} " if relation else " & "
         runs[8].text = _display_name(person2)
         runs[10].text = f"(Passport No.: {person2.get('passportNumber') or '—'}"
+        extra_people = people[2:]
+        if extra_people:
+            # Three or more travellers: the template's "& my wife Mrs. X
+            # (Passport No.: …)" clause (runs 7-11) is repeated once per
+            # additional traveller, with the same run formatting, so the
+            # sentence reads "Mr. A (Passport No.: …), my wife Mrs. B
+            # (Passport No.: …) & my son Master C (Passport No.: …)".
+            groups = [[runs[k] for k in range(7, 12)]]
+            anchor = runs[11]._r
+            for _ in extra_people:
+                clones = []
+                for k in range(7, 12):
+                    clone = copy.deepcopy(runs[k]._r)
+                    anchor.addnext(clone)
+                    anchor = clone
+                    clones.append(Run(clone, sentence_p))
+                groups.append(clones)
+            for index, (person, group) in enumerate(zip(people[1:], groups)):
+                is_last = index == len(groups) - 1
+                relation = _relation_phrase(person.get("relationToApplicant"), person.get("sex"))
+                separator = " & " if is_last else ", "
+                group[0].text = f"{separator}{relation} " if relation else separator
+                group[1].text = _display_name(person)
+                group[2].text = " "
+                group[3].text = f"(Passport No.: {person.get('passportNumber') or '—'}"
+                group[4].text = ")"
 
     collector_html = edited_fields.get("collectorSentence")
     if collector_html is not None:
@@ -305,8 +332,10 @@ def generate_passport_authorization_docx(
     edited_fields: Optional[dict] = None,
     _shader: Optional[docx_utils.ProbeShader] = None,
 ) -> bytes:
-    """Builds the Passport Authorization Letter .docx for 1 or 2
-    travellers — the exact set the real reference templates cover.
+    """Builds the Passport Authorization Letter .docx for any number of
+    travellers — the single-traveller reference template for one, the
+    "two or multiple travellers" template (its clause repeated per extra
+    traveller) for two or more.
     Returns raw .docx bytes. Raises ValueError / AuthorizationLetterError
     on any problem — never returns a silently-wrong or empty document.
 
@@ -330,12 +359,6 @@ def generate_passport_authorization_docx(
     any of these were looked up fresh after an earlier one was mutated."""
     if not people:
         raise ValueError("At least one traveller is required to generate this letter.")
-    if len(people) > MAX_PASSPORT_AUTH_PEOPLE:
-        raise ValueError(
-            "Passport Authorization Letter can be generated for 1 or 2 travellers at a "
-            "time, matching the two reference templates on file. For a group of 3 or "
-            "more, please generate separate letters for now."
-        )
     if not collector_name or not collector_name.strip():
         raise ValueError("Please enter who will collect the passport(s) on the applicant's behalf.")
     if not recipient_centre_name or not recipient_centre_name.strip():

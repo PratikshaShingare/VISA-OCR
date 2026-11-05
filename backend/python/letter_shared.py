@@ -151,3 +151,80 @@ def person_display_name(name: Optional[str]) -> str:
     cleaned = re.sub(r"[ \t]{2,}", " ", str(name).strip())  # stray double spaces from a scan
     parts = _NAME_SPLIT_RE.split(cleaned)
     return "".join(p if _NAME_SPLIT_RE.fullmatch(p) or not p else _capitalise_word(p) for p in parts)
+
+
+# ---------------------------------------------------------------------------
+# Sentence case for places and other typed details
+# ---------------------------------------------------------------------------
+# Passports, addresses and quick typing leave "MUMBAI" or "TCS CONSULTANCY"
+# in capitals. In a letter they read as "Mumbai". Short all-capital words are
+# left alone, because they are nearly always genuine abbreviations (UAE, TCS,
+# IBM) — and any word already written with mixed case is the writer's choice.
+
+_KNOWN_ACRONYMS = {"UAE", "USA", "UK", "US", "UN", "NCR", "NYC", "LLP", "PVT", "LTD", "IT", "HR", "CEO", "CFO"}
+_WORD_SPLIT_RE = re.compile(r"([\s,/()&\-]+)")
+
+
+def _fix_word(word: str, *, place: bool) -> str:
+    letters = [c for c in word if c.isalpha()]
+    if not letters or word.upper() in _KNOWN_ACRONYMS and word.isupper():
+        return word
+    if word.isupper():
+        # Abbreviations written with dots ("P.V.T.") or very short words stay.
+        if "." in word or (not place and len(letters) <= 3):
+            return word
+        return word[:1].upper() + word[1:].lower()
+    if place and word.islower():
+        return word[:1].upper() + word[1:]
+    return word
+
+
+def sentence_case_value(value: Optional[str], *, place: bool = False) -> str:
+    """'MUMBAI' -> 'Mumbai'; 'NEW DELHI, INDIA' -> 'New Delhi, India';
+    'TCS CONSULTANCY' -> 'TCS Consultancy'. With place=True every word is
+    capitalised (even a 2-3 letter one, and an all-lower-case one); without
+    it only longer all-capital words are changed."""
+    if not value:
+        return value or ""
+    cleaned = re.sub(r"[ \t]{2,}", " ", str(value).strip())
+    parts = _WORD_SPLIT_RE.split(cleaned)
+    return "".join(p if not p or _WORD_SPLIT_RE.fullmatch(p) else _fix_word(p, place=place) for p in parts)
+
+
+# ---------------------------------------------------------------------------
+# How the travellers are related ("along with my ...")
+# ---------------------------------------------------------------------------
+# The Cover Letter page lets staff pick the relation between the travellers
+# from a list, and optionally type their own wording. Both reach the engines
+# through traveller_relation(): typed wording wins, then the list choice, then
+# whatever the traveller record itself says (spouse/child/... + sex), and
+# finally the generic fallback the template itself uses.
+
+TRAVELLER_RELATION_OPTIONS = [
+    "Family member", "Husband", "Wife", "Father", "Mother", "Son", "Daughter",
+    "Brother", "Sister", "Cousin", "Friend", "Colleague", "Business partner",
+]
+
+_POSSESSIVE_START_RE = re.compile(r"^(my|our)\s", re.IGNORECASE)
+
+
+def traveller_relation(
+    choice: Optional[str],
+    custom_text: Optional[str],
+    companion: Optional[dict],
+    fallback: str = "family member",
+) -> tuple[str, str]:
+    """Returns (phrase, bare): ('my wife', 'wife'). `phrase` is ready to drop
+    into 'along with ...'; `bare` is the same relation without 'my'."""
+    custom = re.sub(r"\s+", " ", (custom_text or "").strip()).strip(" ,.;")
+    if custom:
+        phrase = custom if _POSSESSIVE_START_RE.match(custom) else f"my {custom}"
+        return phrase, _POSSESSIVE_START_RE.sub("", phrase, count=1)
+    picked = (choice or "").strip().lower()
+    if picked and picked != "other":
+        return f"my {picked}", picked
+    word = None
+    if companion:
+        word = relation_word(companion.get("relationToApplicant"), companion.get("sex"))
+    word = word or fallback
+    return f"my {word}", word

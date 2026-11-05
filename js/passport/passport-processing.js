@@ -44,6 +44,35 @@
     );
   }
 
+  // The checkbox list that opens under the save buttons after
+  // "Save Applicant & Generate Required Documents" (standalone Upload Passport
+  // page only). The documents come from js/document-queue.js.
+  function generatePanelHtml(instanceId) {
+    var Q = global.KhannaDocQueue;
+    var docs = Q ? Q.DOCUMENTS : [];
+    return (
+      '<div class="card passport-generate" id="passport-generate-panel-' + instanceId + '" data-passport-generate-panel hidden>' +
+      '<div class="passport-generate__head">' +
+      "<div><h3>Which documents does <span data-passport-generate-name>this applicant</span> need?</h3>" +
+      '<p class="field-hint">Tick everything you want to create. You will be taken through them one after another, with this applicant already filled in.</p></div>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-passport-generate-all>Select all</button>' +
+      "</div>" +
+      '<div class="passport-generate__list" role="group" aria-label="Documents to create">' +
+      docs.map(function (d) {
+        return (
+          '<label class="passport-generate__item"><input type="checkbox" data-passport-generate-doc="' + d.view + '" />' +
+          '<span><strong>' + d.label + "</strong><small>" + d.hint + "</small></span></label>"
+        );
+      }).join("") +
+      "</div>" +
+      '<div class="passport-generate__actions">' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-passport-generate-cancel>Close</button>' +
+      '<button type="button" class="btn btn-primary btn-sm" data-passport-generate-start disabled>Start with selected documents</button>' +
+      "</div>" +
+      "</div>"
+    );
+  }
+
   /**
    * @param {Object} config
    *   root: HTMLElement — mount point
@@ -52,6 +81,9 @@
    *   savePerson: (app, personPatch, activityMessage) => void
    *   registerValidator: (fn) => void  — wires this step's completeness into the wizard footer
    *   showContinueToDocument: boolean — standalone Upload Passport page only
+   *   hideTestTools: boolean — leave out the developer-only OpenRouter test button (used by the quick-add window)
+   *   quietSave: boolean — no "saved" pop-up (the caller shows its own)
+   *   showGenerateDocuments: boolean — standalone Upload Passport page only ("Save Applicant & Generate Required Documents")
    */
   function createController(config) {
     var session = null; // built fresh each time a person is loaded
@@ -109,16 +141,22 @@
         '<div class="passport-preview" data-passport-preview></div>' +
         '<div class="passport-review">' +
         '<div class="passport-review__actions">' +
-        '<button type="button" class="btn btn-secondary btn-sm" data-passport-run-ocr-openrouter ' +
-        'title="Testing path — calls an OpenRouter vision model instead of the Tesseract/Google Vision pipeline above. Single image only.">' +
-        "Run OCR (OpenRouter — testing)</button>" +
+        (config.hideTestTools
+          ? ""
+          : '<button type="button" class="btn btn-secondary btn-sm" data-passport-run-ocr-openrouter ' +
+            'title="Testing path — calls an OpenRouter vision model instead of the Tesseract/Google Vision pipeline above. Single image only.">' +
+            "Run OCR (OpenRouter — testing)</button>") +
         '<button type="button" class="btn btn-ghost btn-sm passport-review__replace-btn" data-passport-replace>Replace file</button>' +
         '<span class="passport-review__status" data-passport-status></span>' +
         "</div>" +
         reviewForm.skeletonHtml(instanceId) +
         '<div class="passport-review__save-row">' +
-        '<button type="button" class="btn btn-primary" data-passport-save>Save passport details</button>' +
+        (config.showGenerateDocuments
+          ? '<button type="button" class="btn btn-secondary" data-passport-save>Save Applicant</button>' +
+            '<button type="button" class="btn btn-primary" data-passport-save-generate aria-controls="passport-generate-panel-' + instanceId + '" aria-expanded="false">Save Applicant &amp; Generate Required Documents</button>'
+          : '<button type="button" class="btn btn-primary" data-passport-save>Save passport details</button>') +
         "</div>" +
+        (config.showGenerateDocuments ? generatePanelHtml(instanceId) : "") +
         "</div>" +
         "</div>" +
         (config.showContinueToDocument ? continueToDocumentHtml() : "");
@@ -405,9 +443,10 @@
       );
     }
 
+    // Returns true when the details were saved, false when a check stopped it.
     function savePerson(r) {
       var app = config.getApplication();
-      if (!app) return;
+      if (!app) return false;
       var values = reviewForm.readValues(r);
       // The MRZ shown with the saved passport is the one of the data page
       // that supplied the form's details, not of whichever page is on screen.
@@ -430,7 +469,7 @@
           !hasName ? "Enter the applicant's name before saving." : "Enter the passport number before saving.";
         setStatus(r, message);
         if (global.KhannaToast) global.KhannaToast.show(message, { type: "error" });
-        return;
+        return false;
       }
 
       var badDates = reviewForm.invalidDates(r);
@@ -438,7 +477,7 @@
         var dateMessage = "Enter dates as DD-MM-YYYY (check: " + badDates.join(", ") + ").";
         setStatus(r, dateMessage);
         if (global.KhannaToast) global.KhannaToast.show(dateMessage, { type: "error" });
-        return;
+        return false;
       }
 
       values.applicant.fullName = [values.applicant.firstName, values.applicant.lastName]
@@ -475,7 +514,53 @@
       if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
       updateContinueToDocumentVisibility(r);
       setStatus(r, "Saved.");
-      if (global.KhannaToast) global.KhannaToast.show("Passport details saved", { type: "success" });
+      if (global.KhannaToast && !config.quietSave) global.KhannaToast.show(config.showGenerateDocuments ? "Applicant saved" : "Passport details saved", { type: "success" });
+      return true;
+    }
+
+    // ---- "Save Applicant & Generate Required Documents" ----
+    function generatePanel(r) {
+      return utils.qs("[data-passport-generate-panel]", r);
+    }
+
+    function closeGeneratePanel(r) {
+      var panel = generatePanel(r);
+      if (panel) panel.hidden = true;
+      var btn = utils.qs("[data-passport-save-generate]", r);
+      if (btn) btn.setAttribute("aria-expanded", "false");
+    }
+
+    function refreshGenerateStart(r) {
+      var panel = generatePanel(r);
+      if (!panel) return;
+      var ticked = utils.qsa("[data-passport-generate-doc]:checked", panel).length;
+      var start = utils.qs("[data-passport-generate-start]", panel);
+      start.disabled = ticked === 0;
+      start.textContent = ticked ? "Start with " + ticked + (ticked === 1 ? " document" : " documents") : "Start with selected documents";
+    }
+
+    function openGeneratePanel(r) {
+      var panel = generatePanel(r);
+      if (!panel) return;
+      var app = config.getApplication();
+      var person = app ? config.getPerson(app) : null;
+      var nameEl = utils.qs("[data-passport-generate-name]", panel);
+      if (nameEl) nameEl.textContent = (person && person.fullName) || "this applicant";
+      // Remember what was chosen last time for this application.
+      var previous = global.KhannaDocQueue && app ? global.KhannaDocQueue.get(app) : [];
+      utils.qsa("[data-passport-generate-doc]", panel).forEach(function (cb) {
+        cb.checked = previous.indexOf(cb.getAttribute("data-passport-generate-doc")) !== -1;
+      });
+      panel.hidden = false;
+      var btn = utils.qs("[data-passport-save-generate]", r);
+      if (btn) btn.setAttribute("aria-expanded", "true");
+      refreshGenerateStart(r);
+      // The Continue-to-document shortcuts would only repeat this list.
+      var shortcuts = utils.qs("[data-passport-continue-to-document]", r);
+      if (shortcuts) shortcuts.hidden = true;
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      var first = utils.qs("[data-passport-generate-doc]", panel);
+      if (first) first.focus({ preventScroll: true });
     }
 
     function bindEvents(r) {
@@ -534,7 +619,35 @@
 
       utils.on(r, "click", "[data-passport-save]", function () {
         savePerson(r);
+        if (config.showGenerateDocuments) closeGeneratePanel(r);
       });
+
+      if (config.showGenerateDocuments) {
+        utils.on(r, "click", "[data-passport-save-generate]", function () {
+          if (savePerson(r)) openGeneratePanel(r);
+        });
+        utils.on(r, "change", "[data-passport-generate-doc]", function () {
+          refreshGenerateStart(r);
+        });
+        utils.on(r, "click", "[data-passport-generate-all]", function () {
+          var boxes = utils.qsa("[data-passport-generate-doc]", r);
+          var allOn = boxes.every(function (b) { return b.checked; });
+          boxes.forEach(function (b) { b.checked = !allOn; });
+          refreshGenerateStart(r);
+        });
+        utils.on(r, "click", "[data-passport-generate-cancel]", function () {
+          closeGeneratePanel(r);
+          updateContinueToDocumentVisibility(r);
+        });
+        utils.on(r, "click", "[data-passport-generate-start]", function () {
+          var app = config.getApplication();
+          if (!app) return;
+          var views = utils.qsa("[data-passport-generate-doc]:checked", r).map(function (b) {
+            return b.getAttribute("data-passport-generate-doc");
+          });
+          if (views.length && global.KhannaDocQueue) global.KhannaDocQueue.start(app.id, views);
+        });
+      }
     }
 
     function render() {
@@ -548,6 +661,7 @@
         checkBackend(r);
       }
       session = freshSession();
+      if (config.showGenerateDocuments) closeGeneratePanel(r);
       var person = config.getPerson(app);
       reviewForm.loadExisting(r, person);
       var hasSavedPassport =
@@ -637,6 +751,7 @@
       root: mountPoint,
       instanceId: "applicant-standalone",
       showContinueToDocument: true,
+      showGenerateDocuments: true,
       getApplication: function () {
         return global.KhannaState.getActiveApplication();
       },

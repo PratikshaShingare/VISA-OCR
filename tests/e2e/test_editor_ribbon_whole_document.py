@@ -16,7 +16,7 @@ import io
 from docx import Document
 from playwright.async_api import async_playwright
 
-from _common import BASE, Checks, fresh_load_and_login, set_edit_mode, wait_preview_ready
+from _common import BASE, Checks, fresh_load_and_login, preview_unit_keys, select_line_with_text, set_edit_mode, wait_preview_ready
 
 checks = Checks()
 
@@ -28,21 +28,6 @@ def _all_paragraphs(container):
             for cell in row.cells:
                 out.extend(_all_paragraphs(cell))
     return out
-
-
-async def _open_block_with_text(page, scope, needle):
-    keys = await page.locator(f"{scope} .pe-field").evaluate_all("els=>els.map(e=>e.getAttribute('data-pe-key'))")
-    for k in keys:
-        if not k:
-            continue
-        await page.locator(f"{scope} .pe-field[data-pe-key='{k}']").first.click()
-        await page.wait_for_timeout(450)
-        txt = (await page.inner_text(f"{scope} .pe-field.is-active .ql-editor")).strip()
-        if needle in txt:
-            return k
-        await page.keyboard.press("Escape")
-        await page.wait_for_timeout(150)
-    return None
 
 
 async def main():
@@ -66,61 +51,44 @@ async def main():
         await wait_preview_ready(page, scope)
         await set_edit_mode(page, scope, True)
 
-        # Edit button sits beside the title (left), not among the zoom tools.
+        await page.wait_for_selector(f"{scope} .lw-stage .ql-editor")
+        # Edit button sits beside the title (left), not among the tools.
         pos = await page.evaluate(
             """(sc) => { const t = document.querySelector(sc + ' .doc-viewer__title').getBoundingClientRect();
                          const e = document.querySelector(sc + ' [data-dv=edit-toggle]').getBoundingClientRect();
-                         const z = document.querySelector(sc + ' [data-dv=zoom-out]').getBoundingClientRect();
-                         return {gap: e.left - t.right, beforeZoom: e.right < z.left}; }""",
+                         const pr = document.querySelector(sc + ' [data-dv=print]').getBoundingClientRect();
+                         return {gap: e.left - t.right, beforeTools: e.right < pr.left}; }""",
             scope,
         )
-        checks.check("Edit / Done editing sits right beside the title", 0 <= pos["gap"] < 40 and pos["beforeZoom"], str(pos))
-        shadow = await page.evaluate(f"getComputedStyle(document.querySelector('{scope} .pe-field')).boxShadow")
-        checks.check("No outline boxes are drawn on the page in edit mode", shadow == "none", shadow)
+        checks.check("Edit / Done editing sits right beside the title", 0 <= pos["gap"] < 40 and pos["beforeTools"], str(pos))
+        checks.check("The PDF page and its zoom / page controls are out of the way while editing",
+                     not await page.locator(f"{scope} [data-dv='zoom-in']").is_visible()
+                     and not await page.locator(f"{scope} [data-dv='canvas']").is_visible())
+        checks.check("The ribbon is shown", await page.locator(f"{scope} [data-pe='bold']").is_visible())
 
-        # Regression: after changing the zoom, opening a block must never turn it black.
-        black = 0
-        for step in ("zoom-in", "zoom-out", "zoom-out", "fit"):
-            await page.click(f"{scope} [data-dv='{step}']")
-            await page.wait_for_timeout(900)
-            for idx in (0, 3, 6):
-                await page.locator(f"{scope} .pe-field").nth(idx).click()
-                await page.wait_for_timeout(450)
-                bg = await page.evaluate(
-                    f"(() => {{ const e = document.querySelector('{scope} .pe-field.is-active'); return e ? getComputedStyle(e).backgroundColor : ''; }})()"
-                )
-                if bg.replace(" ", "") in ("rgb(0,0,0)", "rgba(0,0,0,0)"):
-                    black += 1
-                await page.keyboard.press("Escape")
-                await page.wait_for_timeout(150)
-        checks.check("A block never turns black when opened after zooming", black == 0, str(black))
-
-        blocks = await page.locator(f"{scope} .pe-field[data-pe-key^='blk-']").count()
+        keys = await preview_unit_keys(page, scope)
+        blocks = len([k for k in keys if k.startswith("blk-")])
         checks.check("Fixed template wording is editable too (whole-document blocks)", blocks >= 3, str(blocks))
 
         # --- rewrite a fixed paragraph and format it from the ribbon ---
-        key = await _open_block_with_text(page, scope, "Warm Regards")
-        checks.check("The fixed closing 'Warm Regards' opens as an editable block", key is not None)
-        await page.keyboard.press("Control+A")
+        key = await select_line_with_text(page, scope, "Warm Regards")
+        checks.check("The fixed closing 'Warm Regards' can be selected in the letter", key)
         await page.keyboard.type("Kind regards from the team,")
-        await page.keyboard.press("Control+A")
+        await page.wait_for_timeout(300)
+        await select_line_with_text(page, scope, "Kind regards from the team,")
         await page.click(f"{scope} [data-pe='italic']")
         await page.click(f"{scope} [data-pe='highlight-menu']")
         swatches = await page.locator(".pe-pop--palette [data-hex]").count()
         checks.check("Highlight menu offers exactly Word's 15 colours", swatches == 15, str(swatches))
         await page.click(".pe-pop--palette [data-hex='#FFFF00']")
         await page.click(f"{scope} [data-pe='align-center']")
-        await page.wait_for_timeout(300)
-        await page.keyboard.press("Escape")
-        await page.wait_for_timeout(500)
+        await page.wait_for_timeout(900)
 
         # --- bullets on another paragraph ---
-        key2 = await _open_block_with_text(page, scope, "Thank you")
+        key2 = await select_line_with_text(page, scope, "Thank you", whole=False)
         if key2:
             await page.click(f"{scope} [data-pe='bullet']")
-            await page.wait_for_timeout(250)
-            await page.keyboard.press("Escape")
-            await page.wait_for_timeout(500)
+            await page.wait_for_timeout(900)
         checks.check("A paragraph could be turned into a bullet", key2 is not None)
 
         async with page.expect_download() as dl:

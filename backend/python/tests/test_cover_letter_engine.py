@@ -2,7 +2,7 @@
 Tests for cover_letter_engine.py — the Europe / Japan / Singapore Cover
 Letters, generated against the REAL reference-cover-letter-formats/ files
 (project rule 5). Each region has its own real template with a different
-fixed shape (Europe/Japan are always applicant + exactly one companion;
+fixed shape (Europe/Japan are the applicant alone or with one companion;
 Singapore takes any number of companions, including zero), so each is
 exercised on its own real template.
 """
@@ -46,7 +46,7 @@ EUROPE_FIELDS = {
 }
 
 
-def test_europe_cover_letter_requires_applicant_and_companion():
+def test_europe_cover_letter_requires_an_applicant():
     with pytest.raises(ValueError):
         cle.generate_europe_cover_letter_docx({}, {}, EUROPE_FIELDS)
 
@@ -169,7 +169,7 @@ JAPAN_FIELDS = {
 }
 
 
-def test_japan_cover_letter_requires_applicant_and_companion():
+def test_japan_cover_letter_requires_an_applicant():
     with pytest.raises(ValueError):
         cle.generate_japan_cover_letter_docx({}, {}, JAPAN_FIELDS, [])
 
@@ -204,7 +204,6 @@ def test_japan_cover_letter_pdf(sample_applicant, sample_companion):
 
 
 SINGAPORE_FIELDS = {
-    "recipientText": "Consulate General of Singapore, Mumbai",
     "travelStartDate": "2026-09-01",
     "travelEndDate": "2026-09-08",
     "fundingArrangement": "Self-funded",
@@ -219,21 +218,25 @@ def test_singapore_cover_letter_requires_at_least_the_applicant():
         cle.generate_singapore_cover_letter_docx({}, [], SINGAPORE_FIELDS)
 
 
-def test_singapore_cover_letter_with_no_companions(sample_applicant):
+def test_singapore_cover_letter_with_no_companions_uses_the_single_traveller_letter(sample_applicant):
     skip_if_missing(cle.SINGAPORE_TEMPLATE_PATH)
     docx_bytes = cle.generate_singapore_cover_letter_docx(sample_applicant, [], SINGAPORE_FIELDS)
-    text = _full_text(Document(io.BytesIO(docx_bytes)))
+    doc = Document(io.BytesIO(docx_bytes))
+    text = _full_text(doc)
     assert sample_applicant["fullName"] in text
-    assert "along with my Family" not in text, "solo traveller must not get the family clause"
+    assert "along with my" not in text, "solo traveller must not get the family clause"
+    assert not doc.tables, "the single-traveller letter has no passenger table"
 
 
-def test_singapore_cover_letter_with_companions(sample_applicant, sample_companion):
-    skip_if_missing(cle.SINGAPORE_TEMPLATE_PATH)
+def test_singapore_cover_letter_with_companions_uses_the_multi_traveller_letter(sample_applicant, sample_companion):
+    skip_if_missing(cle.SINGAPORE_MULTI_TEMPLATE_PATH)
     docx_bytes = cle.generate_singapore_cover_letter_docx(sample_applicant, [sample_companion], SINGAPORE_FIELDS)
-    text = _full_text(Document(io.BytesIO(docx_bytes)))
+    doc = Document(io.BytesIO(docx_bytes))
+    text = _full_text(doc)
     assert sample_applicant["fullName"] in text
-    assert "along with my Family" in text
+    assert "along with my" in text
     assert sample_companion["fullName"] in text, "companion must appear in the passenger table"
+    assert len(doc.tables[0].rows) == 3  # header + applicant + one companion
 
 
 def test_singapore_cover_letter_pdf(sample_applicant):
@@ -241,3 +244,159 @@ def test_singapore_cover_letter_pdf(sample_applicant):
     skip_if_missing_binary("soffice")
     pdf_bytes = cle.generate_singapore_cover_letter_pdf(sample_applicant, [], SINGAPORE_FIELDS)
     assert pdf_bytes[:5] == b"%PDF-"
+
+
+# ---------------------------------------------------------------------------
+# One traveller, and how two travellers are related
+# ---------------------------------------------------------------------------
+
+
+def _paragraph_texts(docx_bytes):
+    return [p.text for p in Document(io.BytesIO(docx_bytes)).paragraphs]
+
+
+def test_europe_cover_letter_with_only_the_applicant_is_written_in_the_singular(sample_applicant):
+    skip_if_missing(cle.EUROPE_TEMPLATE_PATH)
+    text = "\n".join(_paragraph_texts(cle.generate_europe_cover_letter_docx(sample_applicant, None, EUROPE_FIELDS)))
+    assert sample_applicant["fullName"] in text
+    for plural in ("along with my family", "I and my", "We both", "We look forward", "our relevant documents", "for us will", "grant us", "our visa application"):
+        assert plural not in text, plural
+    assert "I reside in Mumbai, India" in text
+    assert "for me will be borne" in text
+    assert "grant me the necessary visa" in text
+    assert "[" not in text, "no template placeholder may be left behind"
+
+
+@pytest.mark.parametrize(
+    "choice, custom, expected",
+    [
+        ("Wife", "", "along with my wife, "),
+        ("Friend", "", "along with my friend, "),
+        ("Husband", "business partner", "along with my business partner, "),  # typed wording wins
+        ("", "", "along with my family member, "),  # nothing known about them
+    ],
+)
+def test_europe_cover_letter_relation_wording_follows_the_dropdown_or_typed_text(
+    sample_applicant, sample_companion, choice, custom, expected
+):
+    skip_if_missing(cle.EUROPE_TEMPLATE_PATH)
+    companion = dict(sample_companion, relationToApplicant="", sex="")
+    fields = dict(EUROPE_FIELDS, travellerRelation=choice, travellerRelationText=custom)
+    text = "\n".join(_paragraph_texts(cle.generate_europe_cover_letter_docx(sample_applicant, companion, fields)))
+    assert expected + companion["fullName"] in text
+    bare = expected.replace("along with my ", "").rstrip(", ")
+    assert f"While my {bare} is working for" in text
+
+
+def test_europe_cover_letter_relation_falls_back_to_the_traveller_record(sample_applicant, sample_companion):
+    companion = dict(sample_companion, relationToApplicant="Spouse", sex="F")
+    paras = cle.compose_europe_body_paragraphs(sample_applicant, companion, EUROPE_FIELDS)
+    assert "along with my wife, " in paras[0]["text"]
+
+
+def test_europe_body_paragraphs_solo_have_no_companion_sentence(sample_applicant):
+    paras = cle.compose_europe_body_paragraphs(sample_applicant, None, EUROPE_FIELDS)
+    assert len(paras) == 3
+    joined = " ".join(p["text"] for p in paras)
+    assert "While my" not in joined and "companion" not in joined
+
+
+def test_japan_cover_letter_with_only_the_applicant(sample_applicant):
+    skip_if_missing(cle.JAPAN_TEMPLATE_PATH)
+    text = "\n".join(_paragraph_texts(cle.generate_japan_cover_letter_docx(sample_applicant, None, JAPAN_FIELDS, [])))
+    assert "along with my family" not in text
+    assert "(holding Indian Passport No." in text
+    assert "My " + "Family" not in text and "[Passenger 2 Name]" not in text and "[Occupation]" not in text
+    assert "I will be staying at the below hotels:" in text
+    assert "All my travel expenses" in text
+    assert "attachment to my visa application form" in text
+
+
+def test_japan_cover_letter_relation_wording(sample_applicant, sample_companion):
+    skip_if_missing(cle.JAPAN_TEMPLATE_PATH)
+    companion = dict(sample_companion, relationToApplicant="", sex="")
+    fields = dict(JAPAN_FIELDS, travellerRelation="Brother")
+    text = "\n".join(_paragraph_texts(cle.generate_japan_cover_letter_docx(sample_applicant, companion, fields, [])))
+    assert "along with my brother from" in text
+    assert "My Brother, " in text and companion["fullName"] in text
+    custom = dict(JAPAN_FIELDS, travellerRelationText="close friend")
+    text = "\n".join(_paragraph_texts(cle.generate_japan_cover_letter_docx(sample_applicant, companion, custom, [])))
+    assert "along with my close friend from" in text
+
+
+def test_traveller_relation_helper():
+    import letter_shared as ls
+
+    assert ls.traveller_relation("Wife", "", None) == ("my wife", "wife")
+    assert ls.traveller_relation("Wife", "business partner", None) == ("my business partner", "business partner")
+    assert ls.traveller_relation("", "Our friend", None) == ("Our friend", "friend")
+    assert ls.traveller_relation("Other", "", None) == ("my family member", "family member")
+    assert ls.traveller_relation("", "", {"relationToApplicant": "Parent", "sex": "M"}) == ("my father", "father")
+
+
+def test_sentence_case_value():
+    import letter_shared as ls
+
+    assert ls.sentence_case_value("MUMBAI", place=True) == "Mumbai"
+    assert ls.sentence_case_value("navi mumbai, india", place=True) == "Navi Mumbai, India"
+    assert ls.sentence_case_value("NEW DELHI", place=True) == "New Delhi"
+    assert ls.sentence_case_value("UAE", place=True) == "UAE"
+    assert ls.sentence_case_value("TCS CONSULTANCY SERVICES") == "TCS Consultancy Services"
+    assert ls.sentence_case_value("Software Engineer") == "Software Engineer"
+    assert ls.sentence_case_value("") == ""
+
+
+# ---------------------------------------------------------------------------
+# Several companions (Stage 2 — no cap on any region)
+# ---------------------------------------------------------------------------
+
+
+def _text(docx_bytes: bytes) -> str:
+    return _full_text(Document(io.BytesIO(docx_bytes)))
+
+
+def _three_companions(sample_companion):
+    return [
+        dict(sample_companion, id="c1", fullName="Anita Test", passportNumber="C0000001", relationToApplicant="Spouse",
+             sex="F", jobTitle="Teacher", employerName="Test School", employmentStartYear="2010", occupation="Teacher"),
+        dict(sample_companion, id="c2", fullName="Rohan Test", passportNumber="C0000002", relationToApplicant="Child", sex="M"),
+        dict(sample_companion, id="c3", fullName="Riya Test", passportNumber="C0000003", relationToApplicant="Child", sex="F"),
+    ]
+
+
+def test_europe_body_with_several_companions_names_each_with_their_relation(sample_applicant, sample_companion):
+    fields = {"travelStartDate": "01/12/2026", "travelEndDate": "10/12/2026", "destinationCountry": "France"}
+    paras = cle.compose_europe_body_paragraphs(sample_applicant, _three_companions(sample_companion), fields)
+    text = "\n".join(p["text"] for p in paras)
+    for needle in ("my wife, Anita Test", "my son, Rohan Test", "my daughter, Riya Test"):
+        assert needle in text
+    # Only the companion with job details gets a job sentence.
+    assert "My wife is working for Test School since 2010" in text
+    assert text.count("is working for") == 1
+    assert "We both" not in text
+
+
+def test_europe_body_with_one_companion_is_unchanged_by_the_list_form(sample_applicant, sample_companion):
+    fields = {"travelStartDate": "1", "travelEndDate": "2", "companionJobTitle": "Teacher",
+              "companionEmployerName": "School", "companionEmploymentStartYear": "2010"}
+    as_dict = cle.compose_europe_body_paragraphs(sample_applicant, sample_companion, fields)
+    as_list = cle.compose_europe_body_paragraphs(sample_applicant, [sample_companion], fields)
+    assert as_dict == as_list
+    assert "We both are financially independent" in as_dict[1]["text"]
+
+
+def test_europe_and_japan_docx_with_several_companions(sample_applicant, sample_companion):
+    skip_if_missing(cle.EUROPE_TEMPLATE_PATH)
+    skip_if_missing(cle.JAPAN_TEMPLATE_PATH)
+    companions = _three_companions(sample_companion)
+    fields = {"travelStartDate": "01/12/2026", "travelEndDate": "10/12/2026", "destinationCountry": "Japan"}
+    europe = _text(cle.generate_europe_cover_letter_docx(sample_applicant, companions, fields))
+    japan = _text(cle.generate_japan_cover_letter_docx(sample_applicant, companions, fields, []))
+    for name in ("Anita Test", "Rohan Test", "Riya Test"):
+        assert name in europe and name in japan
+    for number in ("C0000001", "C0000002", "C0000003"):
+        assert number in japan
+    # One template line per companion, the template's own instruction never shown.
+    assert japan.count("(holding Indian Passport No.:") == 4  # applicant + 3
+    assert "Add additional family member details" not in japan
+    assert "is —" not in japan  # a companion without an occupation has no "is —" tail

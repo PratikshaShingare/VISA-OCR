@@ -171,8 +171,11 @@
     position: relative;
     width: min(86vw, 320px);
     height: 100%;
-    background: var(--color-surface);
-    border-right: 1px solid var(--color-border);
+    /* The same brand-blue surface as the desktop menu: the links are white
+       (css/layout.css), so a white panel here made every link but the
+       current page invisible. */
+    background: var(--nav-bg);
+    border-right: 1px solid var(--nav-border);
     transform: translateX(-100%);
     transition: transform 0.2s ease;
   }
@@ -249,5 +252,25 @@
 @media (min-width: 1280px) {
   .container {
     max-width: 1200px;
+  }
+}
+
+/* Very narrow screens (folding phones, ~280px): a button's label may be wider
+   than the card it sits in. Let the label wrap instead of running off-screen. */
+@media (max-width: 299px) {
+  .btn {
+    max-width: 100%;
+    white-space: normal;
+    text-align: center;
+    height: auto;
+    min-height: 40px;
+    padding-top: var(--space-2);
+    padding-bottom: var(--space-2);
+  }
+  .view-header__actions {
+    width: 100%;
+  }
+  .view-header__actions .btn {
+    flex: 1 1 100%;
   }
 }

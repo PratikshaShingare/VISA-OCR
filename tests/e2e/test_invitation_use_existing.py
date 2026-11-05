@@ -8,7 +8,7 @@ Covers (real static server, no backend needed — nothing here generates):
   - one "Use Existing Details" dropdown in each of the page's two cards.
   - Passport: two-box dropdown; picking a saved passport adds that person to
     the active application as a traveller (source untouched), ticks them;
-    a third pick is refused (letter takes exactly 2) and adds nobody.
+    a third pick is accepted (no people limit any more) and adds them.
   - Hotel Blocking: fills travel dates + accommodation from a saved hotel
     blocking, never invents the return date and says so.
   - The couple's (Initors) letter's dropdown does the same for its own card
@@ -106,8 +106,8 @@ async def main():
         await page.wait_for_timeout(400)
         status = await inv.locator("[data-inv-existing-status]").inner_text()
         n_trav = await page.evaluate(f"KhannaState.getApplication('{ids['target']}').travellers.length")
-        checks.check("a third pick is refused with an explanation", "exactly 2" in status, status)
-        checks.check("...and adds nobody to the application", n_trav == 2, str(n_trav))
+        checks.check("a third pick is accepted and reported", "added to this application" in status, status)
+        checks.check("...and adds them to the application", n_trav == 3, str(n_trav))
         src_name = await page.evaluate(f"KhannaState.getApplication('{ids['a']}').applicant.fullName")
         n_src = await page.evaluate(f"KhannaState.getApplication('{ids['a']}').travellers.length")
         checks.check("the source application is untouched", src_name == "Rahul Sharma" and n_src == 1)
@@ -129,7 +129,7 @@ async def main():
         status = await inv.locator("[data-inv-existing-status]").inner_text()
         checks.check("status names what was filled and the return date as manual", "Filled" in status and "return date" in status, status)
         still = await inv.locator("[data-invitation-invitee]:checked").count()
-        checks.check("invitees stay ticked after the fill", still == 2, str(still))
+        checks.check("invitees stay ticked after the fill", still == 3, str(still))
 
         # ---------- 5) couple's letter card ----------
         ini = page.locator("[data-initors-card]")
@@ -140,7 +140,7 @@ async def main():
         await page.wait_for_timeout(400)
         status = await ini.locator("[data-inv-existing-status]").inner_text()
         n_trav = await page.evaluate(f"KhannaState.getApplication('{ids['target']}').travellers.length")
-        checks.check("an already-present person is just selected (no duplicate traveller)", "added to this application" not in status and n_trav == 2, f"{status} / {n_trav}")
+        checks.check("an already-present person is just selected (no duplicate traveller)", "added to this application" not in status and n_trav == 3, f"{status} / {n_trav}")
         await itoggle.click()
         await ini.locator("[data-inv-use-existing-option='passport']").click()
         await ini.locator("[data-inv-existing-pick='passport'][data-passport-key='P2222222']").click()

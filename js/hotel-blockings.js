@@ -150,7 +150,7 @@
     if (!usable.length) {
       btn.disabled = false;
       btn.textContent = original;
-      showRowError(row, "No hotel here has its name, city and check-in/check-out dates yet — use Edit to complete it first.");
+      showRowError(row, "This application has no hotel yet — add one first.");
       return;
     }
     api.downloadHotelVoucher(usable, format, fileNameLabel(app)).then(

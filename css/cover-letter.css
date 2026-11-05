@@ -227,38 +227,65 @@
   max-width: 420px;
 }
 
+/* Search glyph on the left, chevron on the right: reads as a "pick a country"
+   control at a glance instead of a bare text box. Pure CSS, no extra markup. */
 .country-combo input {
   width: 100%;
+  padding-left: 2.4rem;
+  padding-right: 2.2rem;
+  background-repeat: no-repeat;
+  background-position: 0.8rem 50%, right 0.8rem center;
+  background-size: 16px 16px, 14px 14px;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 .country-combo__list {
   position: absolute;
   left: 0;
   right: 0;
-  top: calc(100% + var(--space-2));
-  max-height: 280px;
+  top: calc(100% + 4px);
+  max-height: 300px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
-  padding: var(--space-2);
+  padding: 4px 0;
   z-index: 45;
+}
+
+.country-combo__group {
+  margin: 0;
+  padding: var(--space-2) var(--space-4) 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.country-combo__group:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
 }
 
 .country-combo__option {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
   gap: var(--space-3);
   width: 100%;
+  min-height: 38px;
   text-align: left;
-  padding: var(--space-2) var(--space-3);
+  padding: 8px var(--space-4);
   border: none;
   background: transparent;
-  border-radius: var(--radius-sm);
-  font-size: 0.86rem;
+  border-radius: 0;
+  font-size: 0.88rem;
   color: var(--color-text);
   cursor: pointer;
 }
@@ -268,9 +295,35 @@
   background: var(--color-surface-alt);
 }
 
+/* Current choice: brand-blue text plus a tick, not just a colour change. */
+.country-combo__option.is-selected {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.country-combo__option.is-selected::after {
+  content: "";
+  flex: 0 0 14px;
+  height: 14px;
+  background: no-repeat center / contain
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2309488E' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+}
+
 .country-combo__empty {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
   margin: 0;
+}
+
+@media (max-width: 640px) {
+  .country-combo {
+    max-width: none;
+  }
+  .country-combo input {
+    font-size: 16px; /* stops iOS zooming the page on focus */
+  }
+  .country-combo__option {
+    min-height: 44px;
+  }
 }
 
 /* ---------------- "Previous Cover Letter Applications" (section 5) ---------------- */
@@ -309,3 +362,150 @@
 }
 
 /* The in-preview editor's styling lives in css/preview-editor.css. */
+
+/* "Use Existing Details" + "Add another traveller" sit side by side on the
+   Cover Letter, Authorization and Invitation pages. The row owns the gap
+   below; the dropdown wrapper inside it no longer adds its own. */
+.use-existing-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.use-existing-row .cover-use-existing {
+  margin-bottom: 0;
+}
+
+/* "+ Add another traveller" form (js/add-traveller.js). */
+.add-traveller__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.add-traveller__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.add-traveller__grid input,
+.add-traveller__grid select {
+  width: 100%;
+  min-width: 0;
+}
+
+.add-traveller__actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+@media (max-width: 480px) {
+  .add-traveller__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Live "the letter will read: along with my wife, …" line under the relation fields. */
+.cover-relation-hint {
+  margin: var(--space-2) 0 var(--space-4);
+}
+
+/* ---- Two ways to bring a person in (js/add-traveller.js sourceChoiceHtml) ---- */
+.source-choice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: stretch;
+  margin-bottom: var(--space-4);
+}
+
+.source-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.source-option__title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.source-option__help {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+  max-width: none;
+}
+
+.source-option .cover-use-existing {
+  margin-bottom: 0;
+  margin-top: auto;
+}
+
+.source-option > .btn {
+  margin-top: auto;
+}
+
+@media (max-width: 640px) {
+  .source-choice {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The manual-entry form's sections (js/add-traveller.js) */
+.add-traveller__section {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.add-traveller__section legend {
+  padding: 0;
+  margin-bottom: var(--space-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.add-traveller__more {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-2);
+}
+
+.add-traveller__more summary {
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-primary);
+  margin-bottom: var(--space-2);
+}
+
+.add-traveller__more[open] summary {
+  margin-bottom: var(--space-3);
+}
+
+.add-traveller {
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+@media (max-width: 480px) {
+  .add-traveller__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

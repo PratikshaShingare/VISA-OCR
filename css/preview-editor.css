@@ -1,108 +1,105 @@
 /* ==========================================================================
-   Editable document preview (js/preview-editor.js)
-   Overlays sit exactly on top of the real PDF's editable values. They are
-   invisible until hovered/focused/edited, so the PDF itself is always what
-   you see. Fixed template text (labels, headings, Hotel Policy) never gets
-   an overlay.
+   Whole-letter editor (js/preview-editor.js)
+   Edit mode shows the pages exactly as they will be printed: the real PDF's
+   shading, borders, logo, header and footer are the page backgrounds (drawn
+   without their text), and the editor's lines sit where the printed text was.
+   The editable text lines are one Quill editor, so the caret, selection,
+   Enter, Backspace, Delete, copy / paste and undo work across the whole letter.
+   A page stands for paper: always white with black text, in light and dark.
    ========================================================================== */
 
-.pe-field {
-  position: absolute;
-  box-sizing: border-box;
-  pointer-events: auto;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 0 var(--pe-pad, 4px);
-  overflow: hidden;
-  line-height: 1.2;
-  color: #000;
-  cursor: text;
-  outline: none;
-  border-radius: 2px;
+.lw {
+  width: 100%;
+  overflow-x: auto;
 }
-/* No input-box outlines on the page: the text is edited in place. A very
-   light tint on hover is the only hint that a block is clickable. */
-.pe-field:hover {
-  background: rgba(28, 95, 174, 0.07);
-}
-.pe-field:focus-visible {
-  background: rgba(28, 95, 174, 0.07);
-}
-/* An edited value not yet in the PDF: show the typed text over the stale one. */
-.pe-field.is-edited,
-.pe-field.is-active {
-  background: var(--pe-bg, #fff);
-  height: auto !important;
-  min-height: var(--pe-h, 24px);
-}
-.pe-field.is-edited {
-  overflow: visible;
-}
-.pe-field.is-active {
-  overflow: visible;
-  z-index: 3;
-}
-/* The app's global `p { color: muted; ... }` must not leak into the value. */
-.pe-field__text p,
-.pe-field .ql-editor p {
-  margin: 0;
-  color: inherit;
-  font-size: inherit;
-  line-height: inherit;
+.lw-status {
+  margin: 0 0 var(--space-2);
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  text-align: center;
   max-width: none;
 }
-.pe-field .ql-container {
-  font: inherit;
-  height: auto;
-  border: 0;
+.lw-scaler {
+  margin: 0 auto;
+  position: relative;
 }
-.pe-field .ql-editor {
-  padding: 0;
-  height: auto;
-  min-height: 0;
-  overflow: visible;
-  line-height: inherit;
-  font-size: inherit;
-  font-family: inherit;
+.lw-stage {
+  position: relative;
+  transform-origin: top left;
   color: #000;
 }
-.pe-field--block {
-  justify-content: flex-start;
+.lw-page {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--color-border-strong), 0 2px 8px rgba(0, 0, 0, 0.12);
 }
-/* Lists / tables in a not-yet-regenerated value (outside the editor). */
-.pe-field__text ol,
-.pe-field__text ul {
+.lw-page__bg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.lw-quill {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+.lw-stage .ql-container {
+  position: absolute;
+  inset: 0;
+  height: auto;
+  border: 0;
+  font: inherit;
+}
+.lw-stage .ql-editor {
+  position: absolute;
+  inset: 0;
+  height: auto;
+  padding: 0;
+  overflow: visible;
+  color: #000;
+  font-family: Calibri, Carlito, Arial, sans-serif;
+  font-size: 11pt;
+  line-height: normal;
+  caret-color: #000;
+  tab-size: 4;
+}
+/* The app's global `p { color: muted; ... }` must not leak into the letter. */
+.lw-stage .ql-editor p,
+.lw-stage .ql-editor li {
   margin: 0;
-  padding-left: 1.5em;
-  list-style: none;
+  color: inherit;
+  max-width: none;
+  box-sizing: border-box;
+  overflow-wrap: break-word;
 }
-.pe-field__text li[data-list="bullet"]::before { content: "\2022"; margin-left: -1.2em; margin-right: 0.5em; }
-.pe-field__text table,
-.pe-field .ql-editor table {
+.lw-stage .ql-editor ol,
+.lw-stage .ql-editor ul {
+  padding-left: 0;
+  margin: 0;
+}
+.lw-stage .ql-editor li:not(.ql-direction-rtl) {
+  padding-left: 1.5em;
+}
+.lw-stage .ql-editor table {
   border-collapse: collapse;
   table-layout: fixed;
-  width: 100%;
+  background: #fff;
 }
-.pe-field__text td,
-.pe-field .ql-editor td {
+.lw-stage .ql-editor td {
   border: 1px solid #000;
   padding: 2px 5px;
   vertical-align: top;
   min-width: 2em;
+  overflow-wrap: anywhere;
 }
-.pe-field .ql-editor ol,
-.pe-field .ql-editor ul {
-  padding-left: 0;
+/* The printed "1)" before each guest name — shown, not part of the text. */
+.lw-stage .ql-editor [data-unit$="|guestNames"]::before {
+  content: counter(lwnum) ")\00a0";
 }
-.pe-field .ql-editor li:not(.ql-direction-rtl) {
-  padding-left: 1.5em;
-}
-.pe-field .ql-editor.ql-blank::before {
-  left: 0;
-  right: 0;
-  font-style: normal;
-  color: rgba(0, 0, 0, 0.35);
+.lw-stage .ql-editor ::selection {
+  background: #b7d3f2;
 }
 
 /* ---- Word-style ribbon (js/editor-ribbon.js) ------------------------------ */
@@ -174,7 +171,7 @@
   outline-offset: 1px;
 }
 .pe-btn.is-on {
-  background: var(--color-primary-soft, rgba(28, 95, 174, 0.14));
+  background: var(--color-primary-soft, rgba(9, 72, 142, 0.14));
   border-color: var(--color-primary);
   color: var(--color-primary);
 }
@@ -274,7 +271,7 @@
 }
 .pe-pop__item:hover,
 .pe-pop__item:focus-visible {
-  background: var(--color-primary-soft, rgba(28, 95, 174, 0.12));
+  background: var(--color-primary-soft, rgba(9, 72, 142, 0.12));
 }
 .pe-pop__item--more input {
   position: absolute;
@@ -372,7 +369,7 @@
   cursor: pointer;
 }
 .pe-tcell.is-on {
-  background: var(--color-primary-soft, rgba(28, 95, 174, 0.25));
+  background: var(--color-primary-soft, rgba(9, 72, 142, 0.25));
   border-color: var(--color-primary);
 }
 

@@ -140,9 +140,9 @@ async def main():
         await page.evaluate("location.hash = '#/applications'")
         await page.wait_for_timeout(300)
         delete_is_real = await page.evaluate(
-            """() => { const b = document.querySelector("[data-view='applications'] [data-action='delete-application']"); return !b || (b.tagName === 'BUTTON' && b.textContent.trim().length > 0); }"""
+            """() => { const b = document.querySelector("[data-view='applications'] [data-action='dashboard-delete-application']"); return !b || (b.tagName === 'BUTTON' && (b.getAttribute('aria-label') || '').trim().length > 0); }"""
         )
-        checks.check("Applications Delete control is a real <button> with visible text", delete_is_real)
+        checks.check("Applications Delete control is a real <button> with an accessible name", delete_is_real)
 
         checks.check("Zero console errors across the accessibility pass", len(console_errors) == 0, "; ".join(console_errors[:5]))
 

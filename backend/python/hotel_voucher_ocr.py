@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional
 import cv2
 from dateutil import parser as dateutil_parser
 
+import hotel_voucher_layout as layout
 import ocr_runner as ocr
 
 
@@ -127,8 +128,13 @@ _TITLES = r"(?:Mrs|Mr|Miss|Ms|Mstr|Master|Dr|Prof|Shri|Smt)(?![a-z])"
 _NAME_STOP = {
     "no", "show", "add", "room", "adult", "adults", "child", "children", "raised", "cancel", "need", "last", "check",
     "phone", "contact", "email", "rate", "total", "sale", "guest", "details", "amendments", "special", "other",
+    # Labels that start the next field / line (a name never contains them).
+    "guests", "check-in", "checkin", "check-out", "checkout", "arrival", "departure", "nights", "night", "date",
+    "booking", "confirmation", "address", "status", "email", "mobile", "nationality",
 }
-_TITLED_NAME_RE = re.compile(_TITLES + r"\.?\s+((?:[A-Z][A-Za-z'\-]+)(?:\s+[A-Z][A-Za-z'\-]+){0,4})")
+# A person's name sits on one line: separators are spaces/tabs only, so the
+# first word of the NEXT line (e.g. "Guests:", "Check-in") is never glued on.
+_TITLED_NAME_RE = re.compile(_TITLES + r"\.?[ \t]+((?:[A-Z][A-Za-z'\-]+)(?:[ \t]+[A-Z][A-Za-z'\-]+){0,4})")
 _AGENCY_WORDS = re.compile(r"\b(?:private|pvt|limited|ltd|holidays|travels|tours|booking\.com|llp)\b|\(HTL\)", re.IGNORECASE)
 _HOTEL_KEYWORDS = (
     r"Hotels?|Resorts?|Inn|Suites?|Residency|Palace|Lodge|Villas?|Hostel|Apartments?|Retreat|Guest\s*House|Guesthouse|Motel|Lodging"
@@ -143,7 +149,13 @@ _CONF_RE = re.compile(
 
 def _clean_name(raw: str) -> Optional[str]:
     words = raw.split()
-    while words and words[-1].lower() in _NAME_STOP:
+    # Cut at the first word that is really the next field's label, then trim
+    # any such words left at the end.
+    for i, w in enumerate(words):
+        if i >= 1 and w.lower().strip(".,:;") in _NAME_STOP:
+            words = words[:i]
+            break
+    while words and words[-1].lower().strip(".,:;") in _NAME_STOP:
         words.pop()
     return " ".join(words) if words else None
 
@@ -501,6 +513,63 @@ def _nights_warnings(printed: Optional[int], check_in: Optional[str], check_out:
     return []
 
 
+def _fields_from_layout(vtype: str, parsed: Dict[str, Any]) -> Dict[str, Any]:
+    """Maps a type-specific layout parse (hotel_voucher_layout.py) onto the Hotel
+    Blocking form's own field keys. Only what the voucher really printed: a
+    value the parser could not read stays None (and is reported in warnings)."""
+    rooms = parsed.get("rooms") or []
+    fields: Dict[str, Optional[str]] = {
+        "hotelName": parsed.get("hotelName"), "phone": None, "address": parsed.get("address"), "city": parsed.get("city"), "country": None,
+        "confirmationNumber": parsed.get("confirmationNumber"), "leadGuestName": parsed.get("lead"),
+        "roomType": None, "noOfRooms": None, "noOfAdults": None, "noOfChildren": None,
+        "checkIn": parsed.get("checkIn"), "checkOut": parsed.get("checkOut"),
+    }
+    warnings: List[str] = []
+    guests = list(parsed.get("guests") or [])
+    if vtype == layout.TYPE_TBO:
+        types: List[str] = []
+        for r in rooms:
+            if r.get("roomType") and r["roomType"].lower() not in [t.lower() for t in types]:
+                types.append(r["roomType"])
+        fields["roomType"] = ", ".join(types) or None
+        if rooms:
+            fields["noOfRooms"] = str(len(rooms))
+        adults = [r["adults"] for r in rooms if r.get("adults") is not None]
+        if adults and len(adults) == len(rooms):
+            fields["noOfAdults"] = str(sum(adults))
+        children = [r["children"] for r in rooms if r.get("children") is not None]
+        if children:
+            fields["noOfChildren"] = str(sum(children))
+        listed = len(guests)
+        if fields["noOfAdults"] and listed and listed < int(fields["noOfAdults"]) + int(fields.get("noOfChildren") or 0):
+            warnings.append(
+                f"The voucher lists {fields['noOfAdults']} adult(s) but only {listed} guest name(s) could be read "
+                "(a collapsed 'Show Pax Details' section shows no names) — please add the missing names."
+            )
+    else:
+        fields["roomType"] = parsed.get("roomType")
+        count = parsed.get("noOfRooms")
+        fields["noOfRooms"] = str(count) if count else (str(parsed["_roomRows"]) if parsed.get("_roomRows") else None)
+        if parsed.get("noOfAdults") is not None:
+            fields["noOfAdults"] = str(parsed["noOfAdults"])
+        if parsed.get("noOfChildren") is not None:
+            fields["noOfChildren"] = str(parsed["noOfChildren"])
+        if parsed.get("_roomRows") and count and parsed["_roomRows"] != count:
+            warnings.append(f"The voucher says {count} room(s) but {parsed['_roomRows']} room type line(s) were read — please check.")
+        expected = (parsed.get("noOfAdults") or 0) + (parsed.get("noOfChildren") or 0)
+        if expected and len(guests) < expected:
+            warnings.append(
+                f"The voucher lists {expected} guest(s) but only {len(guests)} name(s) could be read from the page — "
+                "please add the missing names (the uploaded image may be cut off)."
+            )
+    missing = [label for key, label in (
+        ("hotelName", "hotel name"), ("checkIn", "check-in"), ("checkOut", "check-out"), ("confirmationNumber", "confirmation no."),
+        ("roomType", "room type"), ("noOfAdults", "no. of adults"), ("leadGuestName", "lead guest")) if not fields.get(key)]
+    if missing:
+        warnings.append("Could not be read from this voucher — enter manually: " + ", ".join(missing) + ".")
+    return {"fields": fields, "guestNames": guests, "rooms": rooms, "nights": parsed.get("nights"), "warnings": warnings}
+
+
 def process_hotel_voucher_page(pil_image) -> Dict[str, Any]:
     """Runs the shared image pipeline (ocr_runner.py) then this module's own
     hotel-voucher field extraction on a single page image. Mirrors
@@ -534,27 +603,51 @@ def process_hotel_voucher_page(pil_image) -> Dict[str, Any]:
     bgr = ocr.safe_crop_white_margins(bgr)
 
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    ocr_texts = _read_page_texts(gray)
-    ocr_text = ocr_texts[0]
-    extracted = _merge_extractions([extract_hotel_voucher_fields(t) for t in ocr_texts])
-    if not any(extracted["fields"].values()) and not extracted["guestNames"]:
-        warnings.append(
-            "No recognizable hotel-voucher fields were found on this page — every field below still needs to be entered manually."
-        )
+    # Layout-aware reading first: each known voucher type is read from where its
+    # values really sit (beside / below their labels). A layout we do not
+    # recognise falls back to the generic label-search over the page's text.
+    words, _scale = layout.read_words(gray)
+    vtype = layout.detect_voucher_type(words)
+    if vtype == layout.TYPE_TBO:
+        extracted = _fields_from_layout(vtype, layout.parse_tbo(words, gray))
+    elif vtype == layout.TYPE_BOOKING_SUMMARY:
+        extracted = _fields_from_layout(vtype, layout.parse_booking_summary(words, gray))
+    else:
+        extracted = None
+    if extracted is not None:
+        ocr_text = layout.lines_text(layout.group_lines(words))
+        warnings.extend(extracted.pop("warnings"))
+    else:
+        ocr_texts = _read_page_texts(gray)
+        ocr_text = ocr_texts[0]
+        extracted = _merge_extractions([extract_hotel_voucher_fields(t) for t in ocr_texts])
+        if not any(extracted["fields"].values()) and not extracted["guestNames"]:
+            warnings.append(
+                "No recognizable hotel-voucher fields were found on this page — every field below still needs to be entered manually."
+            )
 
     fields = extracted["fields"]
     nights = extracted.get("nights")
     warnings.extend(_nights_warnings(nights, fields.get("checkIn"), fields.get("checkOut")))
-    # "Other guests" are everyone except the lead guest (who has their own field).
-    lead = (fields.get("leadGuestName") or "").upper()
-    other_guests = [g for g in extracted["guestNames"] if g.upper() != lead]
+    # "All guests" lists everyone once; the lead guest has their own field and
+    # is left out of the "other guests" list so they never appear twice.
+    lead = layout.name_key(fields.get("leadGuestName") or "")
+    other_guests: List[str] = []
+    for g in extracted["guestNames"]:
+        if lead and layout.name_key(g) == lead:
+            continue
+        layout.add_unique_name(other_guests, g)
     return {
         "isBlank": False,
         "processedImageBase64": ocr.bgr_to_base64_png(bgr),
         "documentRegionDetected": region_detected,
         "ocrText": ocr_text,
+        "voucherType": vtype,
+        "voucherTypeLabel": layout.TYPE_LABELS[vtype],
+        "voucherAddress": fields.get("address") or "",
         "fields": fields,
         "guestNames": other_guests,
+        "allGuests": ([fields["leadGuestName"]] if fields.get("leadGuestName") else []) + other_guests,
         "rooms": extracted.get("rooms") or [],
         "nights": nights,
         "warnings": warnings,
@@ -573,12 +666,21 @@ def process_hotel_voucher_file(path: str, page_index: int = 0) -> Dict[str, Any]
 
 
 def enrich_with_hotel_lookup(result: Dict[str, Any], lookup=None) -> Dict[str, Any]:
-    """Fills the hotel's address, phone, city (and country when the voucher has
-    none) from an online lookup by hotel NAME — the voucher's own address is
-    only used to pick the right namesake. The looked-up values replace the
-    OCR's, since the OCR address is often a partial or mis-read line; when the
-    lookup finds nothing, whatever the voucher printed is left untouched.
-    Adds result["lookup"] = {status, source, name, ...} for the UI to label."""
+    """Fills the hotel's NAME, address, phone, city (and country when the
+    voucher has none) from an online lookup by hotel name. The internet's
+    wording wins: when the listing's name differs slightly from the voucher's
+    (OCR slips, "B&B Hotel X" vs "B and B Hotel X"), the listing's name is used
+    and the voucher's own kept in result["voucherHotelName"].
+
+    The looked-up address is still compared with the one the voucher printed
+    (result["lookup"]["addressCheck"]) but a difference no longer discards the
+    result — staff asked for the online details to be used — it only adds a
+    "please compare" warning. The one thing that IS refused is a listing in a
+    different COUNTRY than the voucher's (countryConflict): that is another
+    hotel with the same name, so nothing from it is used.
+
+    When the lookup finds nothing, whatever the voucher printed is left
+    untouched. Adds result["lookup"] = {status, source, name, ...} for the UI."""
     fields = result.get("fields") or {}
     name = fields.get("hotelName")
     if result.get("isBlank") or not name:
@@ -587,10 +689,86 @@ def enrich_with_hotel_lookup(result: Dict[str, Any], lookup=None) -> Dict[str, A
     if lookup is None:
         import hotel_lookup
         lookup = hotel_lookup.lookup_hotel
-    found = lookup(name, address_hint=fields.get("address") or "", city_hint=fields.get("city") or "", country_hint=fields.get("country") or "")
-    result["lookup"] = {k: found.get(k, "") for k in ("status", "source", "name", "address", "phone", "city", "country")}
+    printed_address = result.get("voucherAddress") or fields.get("address") or ""
+    found = lookup(name, address_hint=printed_address, city_hint=fields.get("city") or "", country_hint=fields.get("country") or "")
+    check = found.get("addressCheck") or {"status": "unverified", "score": None}
+    result["lookup"] = {k: found.get(k, "") for k in ("status", "source", "name", "address", "phone", "city", "country", "website")}
+    result["lookup"]["addressCheck"] = check
     if found.get("status") == "ok":
+        listing_name = (found.get("name") or "").strip()
+        if listing_name and listing_name != name:
+            result["voucherHotelName"] = name
+            fields["hotelName"] = listing_name
         for key in ("address", "phone", "city", "country"):
             if found.get(key):
                 fields[key] = found[key]
+        if check["status"] == "mismatch":
+            result["lookup"]["status"] = "address_mismatch"
+            result.setdefault("warnings", []).append(
+                f"The online details for '{listing_name or name}' ({found.get('address', '')}) differ from the address printed on the "
+                "voucher — the online details were used. Please compare them."
+            )
+        elif check["status"] == "partial":
+            result.setdefault("warnings", []).append(
+                "The looked-up address only partly matches the address printed on the voucher — please compare them."
+            )
     return result
+
+
+def complete_hotel_details(hotels: List[Dict[str, Any]], lookup=None, max_workers: int = 4) -> List[Dict[str, Any]]:
+    """Fills the BLANK address / phone / city / country of hotels already on an
+    application from an online lookup by hotel name (Google Places when a key is
+    configured, else the hotel's site / OpenStreetMap). Used when the voucher is
+    generated, so a hotel added by hand — or one whose lookup found nothing at
+    upload — does not print blanks.
+
+    Only empty details are filled: nothing the staff typed or confirmed is
+    overwritten. When `useListingName` is true for a hotel (its name came from
+    OCR and was never looked up) the listing's own name replaces the printed one
+    ("go with whatever the internet gives"). A listing in a different country
+    than the hotel's own is refused (another hotel with the same name).
+
+    Returns one {id, status, source, filled:[...], fields:{...}, hotelName?}
+    per input hotel, same order. Never raises."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    if lookup is None:
+        import hotel_lookup
+        lookup = hotel_lookup.lookup_hotel
+
+    def one(h: Dict[str, Any]) -> Dict[str, Any]:
+        out: Dict[str, Any] = {"id": h.get("id"), "status": "skipped", "source": "", "filled": [], "fields": {}}
+        name = (h.get("hotelName") or "").strip()
+        wanted = [k for k in ("address", "phone", "city", "country") if not (h.get(k) or "").strip()]
+        use_name = bool(h.get("useListingName"))
+        if len(name) < 3 or not (wanted or use_name):
+            return out
+        try:
+            found = lookup(
+                name,
+                address_hint=h.get("address") or "",
+                city_hint=h.get("city") or "",
+                country_hint=h.get("country") or "",
+            )
+        except Exception:  # noqa: BLE001 — a lookup must never break generation
+            out["status"] = "unavailable"
+            return out
+        out["status"] = found.get("status") or "not_found"
+        out["source"] = found.get("source") or ""
+        if found.get("status") != "ok":
+            return out
+        for key in wanted:
+            if found.get(key):
+                out["fields"][key] = found[key]
+                out["filled"].append(key)
+        listing_name = (found.get("name") or "").strip()
+        if use_name and listing_name and listing_name != name:
+            out["hotelName"] = listing_name
+            out["voucherHotelName"] = name
+        return out
+
+    items = list(hotels or [])
+    if not items:
+        return []
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(items)))) as pool:
+        return list(pool.map(one, items))

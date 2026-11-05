@@ -218,6 +218,40 @@ def find_mrz_rotation(bgr: np.ndarray, rotate: Callable[[np.ndarray, int], np.nd
     return best[1] if best else None
 
 
+# Tilts tried (degrees, both directions) when no MRZ block is found in the
+# photo as it is. The block finder only copes with a few degrees of tilt, so a
+# phone photo taken at an angle used to read as "no MRZ" (or only after a slow
+# full search).
+# The block finder tolerates about 3 degrees of residual tilt, so the trial
+# tilts are 5 degrees apart.
+_TILT_STEPS = (5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0)
+
+
+def find_mrz_rotation_tilted(
+    bgr: np.ndarray,
+    rotate: Callable[[np.ndarray, int], np.ndarray],
+    straighten: Callable[[np.ndarray, float], np.ndarray],
+) -> Optional[Tuple[int, float, np.ndarray]]:
+    """Second chance for a tilted photo. For each trial tilt (+-5 ... 40
+    degrees) the photo is straightened by that amount and the normal block
+    finder is run. Returns (rotation, tilt_applied, straightened_image) for the
+    first tilt at which a TD3 MRZ block appears, or None. Only called after
+    find_mrz_rotation found nothing, so a photo that already works is never
+    touched; the stricter checks inside the block finder (two equally long text
+    strips of at least ~70 character blobs) still apply to every trial."""
+    # Trials run on a downsized copy (about 4x cheaper); only the winning tilt
+    # is applied to the full-size photo.
+    longest = max(bgr.shape[:2])
+    scale = 1000.0 / longest if longest > 1000 else 1.0
+    small = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale != 1.0 else bgr
+    for step in _TILT_STEPS:
+        for tilt in (step, -step):
+            rot = find_mrz_rotation(straighten(small, tilt), rotate)
+            if rot is not None:
+                return rot, tilt, straighten(bgr, tilt)
+    return None
+
+
 def crop_to_bio_page(bgr: np.ndarray, return_box: bool = False):
     """Crops to the passport data page, anchored on the MRZ. Returns
     (image, cropped). Uncertain input is left whole rather than risking a
@@ -569,6 +603,9 @@ def _iso_from_ddmmyyyy(text: str) -> Optional[str]:
         return None
 
 
+_DIGIT_TO_LETTER = {"1": "J", "8": "B", "5": "S", "2": "Z", "6": "G", "0": "O"}
+
+
 def normalise_old_passport_number(raw: str) -> Tuple[str, bool]:
     """(number, firstCharCertain). Indian numbers are one letter + seven
     digits; letter-for-digit look-alikes in the digit part are corrected. A
@@ -577,6 +614,11 @@ def normalise_old_passport_number(raw: str) -> Tuple[str, bool]:
     t = re.sub(r"[^A-Za-z0-9\u00a3$]", "", raw or "").replace("\u00a3", "E").replace("$", "S").upper()
     if len(t) == 8:
         head, tail = t[0], _coerce_digits(t[1:])
+        if head.isdigit():
+            # A first digit is almost always a letter that was misread
+            # (J->1, B->8, S->5, Z->2, G->6, O->0); Indian numbers start with a
+            # letter. Use the look-alike letter but keep it flagged as uncertain.
+            return _DIGIT_TO_LETTER.get(head, head) + tail, False
         return head + tail, head.isalpha()
     return t, False
 
@@ -631,6 +673,9 @@ def parse_back_page(text: str) -> Dict[str, Any]:
         # means a leading digit was lost (e.g. a pale-printed "1").
         out["oldPassportDateCertain"] = bool(re.match(r"\d{2}\s*[/.\-]\s*\d{2}\s*[/.\-]\s*\d{4}", m.group("d")))
         place = re.sub(r"[^A-Z ]", "", (m.group("place") or "").upper()).strip()
+        # Stray single letters from stamps / punctuation ("THANE A") are not
+        # part of a place name.
+        place = " ".join(tok for tok in place.split() if len(tok) >= 2)
         if len(place) >= 3 and (set(place) & _VOWELS):
             out["oldPassportPlace"] = place
         break
@@ -783,6 +828,46 @@ def _paper_box(bgr: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
     return l + x, t + y, l + x + bw, t + y + bh
 
 
+def _ink_box(bgr: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+    """(x0, y0, x1, y1) of the printed content (dark neutral ink: text, barcode)
+    on a page, or None when there is too little of it. Pale shadows, scanner-lid
+    greys and the paper's own pattern are not ink, so they cannot widen it."""
+    h, w = bgr.shape[:2]
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    sat = bgr.max(axis=2).astype(np.int16) - bgr.min(axis=2).astype(np.int16)
+    ink = ((gray < _INK_THRESHOLD) & (sat < 60)).astype(np.uint8) * 255
+    k = max(5, int(w * 0.02)) | 1
+    joined = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (k * 2 + 1, max(3, k // 2) | 1)))
+    n, _, stats, _ = cv2.connectedComponentsWithStats(joined, connectivity=8)
+    keep = [i for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= 0.004 * h * w]
+    if not keep:
+        return None
+    x0 = min(int(stats[i, cv2.CC_STAT_LEFT]) for i in keep)
+    y0 = min(int(stats[i, cv2.CC_STAT_TOP]) for i in keep)
+    x1 = max(int(stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH]) for i in keep)
+    y1 = max(int(stats[i, cv2.CC_STAT_TOP] + stats[i, cv2.CC_STAT_HEIGHT]) for i in keep)
+    return x0, y0, x1, y1
+
+
+def _crop_to_content(bgr: np.ndarray) -> Optional[np.ndarray]:
+    """A scan whose paper cannot be told from a pale / shadowed background
+    (so the whole image looks like "paper"): crop to the printed content plus a
+    page-sized margin instead, so the preview shows the page, not the scanner
+    bed around it. None when the content already fills most of the image."""
+    h, w = bgr.shape[:2]
+    box = _ink_box(bgr)
+    if box is None:
+        return None
+    x0, y0, x1, y1 = box
+    bw, bh = x1 - x0, y1 - y0
+    if bw * bh > 0.72 * h * w or bw < 0.15 * w or bh < 0.1 * h:
+        return None
+    mx, my = int(bw * 0.15), int(bh * 0.12)
+    cx0, cx1 = max(0, x0 - mx), min(w, x1 + mx)
+    cy0, cy1 = max(0, y0 - my), min(h, y1 + my)
+    return bgr[cy0:cy1, cx0:cx1]
+
+
 def crop_back_page(bgr: np.ndarray) -> Tuple[np.ndarray, bool]:
     """Crops an upright photo/scan of a booklet leaf to the one address page.
     Removes the scanner background and edge bands, then - when the leaf shows
@@ -794,11 +879,17 @@ def crop_back_page(bgr: np.ndarray) -> Tuple[np.ndarray, bool]:
         return bgr, False
     box = _paper_box(bgr)
     if box is None:
-        return bgr, False
+        content = _crop_to_content(bgr)
+        return (content, True) if content is not None else (bgr, False)
     x0, y0, x1, y1 = box
     paper = bgr[y0:y1, x0:x1]
     ph, pw = paper.shape[:2]
     changed = (ph < 0.97 * h) or (pw < 0.97 * w)
+    if not changed:
+        # The "paper" is the whole image: the background is too pale / shadowed to tell apart.
+        content = _crop_to_content(bgr)
+        if content is not None and pw / ph >= 1.0:
+            return content, True
     if ph < 0.25 * h or pw < 0.25 * w:
         return bgr, False
     # A single landscape page (about 1.41:1) needs no split.

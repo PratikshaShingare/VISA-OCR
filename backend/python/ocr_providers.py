@@ -104,6 +104,13 @@ class OCRProvider:
         (see ocr_runner.evaluate_orientations)."""
         raise NotImplementedError
 
+    def ocr_words(self, gray_image, config: str = "") -> List[Dict[str, Any]]:
+        """Recognized words with their pixel boxes, reading order not
+        guaranteed: [{"text", "left", "top", "width", "height", "conf"}].
+        Used by layout-aware extraction (hotel vouchers), where WHERE a value
+        sits relative to its label matters as much as what it says."""
+        raise NotImplementedError
+
     def status(self) -> Dict[str, Any]:
         """Real, non-fabricated status for /api/health — never claims
         'available' without having actually checked something real."""
@@ -123,6 +130,13 @@ class TesseractOCRProvider(OCRProvider):
         # a Tesseract-less deployment running the Google Cloud Vision provider instead
         # never needs this import to succeed at all.
         import pytesseract
+
+        # Tesseract spawns one OpenMP thread per CPU core for every call. On
+        # the small images this app reads (a passport page, an MRZ strip) the
+        # threads mostly fight each other: measured 3-4x faster per call with
+        # a single thread. Set before any Tesseract process is started; an
+        # explicit OMP_THREAD_LIMIT in the environment (or .env) still wins.
+        os.environ.setdefault("OMP_THREAD_LIMIT", "1")
 
         self._pytesseract = pytesseract
         cmd = find_tesseract_cmd()
@@ -150,6 +164,24 @@ class TesseractOCRProvider(OCRProvider):
         mean_conf = statistics.mean(confidences) if confidences else 0.0
         text = " ".join(t for t in data.get("text", []) if t.strip())
         return mean_conf, text
+
+    def ocr_words(self, gray_image, config: str = "") -> List[Dict[str, Any]]:
+        try:
+            data = self._pytesseract.image_to_data(gray_image, output_type=self._pytesseract.Output.DICT, config=config)
+        except self._pytesseract.TesseractError as e:
+            if "too small" in str(e).lower():
+                return []
+            raise
+        words: List[Dict[str, Any]] = []
+        for i, text in enumerate(data.get("text", [])):
+            if not str(text).strip():
+                continue
+            conf = float(data["conf"][i]) if str(data["conf"][i]).strip() not in ("", "-1") else 0.0
+            words.append({
+                "text": str(text).strip(), "left": int(data["left"][i]), "top": int(data["top"][i]),
+                "width": int(data["width"][i]), "height": int(data["height"][i]), "conf": conf,
+            })
+        return words
 
     def status(self) -> Dict[str, Any]:
         """Real, live status: actually invokes the configured binary and
@@ -299,6 +331,24 @@ class GoogleVisionOCRProvider(OCRProvider):
         mean_conf = statistics.mean(confidences) if confidences else 0.0
         return mean_conf, text
 
+    def ocr_words(self, gray_image, config: str = "") -> List[Dict[str, Any]]:
+        words: List[Dict[str, Any]] = []
+        for page in self._annotate(gray_image).get("pages", []):
+            for block in page.get("blocks", []):
+                for paragraph in block.get("paragraphs", []):
+                    for word in paragraph.get("words", []):
+                        text = "".join(sym.get("text", "") for sym in word.get("symbols", []))
+                        verts = (word.get("boundingBox") or {}).get("vertices") or []
+                        xs = [v.get("x", 0) for v in verts] or [0]
+                        ys = [v.get("y", 0) for v in verts] or [0]
+                        if not text.strip():
+                            continue
+                        words.append({
+                            "text": text.strip(), "left": min(xs), "top": min(ys), "width": max(xs) - min(xs),
+                            "height": max(ys) - min(ys), "conf": float(word.get("confidence", 0.0)) * 100,
+                        })
+        return words
+
     def status(self) -> Dict[str, Any]:
         if not self._api_key:
             return {
@@ -384,6 +434,9 @@ class FallbackOCRProvider(OCRProvider):
 
     def ocr_mean_confidence_and_text(self, gray_image, config: str = "") -> Tuple[float, str]:
         return self._run("ocr_mean_confidence_and_text", gray_image, config)
+
+    def ocr_words(self, gray_image, config: str = "") -> List[Dict[str, Any]]:
+        return self._run("ocr_words", gray_image, config)
 
     def status(self) -> Dict[str, Any]:
         if self.fallback_reason is None:

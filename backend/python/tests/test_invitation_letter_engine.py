@@ -1,7 +1,7 @@
 """
 Tests for invitation_letter_engine.py — the Invitation Letter (from an
-inviter abroad, for exactly two invitees — the reference template's own
-fixed "my Parents" wording) and the Initors Covering Letter (a real,
+inviter abroad, for one or more invitees — the reference template's own
+"my Parents" wording is kept for two) and the Initors Covering Letter (a real,
 gendered-voice letter: the wife's-own-voice template vs. the husband's-own
 -voice template), generated against the REAL
 reference-templates/Invitation Letter/ and
@@ -52,12 +52,31 @@ INVITATION_FIELDS = {
 # ---------------------------------------------------------------------------
 
 
-def test_invitation_letter_requires_exactly_two_invitees(sample_applicant, sample_companion):
+def test_invitation_letter_requires_at_least_one_invitee():
     with pytest.raises(ValueError):
-        ile.generate_invitation_letter_docx(INVITER, [sample_applicant], INVITATION_FIELDS)
-    with pytest.raises(ValueError):
-        third = dict(sample_applicant, fullName="Third")
-        ile.generate_invitation_letter_docx(INVITER, [sample_applicant, sample_companion, third], INVITATION_FIELDS)
+        ile.generate_invitation_letter_docx(INVITER, [], INVITATION_FIELDS)
+
+
+def test_invitation_letter_one_two_and_three_invitees(sample_applicant, sample_companion):
+    skip_if_missing(ile.INVITATION_LETTER_TEMPLATE_PATH)
+
+    def text_for(invitees, fields=INVITATION_FIELDS):
+        return _full_text(Document(io.BytesIO(ile.generate_invitation_letter_docx(INVITER, invitees, fields))))
+
+    two = text_for([sample_applicant, sample_companion])
+    assert "for my Parents" in two and "invite my parents–" in two and "grant my parents the necessary visa" in two
+    assert "their visit" in two
+
+    one = text_for([dict(sample_applicant, sex="F")], dict(INVITATION_FIELDS, inviteeRelation="Mother"))
+    assert "for my Mother" in one and "invite my mother–" in one and "grant my mother the necessary visa" in one
+    assert "her visit" in one and "They " not in one and sample_applicant["passportNumber"] in one
+
+    third = dict(sample_applicant, fullName="Third Person", passportNumber="T0000003")
+    three = text_for([sample_applicant, sample_companion, third])
+    assert "for my Family" in three and "invite my family–" in three and "grant my family the necessary visa" in three
+    for person in (sample_applicant, sample_companion, third):
+        assert person["passportNumber"] in three
+    assert "their visit" in three
 
 
 def test_invitation_letter_requires_inviter_name():

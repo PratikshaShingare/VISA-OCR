@@ -10,6 +10,7 @@ passport is ever used.
 from __future__ import annotations
 
 import os
+import time
 
 import cv2
 import numpy as np
@@ -260,3 +261,64 @@ def test_v2_can_be_switched_off_for_the_lab_baseline():
     pil = Image.fromarray(cv2.cvtColor(_render(l1, l2), cv2.COLOR_BGR2RGB))
     out = r.process_passport_page(pil, use_mrz_v2=False)
     assert out["mrzEngine"] == "v1"
+
+
+# ------------------------------------------- tilted and grainy phone photos
+
+
+def _on_desk(img, angle):
+    """The page photographed at an angle on a larger desk-coloured canvas, so
+    rotating it never cuts any of the printed text off."""
+    h, w = img.shape[:2]
+    canvas = np.full((h + 500, w + 500, 3), (235, 232, 222), dtype="uint8")
+    canvas[250:250 + h, 250:250 + w] = img
+    matrix = cv2.getRotationMatrix2D((canvas.shape[1] / 2, canvas.shape[0] / 2), angle, 1.0)
+    return cv2.warpAffine(canvas, matrix, (canvas.shape[1], canvas.shape[0]), borderValue=(235, 232, 222))
+
+
+@pytest.mark.parametrize("angle", [-28, -12, 8, 25, 35])
+def test_photo_tilted_by_a_large_angle_is_straightened_and_read(angle):
+    skip_if_missing_binary("tesseract")
+    l1, l2 = build_td3(**KUMAR)
+    tilted = _on_desk(_render(l1, l2), angle)
+    t0 = time.time()
+    out = r.process_passport_page(Image.fromarray(cv2.cvtColor(tilted, cv2.COLOR_BGR2RGB)))
+    f = out["fields"]
+    assert out["pageKind"] == "bio"
+    assert f["passportNumber"]["value"] == "Z1234567"
+    assert f["dateOfBirth"]["value"] == "1978-03-21"
+    assert f["surname"]["value"] == "KUMAR"
+    assert time.time() - t0 < 45  # used to be 30 s or more, or a failed read
+
+
+def test_tilt_search_does_not_invent_an_mrz_on_a_page_without_one():
+    skip_if_missing_binary("tesseract")
+    import passport_layout
+
+    rng = np.random.RandomState(5)
+    page = np.full((1000, 1400, 3), (235, 232, 222), dtype="uint8")
+    for _ in range(40):  # scattered blobs, no two stacked text lines
+        x, y = rng.randint(0, 1300), rng.randint(0, 900)
+        cv2.circle(page, (x, y), int(rng.randint(5, 25)), (20, 20, 20), -1)
+    assert passport_layout.find_mrz_rotation_tilted(page, r._rotate_90_multiple, r.deskew_image) is None
+
+
+def test_grainy_photo_is_denoised_before_the_contrast_boost():
+    """Grain amplified by the contrast boost made Tesseract spend ~1 minute on
+    junk for one page. A clean image must come back untouched."""
+    l1, l2 = build_td3(**KUMAR)
+    clean = cv2.cvtColor(_render(l1, l2), cv2.COLOR_BGR2GRAY)
+    grainy = np.clip(clean + np.random.RandomState(1).normal(0, 22, clean.shape), 0, 255).astype("uint8")
+    assert r.estimate_noise_sigma(clean) < r.NOISE_SIGMA_DENOISE_THRESHOLD
+    assert r.estimate_noise_sigma(grainy) > r.NOISE_SIGMA_DENOISE_THRESHOLD
+    assert r.denoise_if_noisy(clean) is clean
+
+
+def test_grainy_photo_reads_correctly_and_quickly():
+    skip_if_missing_binary("tesseract")
+    l1, l2 = build_td3(**KUMAR)
+    img = np.clip(_render(l1, l2) + np.random.RandomState(1).normal(0, 22, (1000, 1400, 3)), 0, 255).astype("uint8")
+    t0 = time.time()
+    out = r.process_passport_page(Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)))
+    assert out["fields"]["passportNumber"]["value"] == "Z1234567"
+    assert time.time() - t0 < 40  # was about 2 minutes

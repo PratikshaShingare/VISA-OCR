@@ -19,7 +19,7 @@ import io
 from docx import Document
 from playwright.async_api import async_playwright
 
-from _common import BASE, Checks, commit_preview_edit, edit_value_on_preview, fresh_load_and_login, wait_preview_ready
+from _common import BASE, Checks, commit_preview_edit, edit_value_on_preview, preview_unit_keys, fresh_load_and_login, wait_preview_ready
 
 checks = Checks()
 
@@ -88,8 +88,8 @@ async def main():
         checks.check("The preview has an Edit button", await edit_btn.count() == 1 and await edit_btn.is_enabled())
         await edit_btn.click()
         await page.wait_for_timeout(300)
-        n_fields = await page.locator(f"{scope} .pe-field").count()
-        keys = await page.locator(f"{scope} .pe-field").evaluate_all("els=>els.map(e=>e.getAttribute('data-pe-key'))")
+        keys = await preview_unit_keys(page, scope)
+        n_fields = len(keys)
         checks.check("Edit mode makes the whole Checklist Letter editable (the 6 values plus every other text block)", n_fields >= 6 and all(k in keys for k in ("checklistItems", "greetingSentence", "visaFees")), str(n_fields))
 
         # The whole checklist range is one editable block.

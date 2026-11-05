@@ -32,12 +32,22 @@ def test_passport_auth_requires_at_least_one_traveller():
         ale.generate_passport_authorization_docx([], "Some Centre", "Some Address", "Some Collector")
 
 
-def test_passport_auth_rejects_more_than_two_travellers(sample_applicant, sample_companion):
-    third = dict(sample_applicant, fullName="Third Person", passportNumber="T0000003")
-    with pytest.raises(ValueError):
-        ale.generate_passport_authorization_docx(
-            [sample_applicant, sample_companion, third], "Some Centre", "Some Address", "Some Collector"
+def test_passport_auth_has_no_traveller_limit(sample_applicant, sample_companion):
+    """Three or more travellers: the 'two or multiple travellers' template's
+    clause is repeated once per extra traveller, same formatting."""
+    third = dict(sample_applicant, fullName="Third Person", passportNumber="T0000003", relationToApplicant="Child", sex="M")
+    fourth = dict(sample_applicant, fullName="Fourth Person", passportNumber="T0000004", relationToApplicant="Child", sex="F")
+    skip_if_missing(ale.PASSPORT_MULTIPLE_TEMPLATE_PATH)
+    for people in ([sample_applicant, sample_companion, third], [sample_applicant, sample_companion, third, fourth]):
+        docx_bytes = ale.generate_passport_authorization_docx(people, "Some Centre", "Some Address", "Some Collector")
+        sentence = next(
+            p.text for p in Document(io.BytesIO(docx_bytes)).paragraphs if "would like to authorize" in p.text
         )
+        for person in people:
+            assert person["passportNumber"] in sentence
+        assert sentence.count("(Passport No.:") == len(people)
+        assert " & my" in sentence and sentence.count(" & ") == 1  # only the last person joins with "&"
+        assert "original passports" in sentence
 
 
 def test_passport_auth_requires_collector_and_centre_name(sample_applicant):

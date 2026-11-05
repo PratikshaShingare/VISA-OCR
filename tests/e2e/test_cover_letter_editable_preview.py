@@ -25,6 +25,7 @@ from _common import (
     commit_preview_edit,
     future_date,
     edit_value_on_preview,
+    preview_unit_keys,
     fill_ocr_person,
     fresh_load_and_login,
     select_cover_letter_country,
@@ -117,7 +118,7 @@ async def main():
         checks.check("The preview has an Edit button", await edit_btn.count() == 1 and await edit_btn.is_enabled())
         await edit_btn.click()
         await page.wait_for_timeout(300)
-        n_fields = await page.locator(f"{scope} .pe-field").count()
+        n_fields = len(await preview_unit_keys(page, scope))
         checks.check("Edit mode makes the whole cover letter editable (body plus every other text block)", n_fields >= 1, str(n_fields))
 
         seeded_text = await edit_value_on_preview(

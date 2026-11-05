@@ -1051,7 +1051,10 @@ class ProbeShader:
     def decode(self) -> dict:
         return {probe_rgb(i): (0, key) for i, key in enumerate(self.keys)}
 
-    def layout_from_pdf(self, pdf_bytes: bytes) -> dict:
+    def layout_from_pdf(self, pdf_bytes: bytes, probe_docx: Optional[bytes] = None) -> dict:
+        # probe_docx: the shaded probe .docx the PDF was made from. The
+        # authorization-letter engine passes it; it is accepted (and not needed
+        # here — only the PDF's filled rectangles are read) so those callers work.
         layout = read_probe_layout(pdf_bytes, self.decode(), 1)
         for key, info in layout["groups"][0].items():
             info["align"] = self.aligns.get(key, info.get("align", "left"))
@@ -1110,6 +1113,25 @@ def read_probe_layout(pdf_bytes: bytes, decode: dict, group_count: int = 1) -> d
                         if rect[0] <= (c[1] + c[3]) / 2 <= rect[2] and rect[1] <= (c[2] + c[4]) / 2 <= rect[3] and c[3] - c[1] > 0.1
                     ]
                     if inside:
+                        # Where the text itself sits inside its box (a table cell's box is
+                        # taller than the text; the editor puts the lines where the text was).
+                        style["text"] = [
+                            round(min(c[1] for c in inside), 2), round(min(c[2] for c in inside), 2),
+                            round(max(c[3] for c in inside), 2), round(max(c[4] for c in inside), 2),
+                        ]
+                        # The baselines of the first and last printed line (the character
+                        # origins — unlike the ink box they do not depend on which glyphs
+                        # the text happens to hold, e.g. a lone dash).
+                        try:
+                            ox, oy = ctypes.c_double(), ctypes.c_double()
+                            ys = []
+                            for c in inside:
+                                if raw.FPDFText_GetCharOrigin(textpage.raw, c[0], ox, oy):
+                                    ys.append(height - oy.value)
+                            if ys:
+                                style["baseline"] = [round(min(ys), 2), round(max(ys), 2)]
+                        except Exception:  # noqa: BLE001
+                            pass
                         i0 = inside[0][0]
                         style["fontSize"] = round(raw.FPDFText_GetFontSize(textpage.raw, i0), 2)
                         try:

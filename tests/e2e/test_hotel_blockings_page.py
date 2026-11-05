@@ -60,10 +60,10 @@ async def main():
         )
         await page.evaluate("location.hash = '#/dashboard'")
         await page.wait_for_timeout(400)
-        await page.click("[data-action='dashboard-delete-application']")
+        await page.click("[data-view='dashboard'] [data-action='dashboard-delete-application']")
         await page.wait_for_timeout(300)
         bg = await page.evaluate("getComputedStyle(document.querySelector('[data-dash-delete-confirm]')).backgroundColor")
-        checks.check("Dashboard 'Delete Application' confirm button is red", bg == "rgb(198, 40, 40)", bg)
+        checks.check("Dashboard 'Delete Application' confirm button is red", bg == "rgb(227, 30, 36)", bg)
         fg = await page.evaluate("getComputedStyle(document.querySelector('[data-dash-delete-confirm]')).color")
         checks.check("...with white text", fg == "rgb(255, 255, 255)", fg)
         await page.click("[data-dash-delete-cancel].btn-secondary")
@@ -106,7 +106,7 @@ async def main():
 
         # ---------- 3) upload two vouchers ----------
         await page.set_input_files("[data-hotel-batch-upload-input]", [SYNTHETIC_HOTEL_VOUCHER_1_PNG, SYNTHETIC_HOTEL_VOUCHER_2_PNG])
-        for _ in range(80):
+        for _ in range(400):
             t = (await page.inner_text("[data-hotel-batch-upload-status]")).strip()
             if t.startswith("2 hotel(s) added"):
                 break
@@ -174,7 +174,7 @@ async def main():
         modal_visible = await page.locator("[data-hb-delete-modal]").is_visible()
         checks.check("Delete asks for confirmation in a popup", modal_visible)
         confirm_bg = await page.evaluate("getComputedStyle(document.querySelector('[data-hb-delete-confirm]')).backgroundColor")
-        checks.check("...whose confirm button is red", confirm_bg == "rgb(198, 40, 40)", confirm_bg)
+        checks.check("...whose confirm button is red", confirm_bg == "rgb(227, 30, 36)", confirm_bg)
         await page.click("[data-hb-delete-cancel].btn-secondary")
         await page.wait_for_timeout(200)
         checks.check("Cancel keeps the hotel blocking", await page.locator("[data-hb-row]").count() == 1)
@@ -183,7 +183,7 @@ async def main():
         await page.wait_for_timeout(600)
         await wait_preview_ready(page)
         checks.check("Edit goes back to the Hotel Blocking page", await page.evaluate("location.hash") == "#/hotel-blocking")
-        checks.check("...straight onto the editable preview", await page.locator("[data-voucher-preview] .pe-field").count() >= 14)
+        checks.check("...straight onto the editable preview", await page.locator("[data-voucher-preview] [data-dv='edit-toggle']").is_enabled())
 
         # Delete (confirmed) of a hotel-blocking-only application removes it entirely
         await page.click("[data-recent-hotel-blockings-link]")

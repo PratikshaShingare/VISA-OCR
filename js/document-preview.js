@@ -11,7 +11,8 @@
 
    A slim bar above the preview names the document and applicant, and offers
    "Back to Dashboard" and "Edit details" (leaves preview mode and shows the
-   normal full page for the same document).
+   normal full page for the same document). The Cover Letter is the exception
+   when it is still incomplete: it opens its normal page straight away.
    ========================================================================== */
 (function (global) {
   "use strict";
@@ -22,6 +23,10 @@
   var CONFIG = {
     "cover-letter": {
       label: "Cover Letter",
+      // A cover letter that is still missing details opens the normal Cover
+      // Letter page (where the rest can be filled in) instead of a preview
+      // that cannot be produced; a complete one shows its preview.
+      openFormWhenIncomplete: true,
       triggers: function () {
         return ["[data-action='generate-cover-letter']"];
       },
@@ -154,12 +159,21 @@
         timer = setTimeout(function () { run(view, attempt + 1, id); }, 100);
         return;
       }
+      if (cfg.openFormWhenIncomplete) {
+        global.KhannaRouter.navigate(view);
+        return;
+      }
       setNotice(bar, "Nothing has been generated for this application on this page yet. Use Edit details to fill in the details and generate it.");
       return;
     }
 
     var blocked = buttons.filter(function (b) { return b.disabled; });
     if (blocked.length === buttons.length) {
+      if (cfg.openFormWhenIncomplete) {
+        setNotice(bar, "");
+        global.KhannaRouter.navigate(view);
+        return;
+      }
       setNotice(
         bar,
         "There is nothing to preview yet: some required details are missing. Use Edit details to complete them."

@@ -35,6 +35,11 @@
   width: auto;
   object-fit: contain;
   flex: none;
+  /* The logo artwork has dark-blue lettering; on the dark theme it sits on a
+     white backing so it stays readable (the artwork itself is untouched). */
+  background: var(--logo-backing);
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
 }
 
 .brand__text {
@@ -308,14 +313,18 @@
   top: var(--header-h);
   align-self: flex-start;
   height: calc(100vh - var(--header-h));
-  background: var(--color-surface);
-  border-right: 1px solid transparent;
-  transition: width 0.2s ease, border-color 0.2s ease;
+  /* Brand blue surface with white text (same look as the reference vendor
+     scanner's sidebar) in both light and dark themes. */
+  background: var(--nav-bg);
+  /* No border while closed: a border on a width:0 box still paints a 1px
+     strip of the menu colour down the left edge of the page. */
+  border-right: 0 solid var(--nav-border);
+  transition: width 0.2s ease;
 }
 
 .mobile-nav.is-open {
   width: min(78vw, 300px);
-  border-right-color: var(--color-border);
+  border-right-width: 1px;
 }
 
 /* No longer an overlay, so there's nothing to dim behind it. */
@@ -334,11 +343,47 @@
   flex-direction: column;
   gap: var(--space-2);
   overflow-y: auto;
+  /* Still scrolls when the list is taller than the screen, but without a
+     visible scrollbar. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.mobile-nav__panel::-webkit-scrollbar {
+  display: none;
 }
 
 .mobile-nav__panel .primary-nav__link {
   width: 100%;
-  color: var(--color-text);
+  color: #ffffff;
+}
+
+.mobile-nav__panel .primary-nav__link:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+/* Active page: white pill, blue text, red marker on the left edge. */
+.mobile-nav__panel .primary-nav__link.is-active {
+  background: var(--nav-active-bg);
+  color: var(--nav-active-fg);
+  box-shadow: inset 3px 0 0 var(--brand-red);
+}
+
+/* Section captions and the divider are written inline in index.html with
+   theme text colours; on the blue panel they must be light. */
+.mobile-nav__panel > div[style] {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+.mobile-nav__panel > hr {
+  border-top-color: rgba(255, 255, 255, 0.25) !important;
+}
+
+.mobile-nav__panel .btn-icon {
+  color: #ffffff;
+}
+.mobile-nav__panel .btn-icon:hover {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 /* Frontend rework, section 2: the drawer's own header used to read "Menu"
@@ -349,4 +394,12 @@
   display: flex;
   justify-content: flex-end;
   margin-bottom: var(--space-3);
+}
+
+/* On a standalone document page the page title (h1) is already shown above;
+   the section heading the shared controller repeats right under it adds
+   nothing, so it is not shown there. (The wizard steps keep theirs.) */
+[data-hotel-blocking-page-root] > .view-header .view-header__text h2,
+[data-invitation-letter-page-root] > .view-header .view-header__text h2 {
+  display: none;
 }

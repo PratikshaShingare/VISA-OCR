@@ -93,7 +93,20 @@ async def login(page, email: str = STAFF_EMAIL, password: str = STAFF_PASSWORD):
     await page.fill("[data-login-form] input[type='email']", email)
     await page.fill("[data-login-form] input[type='password']", password)
     await page.click("[data-login-form] button[type='submit']")
-    await page.wait_for_timeout(300)
+    # Login is now checked by the backend, so wait for its answer (signed in,
+    # or the error box) instead of a fixed pause.
+    try:
+        await page.wait_for_function(
+            """() => {
+                const profile = document.querySelector('.profile-menu[data-auth-logged-in]');
+                const err = document.querySelector('[data-login-error]');
+                return (profile && !profile.hidden) || (err && err.style.display === 'flex');
+            }""",
+            timeout=8000,
+        )
+    except Exception:
+        pass
+    await page.wait_for_timeout(200)
 
 
 async def fresh_load_and_login(page, base: str = BASE, email: str = STAFF_EMAIL, password: str = STAFF_PASSWORD):
@@ -154,7 +167,7 @@ async def select_cover_letter_country(page, country_name: str):
     await page.wait_for_timeout(200)
 
 
-async def wait_ocr_done(page, scope: str, timeout_polls: int = 80):
+async def wait_ocr_done(page, scope: str, timeout_polls: int = 400):
     for _ in range(timeout_polls):
         status_text = (await page.inner_text(scope + " [data-passport-status]")).strip()
         if status_text == "" or "fail" in status_text.lower():
@@ -268,26 +281,114 @@ async def set_edit_mode(page, preview_scope: str, on: bool = True):
         await page.wait_for_timeout(300)
 
 
+def unit_selector(preview_scope: str, key: str) -> str:
+    """The lines of the whole-letter editor that belong to value `key`."""
+    return f"{preview_scope} .lw-stage .ql-editor [data-unit$='|{key}']"
+
+
+async def select_unit_text(page, preview_scope: str, key: str, whole: bool = True):
+    """Selects (whole=True) or puts the caret at the end of (whole=False) the
+    lines of value `key` inside the single editor, like a click-drag would."""
+    sel = unit_selector(preview_scope, key)
+    ed = f"{preview_scope} .lw-stage .ql-editor"
+    await page.evaluate(
+        """([sel, ed, whole]) => {
+          const all = Array.from(document.querySelectorAll(sel));
+          const editor = document.querySelector(ed);
+          if (!all.length) throw new Error('no line for ' + sel);
+          // several records (hotels) can share a key: take the first one's lines only
+          const id = all[0].getAttribute('data-unit');
+          const lines = all.filter(n => n.getAttribute('data-unit') === id);
+          const walker = (n) => document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+          const texts = (n) => { const w = walker(n); const out = []; let x; while ((x = w.nextNode())) out.push(x); return out; };
+          const first = texts(lines[0])[0];
+          const lastTexts = texts(lines[lines.length - 1]);
+          const last = lastTexts[lastTexts.length - 1];
+          const r = document.createRange();
+          if (whole) {
+            if (first) r.setStart(first, 0); else r.setStart(lines[0], 0);
+            if (last) r.setEnd(last, last.textContent.length); else r.setEnd(lines[lines.length - 1], 0);
+          } else {
+            if (last) { r.setStart(last, last.textContent.length); r.collapse(true); }
+            else { r.setStart(lines[lines.length - 1], 0); r.collapse(true); }
+          }
+          editor.focus();
+          const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+        }""",
+        [sel, ed, whole],
+    )
+
+
+async def select_line_with_text(page, preview_scope: str, needle: str, whole: bool = True) -> bool:
+    """Selects the text of the first line of the whole-letter editor that
+    contains `needle` (whole=False: just puts the caret at its end).
+    Returns False when no line has it."""
+    ed = f"{preview_scope} .lw-stage .ql-editor"
+    return await page.evaluate(
+        """([ed, needle, whole]) => {
+          const editor = document.querySelector(ed);
+          const line = Array.from(editor.querySelectorAll('p, li, td')).find(n => n.textContent.includes(needle));
+          if (!line) return false;
+          const w = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+          const nodes = []; let x; while ((x = w.nextNode())) nodes.push(x);
+          const r = document.createRange();
+          const first = nodes[0], last = nodes[nodes.length - 1];
+          if (whole) { r.setStart(first, 0); r.setEnd(last, last.textContent.length); }
+          else { r.setStart(last, last.textContent.length); r.collapse(true); }
+          editor.focus();
+          const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+          return true;
+        }""",
+        [ed, needle, whole],
+    )
+
+
+async def preview_unit_keys(page, preview_scope: str) -> list:
+    """Every value key (named values and whole-document blocks) that the one
+    whole-letter editor currently holds, in page order, without duplicates."""
+    await page.wait_for_selector(f"{preview_scope} .lw-stage .ql-editor", timeout=15000)
+    return await page.evaluate(
+        """(sel) => {
+          const seen = [];
+          document.querySelectorAll(sel + ' .ql-editor [data-unit]').forEach(e => {
+            const k = e.getAttribute('data-unit').split('|').slice(1).join('|');
+            if (!seen.includes(k)) seen.push(k);
+          });
+          return seen;
+        }""",
+        f"{preview_scope} .lw-stage",
+    )
+
+
+async def preview_unit_text(page, preview_scope: str, key: str) -> str:
+    pairs = await page.locator(unit_selector(preview_scope, key)).evaluate_all(
+        "els => els.map(e => [e.getAttribute('data-unit'), e.innerText])"
+    )
+    if not pairs:
+        return ""
+    first = pairs[0][0]  # several records (hotels) can share a key: the first one's text only
+    return "\n".join(t.strip() for u, t in pairs if u == first).strip()
+
+
 async def edit_value_on_preview(page, preview_scope: str, key: str, text: str, select_all: bool = True):
-    """Edit mode on -> click the on-page value `key` -> replace its text with
-    `text` the way a person would (Ctrl+A, type) -> move on so it is saved.
-    Returns the text the value was seeded with before the edit."""
+    """Edit mode on -> select the on-page value `key` in the one whole-letter
+    editor -> replace it with `text` the way a person would (select, type) ->
+    wait for it to be saved. With select_all=False the text is typed at the end
+    of the value instead. Returns the text the value was seeded with."""
     await set_edit_mode(page, preview_scope, True)
-    field = page.locator(f"{preview_scope} .pe-field[data-pe-key='{key}']").first
-    await field.click()
-    await page.wait_for_timeout(700)
-    seeded = (await page.inner_text(f"{preview_scope} .pe-field.is-active .ql-editor")).strip()
-    if select_all:
-        await page.keyboard.press("Control+A")
+    await page.wait_for_selector(f"{preview_scope} .lw-stage .ql-editor", timeout=15000)
+    await page.wait_for_timeout(300)
+    seeded = await preview_unit_text(page, preview_scope, key)
+    await select_unit_text(page, preview_scope, key, whole=select_all)
     await page.keyboard.type(text)
-    await page.wait_for_timeout(450)
+    await page.wait_for_timeout(700)
     return seeded
 
 
 async def commit_preview_edit(page, preview_scope: str):
-    """Leaves the open value (Escape) so it is saved into the record."""
-    await page.keyboard.press("Escape")
-    await page.wait_for_timeout(400)
+    """The editor saves as you type (a moment after the last keystroke): wait
+    for that, so the edit is in the record."""
+    await page.wait_for_timeout(700)
 
 
 async def pick_company_consulate(page, country="Germany"):

@@ -60,12 +60,14 @@ file is ever hand-edited later.
 Real-person-count limits, each directly justified by what that
 template's own FIXED sentences actually say (project rule 9 — never an
 invented sentence structure beyond the reference material):
-  - Invitation Letter: exactly 2 invitees. The template's subject line
-    ("...for my Parents") and closing line ("...kindly grant my parents
-    the necessary visa") are FIXED text naming "Parents" specifically,
-    and its body has exactly two bracketed invitee blocks
-    (PARENT_1_*/PARENT_2_*) — there is no reference example for one
-    invitee or for 3+, so this engine does not attempt either.
+  - Invitation Letter: any number of invitees (frontend rework, Stage 2).
+    The template is written for exactly two — "...for my Parents",
+    "...invite my parents– A (...) and B (...)", "...grant my parents the
+    necessary visa" — and that exact wording is kept for two parents. For
+    any other number, the relationship word is chosen by staff
+    ("my family", "my mother", ...), the invitees are listed in the same
+    "(holding Indian Passport No: ... issued at ... on ...)" form, and a
+    single invitee with a recorded sex gets he/his/him instead of they.
   - Initors Covering Letter: generated ONE LETTER AT A TIME, for exactly
     one of the two spouses — because each spouse signs and submits their
     OWN letter (confirmed by the two real per-person example files,
@@ -82,6 +84,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 from typing import Optional
 
 from docx import Document
@@ -128,6 +131,92 @@ def _phone_or_dash(phone: Optional[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _invitee_wording(invitees: list[dict], fields: dict) -> dict:
+    """The few words of the reference letter that depend on WHO is invited:
+    the template is written for exactly two people, "my Parents", and that
+    exact wording is kept for two. For any other number, the relationship
+    word comes from staff (fields["inviteeRelation"], default "family") and
+    the "they / their / them" pronouns become he / his / him / she / her for
+    one invitee whose sex is recorded."""
+    count = len(invitees)
+    relation = re.sub(r"\s+", " ", (fields.get("inviteeRelation") or "").strip()).strip(" ,.;")
+    if not relation:
+        relation = "parents" if count == 2 else "family"
+    relation = re.sub(r"^my\s+", "", relation, flags=re.IGNORECASE)
+    relation = relation[:1].lower() + relation[1:]
+    pronouns = {"they": "They", "their": "their", "them": "them"}
+    if count == 1:
+        sex = (invitees[0].get("sex") or "").strip().upper()[:1]
+        if sex == "M":
+            pronouns = {"they": "He", "their": "his", "them": "him"}
+        elif sex == "F":
+            pronouns = {"they": "She", "their": "her", "them": "her"}
+    singular_or_group = count != 2 or pronouns["their"] != "their"
+    purpose_swaps = {}
+    stay_swaps = {}
+    if pronouns["their"] != "their":
+        purpose_swaps = {"of their visit": f"of {pronouns['their']} visit", "have them by": f"have {pronouns['them']} by"}
+        stay_swaps = {
+            "During their stay": f"During {pronouns['their']} stay",
+            "taking them around": f"taking {pronouns['them']} around",
+            "They will be staying": f"{pronouns['they']} will be staying",
+        }
+    return {
+        "relation": relation,
+        "relationTitle": relation[:1].upper() + relation[1:],
+        "changed": singular_or_group or relation.lower() != "parents",
+        "purposeSwaps": purpose_swaps,
+        "staySwaps": stay_swaps,
+    }
+
+
+def _invitee_clause(person: dict) -> str:
+    return (
+        f"{person.get('fullName') or '—'} (holding Indian Passport No: {person.get('passportNumber') or '—'} "
+        f"issued at {person.get('placeOfIssue') or '—'} on {person.get('passportIssueDate') or '—'})"
+    )
+
+
+def _invitees_sentence(invitees: list[dict], fields: dict, wording: dict):
+    """The paragraph that names the invited people. Exactly two keeps the
+    reference template's own token substitution; one or three-plus is
+    composed in the same wording, naming each person the same way."""
+    start = fields.get("travelStartDate") or "—"
+    end = fields.get("travelEndDate") or "—"
+    purpose = fields.get("purpose") or "—"
+    if len(invitees) == 2 and wording["relation"].lower() == "parents":
+        p1, p2 = invitees
+        return {
+            "[PARENT_1_FULL_NAME]": p1.get("fullName") or "—",
+            "[PARENT_1_PASSPORT_NUMBER]": p1.get("passportNumber") or "—",
+            "[PARENT_1_PLACE_OF_ISSUE]": p1.get("placeOfIssue") or "—",
+            "[PARENT_1_DATE_OF_ISSUE]": p1.get("passportIssueDate") or "—",
+            "[PARENT_2_FULL_NAME]": p2.get("fullName") or "—",
+            "[PARENT_2_PASSPORT_NUMBER]": p2.get("passportNumber") or "—",
+            "[PARENT_2_PLACE_OF_ISSUE]": p2.get("placeOfIssue") or "—",
+            "[PARENT_2_DATE_OF_ISSUE]": p2.get("passportIssueDate") or "—",
+            "[TRAVEL_START_DATE]": start,
+            "[TRAVEL_END_DATE]": end,
+            "[PURPOSE OF VISIT]": purpose,
+        }
+    clauses = [_invitee_clause(p) for p in invitees]
+    joined = clauses[0] if len(clauses) == 1 else ", ".join(clauses[:-1]) + " and " + clauses[-1]
+    return (
+        f"I would like to invite my {wording['relation']}– {joined} to visit me from {start} to {end} "
+        f"for the purpose of {purpose}."
+    )
+
+
+def _apply_spec(paragraph, spec) -> None:
+    """A token map (dict) is substituted in place; a plain string replaces
+    the paragraph's text (the paragraph is a single run, so its formatting
+    carries over)."""
+    if isinstance(spec, str):
+        docx_utils.set_paragraph_text(paragraph, spec)
+    else:
+        docx_utils.apply_token_map_to_paragraph(paragraph, spec)
+
+
 def _invitation_token_maps(inviter: dict, invitees: list[dict], fields: dict, date_override: Optional[str]) -> dict:
     """The Invitation Letter's own token substitutions, keyed by the SAME
     editable-field key every one of the letter's real generated content
@@ -135,7 +224,7 @@ def _invitation_token_maps(inviter: dict, invitees: list[dict], fields: dict, da
     shared source for the real generator's non-edited fallback AND the
     Word-like editor's seed values (project rule 15), so neither can ever
     drift from the other."""
-    p1, p2 = invitees[0], invitees[1]
+    wording = _invitee_wording(invitees, fields)
     return {
         "date": {"[DATE]": letter_shared.format_letter_date(date_override)},
         "inviterNameLine": {"[INVITER_FULL_NAME]": inviter.get("fullName") or "—"},
@@ -151,24 +240,17 @@ def _invitation_token_maps(inviter: dict, invitees: list[dict], fields: dict, da
             "[STUDYING / WORKING]": inviter.get("studyingOrWorking") or "—",
             "[UNIVERSITY / COMPANY NAME]": inviter.get("universityOrCompany") or "—",
         },
-        "inviteesDetails": {
-            "[PARENT_1_FULL_NAME]": p1.get("fullName") or "—",
-            "[PARENT_1_PASSPORT_NUMBER]": p1.get("passportNumber") or "—",
-            "[PARENT_1_PLACE_OF_ISSUE]": p1.get("placeOfIssue") or "—",
-            "[PARENT_1_DATE_OF_ISSUE]": p1.get("passportIssueDate") or "—",
-            "[PARENT_2_FULL_NAME]": p2.get("fullName") or "—",
-            "[PARENT_2_PASSPORT_NUMBER]": p2.get("passportNumber") or "—",
-            "[PARENT_2_PLACE_OF_ISSUE]": p2.get("placeOfIssue") or "—",
-            "[PARENT_2_DATE_OF_ISSUE]": p2.get("passportIssueDate") or "—",
-            "[TRAVEL_START_DATE]": fields.get("travelStartDate") or "—",
-            "[TRAVEL_END_DATE]": fields.get("travelEndDate") or "—",
-            "[PURPOSE OF VISIT]": fields.get("purpose") or "—",
-        },
-        "purposeStatement": {"[PURPOSE OF VISIT]": fields.get("purpose") or "—"},
-        "accommodationAndReturn": {
-            "[ACCOMMODATION DETAILS]": fields.get("accommodationDetails") or "—",
-            "[RETURN_DATE]": fields.get("returnDate") or "—",
-        },
+        "inviteesDetails": _invitees_sentence(invitees, fields, wording),
+        "purposeStatement": dict(
+            wording["purposeSwaps"], **{"[PURPOSE OF VISIT]": fields.get("purpose") or "—"}
+        ),
+        "accommodationAndReturn": dict(
+            wording["staySwaps"],
+            **{
+                "[ACCOMMODATION DETAILS]": fields.get("accommodationDetails") or "—",
+                "[RETURN_DATE]": fields.get("returnDate") or "—",
+            },
+        ),
         "fundingArrangement": {"[SPONSOR / PARENTS / APPLICANT]": fields.get("fundingArrangement") or "—"},
         "signOffName": {"[INVITER_FULL_NAME]": inviter.get("fullName") or "—"},
         "phone": {"[PHONE_NUMBER]": _phone_or_dash(inviter.get("phone"))},
@@ -228,18 +310,15 @@ def compose_invitation_editable_fields(inviter: dict, invitees: list[dict], fiel
     of this wording)."""
     import html as _html_mod
 
-    if len(invitees) != 2:
-        raise ValueError(
-            "The Invitation Letter is written for exactly two invitees (matching the reference "
-            f"template's own fixed 'my Parents' wording) — {len(invitees)} were given."
-        )
+    if not invitees:
+        raise ValueError("At least one invitee is required to generate this letter.")
     document = _load_template(INVITATION_LETTER_TEMPLATE_PATH, "Invitation Letter")
     paragraphs = document.paragraphs
     token_maps = _invitation_token_maps(inviter, invitees, fields, date_override)
     fields_out = {}
     for key in INVITATION_EDITABLE_FIELD_KEYS:
         p = paragraphs[_INVITATION_FIELD_PARAGRAPH_INDEX[key]]
-        docx_utils.apply_token_map_to_paragraph(p, token_maps[key])
+        _apply_spec(p, token_maps[key])
         fields_out[key] = f"<p>{_html_mod.escape(p.text)}</p>"
     return fields_out
 
@@ -257,7 +336,7 @@ def generate_invitation_letter_docx(
     country, cityCountry, passportNumber, fullAddress, studyingOrWorking,
     universityOrCompany, phone, email} — a person living abroad, entered
     freely (they are not one of this application's own travellers, since
-    Khanna isn't processing their visa). `invitees`: exactly 2 of this
+    Khanna isn't processing their visa). `invitees`: one or more of this
     application's own people (each {fullName, passportNumber,
     placeOfIssue, passportIssueDate}) — the two being invited. `fields`:
     {travelStartDate, travelEndDate, purpose, accommodationDetails,
@@ -279,11 +358,8 @@ def generate_invitation_letter_docx(
     every later paragraph's real index if any were looked up fresh after
     an earlier one was mutated — the exact hazard already documented for
     the Authorization Letters engine."""
-    if len(invitees) != 2:
-        raise ValueError(
-            "The Invitation Letter is written for exactly two invitees (matching the reference "
-            f"template's own fixed 'my Parents' wording) — {len(invitees)} were given."
-        )
+    if not invitees:
+        raise ValueError("At least one invitee is required to generate this letter.")
     if not inviter or not (inviter.get("fullName") or "").strip():
         raise ValueError("The inviter's own name is required to generate this letter.")
 
@@ -294,6 +370,8 @@ def generate_invitation_letter_docx(
 
     field_paragraphs = {key: paragraphs[idx] for key, idx in _INVITATION_FIELD_PARAGRAPH_INDEX.items()}
     signature_paragraph = paragraphs[20]
+    subject_paragraph = paragraphs[10]
+    request_paragraph = paragraphs[17]
 
     if _shader is not None:  # layout probe only — see docx_utils.ProbeShader
         for key in INVITATION_EDITABLE_FIELD_KEYS:
@@ -305,7 +383,15 @@ def generate_invitation_letter_docx(
         if html is not None:
             docx_utils.replace_paragraph_range_with_html(document, p, p, html)
         else:
-            docx_utils.apply_token_map_to_paragraph(p, token_maps[key])
+            _apply_spec(p, token_maps[key])
+
+    # The two fixed lines that name the invitees ("...for my Parents" /
+    # "...grant my parents the necessary visa") follow the same wording as
+    # the paragraph above when it is not the template's own two-parents case.
+    wording = _invitee_wording(invitees, fields)
+    if wording["changed"]:
+        docx_utils.apply_token_map_to_paragraph(subject_paragraph, {"my Parents": f"my {wording['relationTitle']}"})
+        docx_utils.apply_token_map_to_paragraph(request_paragraph, {"my parents": f"my {wording['relation']}"})
 
     if signature_bytes:
         docx_utils.insert_signature_image(signature_paragraph, signature_bytes)

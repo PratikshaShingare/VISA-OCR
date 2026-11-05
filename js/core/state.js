@@ -157,6 +157,15 @@
       // file itself is only kept in memory for the open session).
       source: "",
       voucherFileName: "",
+      // Set only for a voucher upload: which layout the voucher was read as,
+      // where the address/phone came from ("Google" / "OpenStreetMap"), how the
+      // looked-up address compared with the one printed on the voucher
+      // ("match" | "partial" | "mismatch" | "unverified"), and that printed address.
+      voucherType: "",
+      lookupSource: "",
+      addressCheck: "",
+      lookupFoundAddress: "",
+      voucherAddress: "",
       // Editable preview: a staff member's own reworded text for one or
       // more of this hotel's generated fields, keyed by field name (see
       // hotel_voucher_engine.compose_hotel_editable_fields) — real HTML
@@ -210,12 +219,11 @@
       hotels: [],
       coverLetter: {
         // Phase 9 shape. `selectedPersonIds` holds "applicant" plus zero or
-        // more traveller ids — Europe/Japan require exactly one companion
-        // (their own reference templates' fixed wording assumes exactly
-        // one), Singapore accepts the applicant alone or with any number
-        // of companions (its passenger table is a genuinely repeatable
-        // row). See cover_letter_engine.py's module docstring for the full
-        // reasoning.
+        // more traveller ids — Europe/Japan take the applicant alone or with
+        // one companion (their sentences are written for one named
+        // companion), Singapore accepts the applicant alone or with any
+        // number of companions (its passenger table is a genuinely
+        // repeatable row). See cover_letter_engine.py's module docstring.
         region: "", // "" | "Europe" | "Japan" | "Singapore" — derived from `country` below
         // Frontend rework, section 6-9: the specific destination country
         // picked from the searchable country selector (e.g. "France"),
@@ -249,8 +257,23 @@
         // three by cover-letter.js, so nothing downstream changed.
         fundingType: "",
         fundingPayerName: "",
-        fundingRelation: "",
+        fundingRelation: "", // the relation as it reads in the letter, e.g. "Brother"
+        // The payer-relation dropdown: one of its options, or "Other" (then
+        // fundingRelationCustom is what fundingRelation holds).
+        fundingRelationChoice: "",
+        fundingRelationCustom: "",
         fundingArrangement: "",
+        // Europe/Japan with a companion: how the two travellers are related
+        // ("along with my wife"). travellerRelation is a dropdown choice
+        // ("" = worked out from the traveller record); travellerRelationText
+        // is optional wording typed by staff and wins over the dropdown.
+        travellerRelation: "",
+        travellerRelationText: "",
+        // Several companions (Europe/Japan, three or more people on the
+        // letter): each companion's own details, keyed by person id —
+        // { relationChoice, relationText, jobTitle, employerName,
+        //   employmentStartYear, occupation }.
+        companionDetails: {},
         generatedAt: null,
         // Europe only: {body: html|null} — the staff member's hand edit of
         // the letter's three body paragraphs, made on the preview itself.
@@ -293,13 +316,19 @@
       },
       authorization: {
         // Phase 8 shape. `selectedPersonIds` holds "applicant" and/or
-        // traveller ids; Passport Authorization supports 1-2 (matching the
-        // two real reference templates), Company Authorization any number.
+        // traveller ids; Both Passport and Company Authorization take any
+        // number of people.
         passport: {
           selectedPersonIds: [],
           recipientCentreName: "",
           recipientAddress: "",
           collectorName: "",
+          // The destination country chosen on the Passport page. "" follows
+          // the application's destination; "Singapore" selects Singapore's
+          // own letter format, any other country the standard one.
+          country: "",
+          representativeName: "", // Singapore only; empty = the form's default
+          feePerApplicant: "", // Singapore only
           generatedAt: null,
           // Frontend rework, Phase 4 (Word-like body editor): same
           // {fieldKey: html|null} contract as a hotel's own editedFields
@@ -317,6 +346,8 @@
           consulateCountry: "",
           consulateAddress: "Mumbai, India",
           recipientText: "",
+          contactPerson: "", // Singapore only; empty = the form's default
+          designation: "", // Singapore only
           generatedAt: null,
           // Same contract as passport.editedFields above, except its
           // "applicant_<index>" keys are POSITIONAL — see
@@ -340,10 +371,11 @@
         // Phase 10 shape. The inviter is a person living abroad, entered
         // freely — NOT one of this application's own applicant/travellers
         // (Khanna isn't processing their visa) — while `selectedInviteeIds`
-        // holds exactly 2 of this application's own people, matching the
-        // real reference template's fixed "my Parents" wording (see
+        // holds any number of this application's own people (the template's
+        // "my Parents" wording is kept for exactly two — see
         // backend/python/invitation_letter_engine.py's module docstring).
         selectedInviteeIds: [],
+        inviteeRelation: "", // optional wording: "parents", "mother", "family" ...
         inviter: {
           fullName: "",
           addressLine1: "",

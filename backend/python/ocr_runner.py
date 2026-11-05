@@ -44,6 +44,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+import ocr_azapi
 import ocr_providers
 
 _provider = ocr_providers.get_ocr_provider()
@@ -423,6 +424,28 @@ def detect_and_crop_document_region(bgr: np.ndarray) -> Tuple[np.ndarray, bool]:
     return warped, True
 
 
+NOISE_SIGMA_DENOISE_THRESHOLD = 4.0
+
+
+def estimate_noise_sigma(gray: np.ndarray) -> float:
+    """Rough pixel-noise level (median absolute difference from a 3x3 median
+    filter, scaled to a standard deviation). ~0 for a clean image."""
+    diff = gray.astype(np.float32) - cv2.medianBlur(gray, 3).astype(np.float32)
+    return float(np.median(np.abs(diff)) * 1.4826)
+
+
+def denoise_if_noisy(gray: np.ndarray) -> np.ndarray:
+    """Light 3x3 median filter, applied ONLY when the image is visibly grainy
+    (low-light phone photos, heavy JPEG grain). A clean image is returned
+    untouched. Needed because the contrast boost in enhance_for_ocr amplifies
+    grain into thousands of fake specks: on one grainy test page Tesseract
+    then took ~56 s and returned 2000 characters of junk, versus ~1 s and the
+    correct text once the grain was removed first."""
+    if estimate_noise_sigma(gray) > NOISE_SIGMA_DENOISE_THRESHOLD:
+        return cv2.medianBlur(gray, 3)
+    return gray
+
+
 def enhance_for_ocr(gray: np.ndarray) -> np.ndarray:
     """Mild, non-destructive contrast normalization applied only to the copy
     of the image handed to OCR (never the copy returned for on-screen
@@ -431,6 +454,7 @@ def enhance_for_ocr(gray: np.ndarray) -> np.ndarray:
     glare / slightly-blurry real-photo cases without the aggressive,
     detail-destroying thresholding the project rules warn against (rule
     'Do not apply aggressive processing blindly')."""
+    gray = denoise_if_noisy(gray)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     enhanced = clahe.apply(gray)
     blurred = cv2.GaussianBlur(enhanced, (0, 0), sigmaX=1.2)
@@ -810,6 +834,26 @@ def _confidence_field(value: Any, confidence: float, source: str, needs_review: 
     return field
 
 
+def _derive_issue_from_expiry(mrz: Dict[str, Any]) -> Optional[str]:
+    """Estimated issue date for Indian adult passports (10-year validity).
+    None for any other country, for minors (under 18 at expiry-10y) or when
+    the MRZ dates are not valid."""
+    from datetime import date as _date
+
+    if (mrz.get("issuingCountry") or "") != "IND" or not mrz.get("dateOfExpiryValid"):
+        return None
+    try:
+        exp = _date.fromisoformat(mrz.get("dateOfExpiry") or "")
+        dob = _date.fromisoformat(mrz.get("dateOfBirth") or "") if mrz.get("dateOfBirth") else None
+        issue = _date(exp.year - 10, exp.month, exp.day)
+        issue = issue.fromordinal(issue.toordinal() + 1)
+    except ValueError:
+        return None
+    if dob is None or (issue - dob).days / 365.25 < 18:
+        return None
+    return issue.isoformat()
+
+
 def extract_passport_fields(
     ocr_text: str,
     mrz: Optional[Dict[str, Any]],
@@ -908,6 +952,16 @@ def extract_passport_fields(
         date_of_issue, 0.6 if date_of_issue else 0.0, "viz" if date_of_issue else "none", True,
         "Taken from the printed dates by elimination — confirm." if date_of_issue else None,
     )
+    if not date_of_issue and mrz:
+        derived = _derive_issue_from_expiry(mrz)
+        if derived:
+            # Clearly labelled estimate: an Indian adult passport is valid for
+            # exactly 10 years, so issue = expiry - 10 years + 1 day. Never
+            # presented as read from the page; staff must confirm.
+            fields["dateOfIssue"] = _confidence_field(
+                derived, 0.3, "derived", True,
+                "Estimated from the expiry date (10-year validity) — the printed date was not read; compare with the passport.",
+            )
 
     # Indian passports print no "issuing authority" line; only filled when a
     # labelled, clean value exists.
@@ -948,7 +1002,7 @@ def extract_passport_fields(
         old_source_note = None
     old_note = old_source_note
     if old_number and old_certain is False:
-        old_note = "First character may be misread (it came out as a digit) — compare with the old passport."
+        old_note = "First character was read as a digit and replaced by the look-alike letter — compare with the old passport."
     fields["oldPassportNumber"] = _confidence_field(old_number, (0.6 if old_certain else 0.4) if old_number else 0.0, "viz" if old_number else "none", True, old_note)
     old_issue = back.get("oldPassportIssueDate")
     old_date_certain = back.get("oldPassportDateCertain") is not False
@@ -1117,6 +1171,15 @@ def process_passport_page(
     mrz_rot: Optional[int] = None
     if forced_rotation is None:
         mrz_rot = passport_layout.find_mrz_rotation(bgr, _rotate_90_multiple)
+        if mrz_rot is None:
+            # Not found as photographed: a photo taken at a noticeable angle is
+            # straightened by a trial tilt and tried again before giving up.
+            tilted = passport_layout.find_mrz_rotation_tilted(bgr, _rotate_90_multiple, deskew_image)
+            if tilted is not None:
+                mrz_rot, tilt_applied, bgr = tilted
+                notices.append(
+                    "The photo was tilted — it was straightened before reading. Please check the page image."
+                )
 
     back_read: Optional[Dict[str, Any]] = None
     last_text_read: Optional[Dict[str, Any]] = None
@@ -1210,7 +1273,11 @@ def process_passport_page(
         if v2_pre is not None:
             v2_results.append(v2_pre)
         if v2_pre is None or not all(v2_pre["checks"].values()):
-            v2_cropped = _read_mrz_with_v2(bgr, bgr)
+            # No MRZ-shaped block anywhere (a stamp / visa / unknown page) and the
+            # short search above found nothing: another long search would only
+            # burn ~20 s on a page that has no MRZ, so it gets the short budget.
+            second_budget = MRZ_V2_MAX_SECONDS if (mrz_rot is not None or forced_rotation is not None) else MRZ_V2_NO_CANDIDATE_SECONDS
+            v2_cropped = _read_mrz_with_v2(bgr, bgr, max_seconds=second_budget)
             if v2_cropped is not None:
                 v2_results.append(v2_cropped)
         for v2 in v2_results:
@@ -1416,6 +1483,9 @@ def process_passport_file(
     result = process_passport_page(pages[page_index], forced_rotation=forced_rotation, use_mrz_v2=use_mrz_v2)
     result["pageIndex"] = page_index
     result["totalPages"] = total_pages
+    # Optional extra reader (azapi.ai): only for a data page whose MRZ was
+    # found, only when a token is configured, never able to fail the upload.
+    ocr_azapi.enrich_bio_result(result, pages, page_index)
     return result
 
 

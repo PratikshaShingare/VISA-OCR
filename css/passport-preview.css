@@ -160,7 +160,9 @@
 
 .passport-review__save-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: var(--space-2) var(--space-3);
   margin-top: var(--space-5);
 }
 
@@ -190,15 +192,32 @@
 
 .field-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  /* minmax(0, 1fr), not 1fr: a bare 1fr track never gets narrower than its
+     content, and a text input's default width (~266px) then pushed fields
+     past the edge of very narrow screens (250-280px). */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
 }
 
+.field-grid > .field {
+  min-width: 0;
+}
+
 /* ---------------- Per-field OCR confidence styling ---------------- */
+/* The field's state is shown by its border / fill alone (blue = read with
+   confidence, red = please verify, dashed = not detected). The explanatory
+   sentence stays in the DOM, visually hidden, so screen-reader users still
+   hear it — except a date that is not valid, whose message must be seen. */
 .ocr-field__meta {
-  font-size: 0.74rem;
-  color: var(--color-text-faint);
-  min-height: 1.1em;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .field-review input,
@@ -236,6 +255,14 @@
   border-color: var(--color-danger);
 }
 .ocr-field input.is-invalid + .ocr-field__meta {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+  font-size: 0.74rem;
   color: var(--color-danger);
 }
 

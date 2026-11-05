@@ -203,11 +203,11 @@
   font-size: 0.8rem;
   font-weight: 700;
   color: var(--color-primary);
-  background: var(--color-primary-soft, rgba(28, 95, 174, 0.12));
+  background: var(--color-primary-soft, rgba(9, 72, 142, 0.12));
 }
 .app-picker__avatar.is-flagged {
-  color: #8a5a00;
-  background: rgba(230, 160, 20, 0.18);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 .app-picker__result-body {
   display: flex;
@@ -246,8 +246,8 @@
   font-weight: 600;
   padding: 1px 7px;
   border-radius: 999px;
-  color: #8a5a00;
-  background: rgba(230, 160, 20, 0.16);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
 }
 @media (max-width: 480px) {
   .app-picker-overlay {

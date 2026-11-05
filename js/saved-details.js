@@ -105,14 +105,21 @@
     return { start: ins[0] || "", end: outs[outs.length - 1] || "" };
   }
 
+  // First row of both lists: "+ Upload new passport / hotel voucher" (js/quick-add.js).
+  function addRowHtml(kind, pickAttr) {
+    var Q = global.KhannaQuickAdd;
+    return Q ? Q.rowHtml(kind === "passport" ? "passport" : "hotel", pickAttr) : "";
+  }
+
   function listHtml(kind, pickAttr) {
     if (kind === "passport") {
       var passports = passportSources();
       if (!passports.length) {
-        return '<p class="field-hint cover-existing-list__empty">No saved passports yet.</p>';
+        return addRowHtml(kind, pickAttr) + '<p class="field-hint cover-existing-list__empty">No saved passports yet.</p>';
       }
       var auth = global.KhannaAuthorization;
       return (
+        addRowHtml(kind, pickAttr) +
         '<div class="cover-existing-list__title">Previous passports</div>' +
         passports.map(function (src) {
           return (
@@ -128,9 +135,10 @@
     }
     var blockings = hotelBlockingSources();
     if (!blockings.length) {
-      return '<p class="field-hint cover-existing-list__empty">No hotel blockings yet.</p>';
+      return addRowHtml(kind, pickAttr) + '<p class="field-hint cover-existing-list__empty">No hotel blockings yet.</p>';
     }
     return (
+      addRowHtml(kind, pickAttr) +
       '<div class="cover-existing-list__title">Previous hotel blockings</div>' +
       blockings.map(function (a) {
         var hotels = usableHotels(a);

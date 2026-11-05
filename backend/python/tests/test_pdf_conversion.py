@@ -254,7 +254,7 @@ def test_neither_libreoffice_nor_word_gives_the_actionable_error(monkeypatch):
     monkeypatch.setattr(pdf_conversion, "_word_is_installed", lambda: False)
     def _missing(*a, **k):
         raise FileNotFoundError("soffice")
-    monkeypatch.setattr(pdf_conversion.subprocess, "run", _missing)
+    monkeypatch.setattr(pdf_conversion.subprocess, "Popen", _missing)
     with pytest.raises(pdf_conversion.PdfConversionError, match="LibreOffice"):
         pdf_conversion.convert_docx_bytes_to_pdf(b"x")
 
@@ -273,3 +273,117 @@ def test_word_converter_refuses_cleanly_off_windows(monkeypatch):
     monkeypatch.setattr(pdf_conversion.sys, "platform", "linux")
     with pytest.raises(pdf_conversion.PdfConversionError, match="Windows"):
         pdf_conversion.convert_via_word(b"x")
+
+
+# ---------------------------------------------------------------------------
+# Bounded concurrency + whole-process-tree clean-up (LibreOffice runs)
+# ---------------------------------------------------------------------------
+import os
+import sys
+import threading
+import time
+
+
+def _fake_soffice_script(tmp_path, body):
+    """A stand-in for 'soffice': a tiny python script (so no LibreOffice is needed)."""
+    script = tmp_path / "fake_soffice.py"
+    script.write_text(body)
+    return [sys.executable, str(script)]
+
+
+def test_parallel_cap_reads_the_environment_variable(monkeypatch):
+    monkeypatch.setenv("KHANNA_MAX_PARALLEL_PDF", "7")
+    assert pdf_conversion._max_parallel_conversions() == 7
+    monkeypatch.setenv("KHANNA_MAX_PARALLEL_PDF", "0")
+    assert 1 <= pdf_conversion._max_parallel_conversions() <= 4
+    monkeypatch.setenv("KHANNA_MAX_PARALLEL_PDF", "abc")
+    assert 1 <= pdf_conversion._max_parallel_conversions() <= 4
+
+
+def test_only_the_allowed_number_of_conversions_run_at_once_and_all_finish(monkeypatch, tmp_path):
+    monkeypatch.setattr(pdf_conversion, "_conversion_slots", threading.BoundedSemaphore(2))
+    cmd = _fake_soffice_script(tmp_path, "import time; time.sleep(0.4)\n")
+
+    running = {"now": 0, "peak": 0}
+    lock = threading.Lock()
+    real_popen = pdf_conversion.subprocess.Popen
+
+    class _Counting(real_popen):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            with lock:
+                running["now"] += 1
+                running["peak"] = max(running["peak"], running["now"])
+
+        def communicate(self, *a, **k):
+            try:
+                return super().communicate(*a, **k)
+            finally:
+                with lock:
+                    running["now"] -= 1
+
+    monkeypatch.setattr(pdf_conversion.subprocess, "Popen", _Counting)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(pdf_conversion._run_libreoffice(cmd))) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert len(results) == 6  # nothing refused: the extra ones simply waited
+    assert all(rc == 0 for rc, _o, _e in results)
+    assert running["peak"] <= 2
+
+
+def test_a_full_queue_gives_a_clear_busy_error_not_a_hang(monkeypatch, tmp_path):
+    sem = threading.BoundedSemaphore(1)
+    sem.acquire()  # the only slot is taken
+    monkeypatch.setattr(pdf_conversion, "_conversion_slots", sem)
+    monkeypatch.setattr(pdf_conversion, "_QUEUE_WAIT_SECONDS", 0.2)
+    with pytest.raises(pdf_conversion.PdfConversionError, match="busy"):
+        pdf_conversion._run_libreoffice([sys.executable, "-c", "pass"])
+
+
+def test_the_slot_is_released_when_the_program_is_missing(monkeypatch):
+    sem = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(pdf_conversion, "_conversion_slots", sem)
+    with pytest.raises(FileNotFoundError):
+        pdf_conversion._run_libreoffice(["/definitely/not/installed/soffice"])
+    assert sem.acquire(timeout=1)  # would block forever if the slot had leaked
+    sem.release()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="uses a POSIX process group; Windows uses taskkill /T")
+def test_a_timeout_kills_the_launcher_and_its_child_process(monkeypatch, tmp_path):
+    pid_file = tmp_path / "child.pid"
+    body = (
+        "import subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        f"open(r'{pid_file}', 'w').write(str(child.pid))\n"
+        "time.sleep(60)\n"
+    )
+    cmd = _fake_soffice_script(tmp_path, body)
+    sem = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(pdf_conversion, "_conversion_slots", sem)
+    with pytest.raises(pdf_conversion.PdfConversionError, match="timed out"):
+        pdf_conversion._run_libreoffice(cmd, timeout=2)
+
+    child_pid = int(pid_file.read_text())
+    deadline = time.time() + 5
+    alive = True
+    while time.time() < deadline:
+        try:
+            os.kill(child_pid, 0)
+            # a killed child can linger as a zombie until reaped by init; check its state
+            try:
+                state = open(f"/proc/{child_pid}/stat").read().split()[2]
+            except OSError:
+                state = "gone"
+            alive = state not in ("Z", "gone")
+        except ProcessLookupError:
+            alive = False
+        if not alive:
+            break
+        time.sleep(0.1)
+    assert not alive, "the LibreOffice helper process was left running after the timeout"
+    assert sem.acquire(timeout=1)  # slot freed after the timeout
+    sem.release()

@@ -76,7 +76,7 @@
   // themselves, notes, activity log) — so ANY other data (an applicant, a
   // traveller, a generated letter, an uploaded document...) makes it a normal
   // application again.
-  var BOOKKEEPING_KEYS = ["id", "status", "createdBy", "createdAt", "updatedAt", "hotels", "notes", "activity", "lastDocView", "explicitlySavedAt"];
+  var BOOKKEEPING_KEYS = ["id", "status", "createdBy", "createdAt", "updatedAt", "hotels", "notes", "activity", "lastDocView", "explicitlySavedAt", "docQueue"];
 
   function withoutIds(value) {
     return JSON.stringify(value, function (key, v) {
@@ -118,110 +118,33 @@
     return !!app && holdsOnly(app, "applicant");
   }
 
-  var TRASH_ICON = '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-1 13a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1L6 7"/></svg>';
+  // The Applications page lists applications with exactly the same rows as the
+  // Dashboard's Recent Applications (KhannaDashboard.listHtml, js/dashboard.js):
+  // name, updated time, documents generated, a blue eye that opens the
+  // generated document's preview and a red bin that asks before deleting.
+  // Both buttons are handled by dashboard.js's document-level listeners.
+  var EMPTY_HTML =
+    '<div class="empty-state">' +
+    '<svg class="icon" viewBox="0 0 24 24"><path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z"/></svg>' +
+    "<h3>No applications yet</h3>" +
+    "</div>";
 
-  // Same row anatomy as Recent Hotel Blockings / Recent Cover Letters
-  // (.hb-row in css/hotel-blockings.css): name + meta on the left, small
-  // secondary action buttons and a red-outline Delete on the right.
-  function rowHtml(app) {
-    var id = utils.escapeHtml(app.id);
-    return (
-      '<div class="card hb-row">' +
-      '<div class="hb-row__info">' +
-      '<div class="hb-row__name">' + utils.escapeHtml(applicantLabel(app)) + "</div>" +
-      '<div class="hb-row__meta hb-row__meta--faint">' +
-      id + " · Created " + utils.formatDate(app.createdAt) +
-      "</div>" +
-      "</div>" +
-      '<div class="hb-row__actions">' +
-      '<button class="btn btn-secondary btn-sm" type="button" data-action="open-application" data-app-id="' + id + '">Open Full Application</button>' +
-      '<button class="btn btn-danger-outline btn-sm" type="button" data-action="delete-application" data-app-id="' + id + '">' +
-      TRASH_ICON + "Delete</button>" +
-      "</div>" +
-      "</div>"
-    );
+  // Every application that has a name, newest activity first (the store
+  // already keeps newest first). Shared with the Admin page's overview.
+  function listedApplications() {
+    return global.KhannaState.getApplications().filter(hasName);
   }
 
-  /* ---------------- delete confirmation popup (same pattern as Recent
-     Hotel Blockings / Recent Cover Letters / Dashboard: a red Delete button
-     must never delete on the first click) ---------------- */
-  var modalEl = null;
-  var pendingDeleteId = null;
-  var lastFocus = null;
-
-  function closeModal() {
-    if (!modalEl) return;
-    modalEl.hidden = true;
-    pendingDeleteId = null;
-    if (lastFocus && lastFocus.focus && document.contains(lastFocus)) lastFocus.focus();
-  }
-
-  function ensureModal() {
-    if (modalEl) return;
-    var wrap = document.createElement("div");
-    wrap.className = "app-picker-overlay";
-    wrap.setAttribute("hidden", "");
-    wrap.setAttribute("data-app-delete-modal", "");
-    wrap.innerHTML =
-      '<div class="app-picker" role="dialog" aria-modal="true" aria-labelledby="appDeleteTitle" style="max-width:440px;">' +
-      '<div class="app-picker__header">' +
-      '<h3 id="appDeleteTitle">Delete application?</h3>' +
-      '<button type="button" class="btn-icon" data-app-delete-cancel aria-label="Close">' +
-      '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>' +
-      "</button>" +
-      "</div>" +
-      '<p data-app-delete-text style="margin:0;"></p>' +
-      '<div style="display:flex;gap:var(--space-2);justify-content:flex-end;flex-wrap:wrap;">' +
-      '<button type="button" class="btn btn-secondary btn-sm" data-app-delete-cancel>Cancel</button>' +
-      '<button type="button" class="btn btn-danger btn-sm" data-app-delete-confirm>Delete Application</button>' +
-      "</div>" +
-      "</div>";
-    document.body.appendChild(wrap);
-    modalEl = wrap;
-
-    utils.on(wrap, "click", "[data-app-delete-cancel]", closeModal);
-    wrap.addEventListener("click", function (e) {
-      if (e.target === wrap) closeModal();
-    });
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && !wrap.hasAttribute("hidden")) closeModal();
-    });
-    utils.on(wrap, "click", "[data-app-delete-confirm]", function () {
-      var id = pendingDeleteId;
-      closeModal();
-      if (id) global.KhannaState.deleteApplication(id);
-    });
-  }
-
-  function openDeleteModal(appId, trigger) {
-    var app = global.KhannaState.getApplication(appId);
-    if (!app) return;
-    ensureModal();
-    pendingDeleteId = appId;
-    lastFocus = trigger || document.activeElement;
-    utils.qs("[data-app-delete-text]", modalEl).textContent =
-      "Are you sure you want to delete the application for " + applicantLabel(app) +
-      "? This removes the application and everything saved on it (passport data, travellers, hotels, letters) from this browser and cannot be undone.";
-    modalEl.hidden = false;
-    var cancel = modalEl.querySelector("button[data-app-delete-cancel].btn-secondary");
-    if (cancel) cancel.focus();
+  // Row list markup for `apps` (or the empty state).
+  function listHtml(apps) {
+    if (!apps.length) return EMPTY_HTML;
+    return global.KhannaDashboard ? global.KhannaDashboard.listHtml(apps) : EMPTY_HTML;
   }
 
   function render() {
     var container = utils.qs("[data-applications-list]");
     if (!container) return;
-    var apps = global.KhannaState.getApplications().filter(hasName);
-
-    if (apps.length === 0) {
-      container.innerHTML =
-        '<div class="empty-state">' +
-        '<svg class="icon" viewBox="0 0 24 24"><path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z"/></svg>' +
-        "<h3>No applications yet</h3>" +
-        "</div>";
-      return;
-    }
-
-    container.innerHTML = '<div class="hb-list">' + apps.map(rowHtml).join("") + "</div>";
+    container.innerHTML = listHtml(listedApplications());
   }
 
   function init() {
@@ -229,12 +152,6 @@
     global.KhannaState.subscribe(render);
     document.addEventListener("khanna:navigate", function (e) {
       if (e.detail.view === "applications") render();
-    });
-
-    utils.on(document, "click", "[data-action='delete-application']", function (e, target) {
-      e.preventDefault();
-      var id = target.getAttribute("data-app-id");
-      if (id) openDeleteModal(id, target);
     });
   }
 
@@ -245,6 +162,8 @@
     isHotelBlockingOnly: isHotelBlockingOnly,
     isCoverLetterOnly: isCoverLetterOnly,
     isPassportOnly: isPassportOnly,
+    listedApplications: listedApplications,
+    listHtml: listHtml,
   };
 
   if (document.readyState === "loading") {

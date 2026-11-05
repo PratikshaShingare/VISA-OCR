@@ -1,0 +1,164 @@
+/* ==========================================================================
+   "Save Applicant & Generate Required Documents" checklist (Upload Passport)
+   and the "Documents for ..." strip on each document page (js/document-queue.js)
+   ========================================================================== */
+
+/* ---- Checklist that opens under the buttons ---- */
+.passport-generate {
+  margin-top: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.passport-generate[hidden] {
+  display: none;
+}
+.passport-generate__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.passport-generate__head h3 {
+  margin: 0 0 var(--space-1);
+}
+.passport-generate__head p {
+  margin: 0;
+}
+.passport-generate__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  gap: var(--space-2);
+}
+.passport-generate__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  min-width: 0;
+}
+.passport-generate__item:hover {
+  background: var(--color-surface-alt);
+}
+.passport-generate__item:has(input:checked) {
+  border-color: var(--color-primary);
+  background: var(--color-surface-alt);
+}
+.passport-generate__item input {
+  margin-top: 3px;
+  flex: none;
+}
+.passport-generate__item span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.passport-generate__item small {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+.passport-generate__actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* ---- "Documents for ..." strip on each document page ---- */
+.doc-queue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.doc-queue__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  min-width: 0;
+}
+.doc-queue__close {
+  order: 3;
+}
+.doc-queue__steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.doc-queue__step a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  text-decoration: none;
+}
+.doc-queue__step.is-current a {
+  color: var(--color-text);
+  font-weight: 600;
+}
+.doc-queue__step.is-done a {
+  color: var(--color-success);
+}
+.doc-queue__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  font-size: 0.7rem;
+}
+.doc-queue__step.is-current .doc-queue__num {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+.doc-queue__nav {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+html[data-doc-mode="preview"] [data-doc-queue-slot] {
+  display: none;
+}
+
+@media (max-width: 575px) {
+  .doc-queue {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .doc-queue__head {
+    justify-content: space-between;
+  }
+  .doc-queue__nav {
+    margin-left: 0;
+  }
+  .doc-queue__nav .btn {
+    flex: 1;
+    text-align: center;
+    justify-content: center;
+  }
+  .passport-review__save-row .btn {
+    flex: 1 1 100%;
+  }
+}

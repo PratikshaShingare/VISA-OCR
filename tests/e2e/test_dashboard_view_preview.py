@@ -88,7 +88,7 @@ async def desktop():
         # ---- single generated document: eye opens that preview directly ----
         await page.evaluate("location.hash = '#/dashboard'")
         await page.wait_for_timeout(300)
-        row = page.locator(".dashboard-recent-row", has_text="Hari Hotel")
+        row = page.locator("[data-view='dashboard'] .dashboard-recent-row", has_text="Hari Hotel")
         await row.locator("[data-action='dashboard-view-application']").click()
         await wait_preview(page)
         hash_ = await page.evaluate("location.hash")
@@ -128,7 +128,7 @@ async def desktop():
         checks.check("Back to Dashboard works", await page.evaluate("location.hash") == "#/dashboard")
 
         # ---- several documents: chooser ----
-        await page.locator(".dashboard-recent-row", has_text="Bhavna Both").locator("[data-action='dashboard-view-application']").click()
+        await page.locator("[data-view='dashboard'] .dashboard-recent-row", has_text="Bhavna Both").locator("[data-action='dashboard-view-application']").click()
         await page.wait_for_timeout(300)
         picks = await page.locator("[data-dash-view-pick]").all_inner_texts()
         checks.check("two generated documents -> chooser lists both (not the wizard)",
@@ -159,18 +159,19 @@ async def desktop():
         checks.check("reloading on the preview URL regenerates the preview", await page.evaluate(VISIBLE_FIELDS) == 0)
 
         # ---- no documents yet: still redirects (no popup) ----
+        # (an application with no cover-letter details falls back to the Cover Letter
+        # page, which opens as the NORMAL page — see test_cover_letter_solo_relation_and_redirect.py)
         await page.evaluate("location.hash = '#/dashboard'")
         await page.wait_for_timeout(300)
-        await page.locator(".dashboard-recent-row", has_text="Nina NoDocs").locator("[data-action='dashboard-view-application']").click()
+        await page.locator("[data-view='dashboard'] .dashboard-recent-row", has_text="Nina NoDocs").locator("[data-action='dashboard-view-application']").click()
         await page.wait_for_timeout(3500)
         toast = await page.evaluate("document.querySelectorAll('.toast').length")
         hash_ = await page.evaluate("location.hash")
-        checks.check("application with nothing generated still redirects to a preview page (no popup/toast)",
-                     toast == 0 and hash_.endswith("/preview") and "new-application" not in hash_, f"{hash_} toasts={toast}")
-        note = await page.evaluate("""() => { var n = document.querySelector('.view.is-active [data-pv-notice]'); return { hidden: n.hidden, text: n.textContent } }""")
-        checks.check("...and the preview bar explains there is nothing to preview yet", note["hidden"] is False and "yet" in note["text"], str(note))
-        bar = await page.inner_text(".view.is-active .doc-preview-bar")
-        checks.check("preview bar shows the application number", ids["none"] in bar, bar)
+        checks.check("application with nothing generated still redirects (no popup/toast): the Cover Letter page, normal mode",
+                     toast == 0 and hash_ == "#/cover-letter", f"{hash_} toasts={toast}")
+        checks.check("...showing the cover letter form, with no 'nothing to preview' error",
+                     await page.evaluate("""() => { var s = document.querySelector('.view.is-active'); var n = s.querySelector('[data-pv-notice]');
+                        var c = s.querySelector('[data-cover-letter-card]'); return !!c && c.offsetParent !== null && (!n || n.hidden) }"""))
 
         # Viewing must not change generated/updated dates.
         before = await page.evaluate("""(id) => { var a = KhannaState.getApplications().find(x => x.id === id);
@@ -200,7 +201,7 @@ async def desktop():
         checks.check("application remembers the page it was worked on (lastDocView)", last == "hotel-blocking", str(last))
         await page.evaluate("location.hash = '#/dashboard'")
         await page.wait_for_timeout(300)
-        row = page.locator(".dashboard-recent-row", has_text="Lena Lonehotel")
+        row = page.locator("[data-view='dashboard'] .dashboard-recent-row", has_text="Lena Lonehotel")
         checks.check("untitled application is listed under the name typed on its hotel page", await row.count() == 1)
         await row.locator("[data-action='dashboard-view-application']").click()
         await wait_preview(page)
@@ -225,7 +226,7 @@ async def desktop():
         await page.wait_for_timeout(1000)
         await page.evaluate("location.hash = '#/dashboard'")
         await page.wait_for_timeout(300)
-        await page.locator(".dashboard-recent-row", has_text="Hari Hotel").locator("[data-action='dashboard-view-application']").click()
+        await page.locator("[data-view='dashboard'] .dashboard-recent-row", has_text="Hari Hotel").locator("[data-action='dashboard-view-application']").click()
         await page.wait_for_timeout(300)
         picks = await page.locator("[data-dash-view-pick]").all_inner_texts()
         checks.check("passport authorization joins the chooser", any("Passport Authorization" in t for t in picks), str(picks))
@@ -239,7 +240,7 @@ async def desktop():
           KhannaState.updateApplication(a.id, { applicant: Object.assign({}, a.applicant, { fullName: 'Cora Cover', passport: { current: { number: 'C0000009' } } }),
             coverLetter: { region: 'Singapore', country: 'Singapore', selectedPersonIds: ['applicant'], recipientText: 'The Embassy of Singapore, New Delhi',
               destinationCountry: 'Singapore', travelStartDate: '__START__', travelEndDate: '__END__', fundingType: 'self', fundingArrangement: 'myself',
-              singapore: { hotelName: 'Test Hotel Singapore', hotelAddress: '1 Orchard Road, Singapore' } } }, 'seed');
+              singapore: { hotelName: 'Test Hotel Singapore', hotelAddress: '1 Orchard Road, Singapore', occupations: { applicant: 'a student at Test College' } } } }, 'seed');
           return a.id }""".replace("__START__", future_date(40)).replace("__END__", future_date(47)))
         await generate_via_page(page, cid, "cover-letter", "[data-action='generate-cover-letter']")
         await page.wait_for_timeout(1000)
@@ -247,7 +248,7 @@ async def desktop():
             "(id) => !!KhannaState.getApplications().find(a => a.id === id).coverLetter.generatedAt", cid))
         await page.evaluate("location.hash = '#/dashboard'")
         await page.wait_for_timeout(300)
-        await page.locator(".dashboard-recent-row", has_text="Cora Cover").locator("[data-action='dashboard-view-application']").click()
+        await page.locator("[data-view='dashboard'] .dashboard-recent-row", has_text="Cora Cover").locator("[data-action='dashboard-view-application']").click()
         await wait_preview(page)
         hash_ = await page.evaluate("location.hash")
         checks.check("eye on a cover-letter application opens the cover letter preview directly", hash_ == "#/cover-letter/preview", hash_)
@@ -262,8 +263,9 @@ async def desktop():
         checks.check("cover letter: Edit details brings the form back",
                      await page.evaluate("""() => { var c = document.querySelector('.view.is-active [data-cover-letter-card]'); return !!c && c.offsetParent !== null }"""))
 
-        # ---- every previewable page hides its form (cover letter, invitation too) ----
-        for view in ("cover-letter", "invitation-letter", "hotel-blocking", "company-authorization", "passport-authorization"):
+        # ---- every previewable page hides its form (invitation too) ----
+        # (the cover letter is not in this list any more: an unfinished one opens its normal page instead)
+        for view in ("invitation-letter", "hotel-blocking", "company-authorization", "passport-authorization"):
             await page.evaluate("(id) => KhannaState.setActiveApplicationId(id)", ids["none"])
             await page.evaluate(f"location.hash = '#/{view}/preview'")
             await page.wait_for_timeout(3500)  # waits out the module's ~2.5s retry for a generate button
@@ -297,7 +299,7 @@ async def theme_menu():
             await page.wait_for_timeout(200)
             order = await page.evaluate("""() => Array.prototype.slice.call(document.querySelectorAll('[data-profile-dropdown] .profile-menu__item'))
               .filter(e => e.offsetParent !== null).map(e => e.innerText.trim().replace(/\\s+/g, ' '))""")
-            checks.check(f"[{w}] theme sits between Settings and Log Out", order[-3:] == ["Settings", "Light", "Log Out"], str(order))
+            checks.check(f"[{w}] theme sits between Profile & Settings and Log Out", order[-3:] == ["Profile & Settings", "Dark mode", "Log Out"], str(order))
             ic = await page.evaluate("""() => { var b = document.querySelector('[data-profile-dropdown] [data-theme-toggle]');
               function vis(s) { var e = b.querySelector(s); return !!e && getComputedStyle(e).display !== 'none'; }
               var r = document.querySelector('[data-profile-dropdown]').getBoundingClientRect();
@@ -307,13 +309,14 @@ async def theme_menu():
             await page.click("[data-profile-dropdown] [data-theme-toggle]")
             await page.wait_for_timeout(250)
             checks.check(f"[{w}] click switches to dark theme", await page.evaluate("document.documentElement.getAttribute('data-theme')") == "dark")
-            checks.check(f"[{w}] menu closes after choosing", not await page.evaluate("document.querySelector('[data-profile-dropdown]').classList.contains('is-open')"))
-            await page.click("[data-profile-toggle]")
-            await page.wait_for_timeout(200)
+            checks.check(f"[{w}] menu stays open so the switch is seen flipping", await page.evaluate("document.querySelector('[data-profile-dropdown]').classList.contains('is-open')"))
+            if not await page.evaluate("document.querySelector('[data-profile-dropdown]').classList.contains('is-open')"):
+                await page.click("[data-profile-toggle]")
+                await page.wait_for_timeout(200)
             ic = await page.evaluate("""() => { var b = document.querySelector('[data-profile-dropdown] [data-theme-toggle]');
               function vis(s) { var e = b.querySelector(s); return !!e && getComputedStyle(e).display !== 'none'; }
-              return { moon: vis('.icon-moon'), sun: vis('.icon-sun'), text: b.innerText.trim(), aria: b.getAttribute('aria-pressed'), label: b.getAttribute('aria-label') } }""")
-            checks.check(f"[{w}] Dark shows the moon icon and the name 'Dark'", ic["moon"] and not ic["sun"] and ic["text"] == "Dark" and ic["aria"] == "true", str(ic))
+              return { moon: vis('.icon-moon'), sun: vis('.icon-sun'), text: b.innerText.trim(), aria: b.getAttribute('aria-checked'), label: b.getAttribute('aria-label') } }""")
+            checks.check(f"[{w}] Dark: moon icon, name 'Dark mode', switch is on", ic["moon"] and not ic["sun"] and ic["text"] == "Dark mode" and ic["aria"] == "true", str(ic))
             stored = await page.evaluate("localStorage.getItem('khanna_theme')")
             checks.check(f"[{w}] choice is remembered", stored is not None and "dark" in stored, str(stored))
             await page.close()

@@ -307,6 +307,16 @@ def finalize(document, edited_fields: Optional[dict], shader=None, root=None) ->
         block = by_key.get(key)
         if block is None:
             continue
+        if html == "":
+            # The whole paragraph was deleted in the editor (an empty string,
+            # as opposed to "<p></p>" which keeps a blank line). A table cell
+            # must keep its one paragraph, so there it is only emptied.
+            parent = block.el.getparent()
+            if parent is not None and parent.tag != _W + "tc":
+                parent.remove(block.el)
+                resulting[key] = []
+                continue
+            html = "<p></p>"
         paragraph = Paragraph(block.el, document)
         list_kind = _list_info(document, paragraph)
         _paragraphs, elements = docx_utils._replace_range(

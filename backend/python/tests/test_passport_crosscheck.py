@@ -144,3 +144,13 @@ def test_filler_misread_as_repeated_letters_is_removed_even_without_printed_conf
 def test_a_repeated_letter_filler_token_after_a_real_name_is_dropped():
     name, _ = pc._clean_name_field("SHARMA<<ANITA<PRIYA<KK<<<<<<<<<<<<<<<<<<<<<", [], "IND")
     assert name.startswith("SHARMA<<ANITA<PRIYA<<")
+
+
+def test_issue_date_estimated_for_indian_adult_only():
+    import ocr_runner
+
+    mrz = {"issuingCountry": "IND", "dateOfExpiry": "2035-03-12", "dateOfExpiryValid": True, "dateOfBirth": "1990-05-12"}
+    assert ocr_runner._derive_issue_from_expiry(mrz) == "2025-03-13"
+    assert ocr_runner._derive_issue_from_expiry({**mrz, "issuingCountry": "USA"}) is None
+    assert ocr_runner._derive_issue_from_expiry({**mrz, "dateOfBirth": "2015-01-01"}) is None
+    assert ocr_runner._derive_issue_from_expiry({**mrz, "dateOfExpiryValid": False}) is None

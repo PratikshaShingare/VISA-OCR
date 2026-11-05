@@ -116,13 +116,58 @@
     return !!(h.hotelName && h.city && h.checkIn && h.checkOut);
   }
 
-  // The voucher is generated from the hotels that have their core details.
-  // A hotel still missing something (e.g. a voucher the OCR could not read)
-  // must not stop the others from being generated — but it is never dropped
-  // silently either: renderGenerateBar() names every hotel left out and
-  // exactly what it is missing.
+  // The voucher is generated for EVERY hotel on the application, complete or
+  // not: a voucher the OCR could not fully read (or whose online lookup found
+  // nothing) must never block the document. A detail that is still empty
+  // prints as a dash and can be filled in afterwards (Edit on the hotel, or
+  // editing the preview); renderGenerateBar() lists what is still missing so
+  // nothing is hidden. (Name kept for the callers in other pages.)
   function completeHotels(hotels) {
-    return (hotels || []).filter(isHotelComplete);
+    return sortHotels(hotels);
+  }
+
+  // The hotels in the order they are stayed in: by check-in date, then
+  // check-out date. A hotel with only one of the two dates is placed by the
+  // date it has; hotels with no date at all go last, in the order they were
+  // added. (Stable, so equal dates keep their order.) The list, the voucher and
+  // the downloads all use this one order.
+  function sortHotels(hotels) {
+    var list = (hotels || []).map(function (h, i) { return { h: h, i: i }; });
+    function key(h) { return h.checkIn || h.checkOut || ""; }
+    list.sort(function (a, b) {
+      var ka = key(a.h), kb = key(b.h);
+      if (ka && !kb) return -1;
+      if (!ka && kb) return 1;
+      if (ka !== kb) return ka < kb ? -1 : 1;
+      var oa = a.h.checkOut || "", ob = b.h.checkOut || "";
+      if (oa !== ob) return !oa ? 1 : !ob ? -1 : oa < ob ? -1 : 1;
+      return a.i - b.i;
+    });
+    return list.map(function (x) { return x.h; });
+  }
+
+  // Looks at the stays in order and reports what cannot be right: a check-out
+  // before its own check-in, or a stay that starts before the previous one
+  // has ended. (A gap between two stays is normal — travel, another city —
+  // so it is not reported.)
+  function sequenceProblems(hotels) {
+    var problems = [];
+    var sorted = sortHotels(hotels).filter(function (h) { return h.checkIn && h.checkOut; });
+    sorted.forEach(function (h, i) {
+      if (h.checkOut < h.checkIn) {
+        problems.push("<strong>" + utils.escapeHtml(hotelLabel(h)) + "</strong>: the check-out (" + utils.formatDate(h.checkOut) +
+          ") is before the check-in (" + utils.formatDate(h.checkIn) + ")");
+        return;
+      }
+      var prev = sorted[i - 1];
+      if (prev && prev.checkOut >= prev.checkIn && h.checkIn < prev.checkOut) {
+        var n = nightsBetween(h.checkIn, prev.checkOut);
+        problems.push("<strong>" + utils.escapeHtml(hotelLabel(h)) + "</strong> starts on " + utils.formatDate(h.checkIn) +
+          ", before <strong>" + utils.escapeHtml(hotelLabel(prev)) + "</strong> ends on " + utils.formatDate(prev.checkOut) +
+          (n ? " (" + n + " night" + (n === 1 ? "" : "s") + " overlap)" : ""));
+      }
+    });
+    return problems;
   }
 
   function missingFieldsOf(h) {
@@ -158,6 +203,33 @@
     );
   }
 
+  // "google_places+website" -> "Google + the hotel's website"
+  function lookupSourceLabel(source) {
+    var names = { google_places: "Google", website: "the hotel's website", openstreetmap: "OpenStreetMap", photon: "OpenStreetMap" };
+    var out = [];
+    String(source || "").split("+").forEach(function (key) {
+      var label = names[key];
+      if (label && out.indexOf(label) === -1) out.push(label);
+    });
+    return out.join(" + ") || "the internet";
+  }
+
+  // How the online lookup relates to the address the voucher itself prints.
+  function addressCheckHtml(h) {
+    var src = utils.escapeHtml(h.lookupSource);
+    if (h.addressCheck === "mismatch") {
+      return '<span class="hotel-card__verify" title="' + utils.escapeHtml("Looked-up address: " + (h.lookupFoundAddress || "")) +
+        '">Details from ' + src + " (address differs from the voucher) — Please Verify</span>";
+    }
+    if (h.addressCheck === "match") {
+      return '<span class="hotel-card__verify" title="Address, phone and city were looked up by hotel name and the address agrees with the one printed on the voucher">Address matches the voucher (' + src + ") — Please Verify phone</span>";
+    }
+    if (h.addressCheck === "partial") {
+      return '<span class="hotel-card__verify" title="Only part of the address printed on the voucher appears in the looked-up address">Address only partly matches the voucher (' + src + ") — Please Verify</span>";
+    }
+    return '<span class="hotel-card__verify" title="The voucher names the hotel; its address, phone and city were looked up online">Address / phone / city looked up on ' + src + " — Please Verify</span>";
+  }
+
   function voucherLineHtml(h) {
     if (!h.voucherFileName && !readingVoucher[h.id]) return "";
     if (readingVoucher[h.id]) {
@@ -171,9 +243,8 @@
         ? '<a href="' + f.url + '" target="_blank" rel="noopener">' + utils.escapeHtml(h.voucherFileName) + "</a>"
         : "<span>" + utils.escapeHtml(h.voucherFileName) + " (file not kept after reload)</span>") +
       (h.source === "voucher" ? '<span class="hotel-card__verify">OCR Extracted — Please Verify</span>' : "") +
-      (h.source === "voucher" && h.lookupSource
-        ? '<span class="hotel-card__verify" title="The voucher names the hotel; its address, phone and city were looked up online">Address / phone / city looked up on ' + utils.escapeHtml(h.lookupSource) + " — Please Verify</span>"
-        : "") +
+      (h.source === "voucher" && h.voucherType ? '<span class="hotel-card__verify">Read as: ' + utils.escapeHtml(h.voucherType) + "</span>" : "") +
+      (h.source === "voucher" && h.lookupSource ? addressCheckHtml(h) : "") +
       "</div>"
     );
   }
@@ -191,6 +262,10 @@
       '<div class="hotel-card__name">' + utils.escapeHtml(hotelLabel(h)) + "</div>" +
       '<div class="hotel-card__meta">' + utils.escapeHtml((h.city ? h.city + " · " : "") + dateRange) + "</div>" +
       voucherLineHtml(h) +
+      (!h.voucherFileName && h.lookupSource
+        ? '<div class="hotel-card__voucher"><span class="hotel-card__verify" title="Blank details were filled in by searching the hotel\'s name online">Details from ' +
+          utils.escapeHtml(h.lookupSource) + " — Please Verify</span></div>"
+        : "") +
       "</div>" +
       '<div class="hotel-card__actions">' +
       '<button class="btn btn-secondary btn-sm" type="button" data-action="edit-hotel" data-hotel-id="' + h.id + '">' +
@@ -210,28 +285,36 @@
     if (!box) return;
     var app = getApp();
     var hotels = (app && app.hotels) || [];
-    var usable = completeHotels(hotels);
-    var ready = usable.length > 0;
-    var skipped = hotels.filter(function (h) { return !isHotelComplete(h); });
+    var ready = hotels.length > 0;
+    var skipped = sortHotels(hotels).filter(function (h) { return !isHotelComplete(h); });
+    var sequence = sequenceProblems(hotels);
 
     var lastGenerated = hotels.reduce(function (latest, h) {
       return h.voucherGeneratedAt && (!latest || h.voucherGeneratedAt > latest) ? h.voucherGeneratedAt : latest;
     }, null);
 
     var warningIcon = '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>';
+    var infoIcon = '<svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>';
     var notice = "";
     if (!ready) {
       notice =
-        '<div class="notice notice-warning">' + warningIcon +
-        "<span>Add at least one hotel with name, city and check-in/check-out dates before generating a voucher.</span></div>";
+        // A calm hint, not an alarm: an empty list is simply where you start.
+        '<div class="notice">' + infoIcon +
+        "<span>Add at least one hotel (upload a voucher or add it manually) to generate the hotel voucher.</span></div>";
     } else if (skipped.length) {
       notice =
-        '<div class="notice notice-warning" data-hotel-skipped-notice>' + warningIcon +
-        "<span>Not included in the voucher yet (use Edit to complete): " +
+        '<div class="notice" data-hotel-skipped-notice>' + infoIcon +
+        "<span>You can generate now — every hotel is included. These details are still empty and will print as a dash until you fill them (use Edit on the hotel, or edit the preview): " +
         skipped.map(function (h) {
-          return "<strong>" + utils.escapeHtml(hotelLabel(h)) + "</strong> — missing " + missingFieldsOf(h).join(", ");
+          return "<strong>" + utils.escapeHtml(hotelLabel(h)) + "</strong> — " + missingFieldsOf(h).join(", ");
         }).join("; ") +
         ".</span></div>";
+    }
+
+    if (sequence.length) {
+      notice +=
+        '<div class="notice notice-warning" data-hotel-sequence-notice>' + warningIcon +
+        "<span>Please check the dates — " + sequence.join("; ") + ".</span></div>";
     }
 
     box.innerHTML =
@@ -241,7 +324,9 @@
       "Generate &amp; Preview Hotel Voucher</button>" +
       (lastGenerated ? '<span class="hotel-generate-bar__meta">Last generated ' + utils.formatDate(lastGenerated) + "</span>" : "") +
       "</div>" +
+      '<div data-voucher-lookup-report></div>' +
       '<div data-voucher-error></div>';
+    showDetailsReport(null);
   }
 
   function renderList() {
@@ -260,7 +345,7 @@
         "</div>";
     } else {
       var activeId = getActiveHotelId(r);
-      listEl.innerHTML = hotels.map(function (h) { return cardHtml(h, activeId); }).join("");
+      listEl.innerHTML = sortHotels(hotels).map(function (h) { return cardHtml(h, activeId); }).join("");
     }
 
     renderGenerateBar();
@@ -336,11 +421,20 @@
       patch.guestNames = result.guestNames;
     }
     // Where the address / phone / city came from, so the card can say so
-    // ("looked up", not "read from the voucher") — only set on a real hit.
+    // ("looked up", not "read from the voucher") — only set on a real hit —
+    // and whether the looked-up address agrees with the one the voucher prints.
     var lookup = result && result.lookup;
-    if (lookup && lookup.status === "ok") {
-      patch.lookupSource = lookup.source === "google_places" ? "Google" : "OpenStreetMap";
+    patch.lookupSource = "";
+    patch.addressCheck = "";
+    if (lookup && (lookup.status === "ok" || lookup.status === "address_mismatch")) {
+      patch.lookupSource = lookupSourceLabel(lookup.source);
+      patch.addressCheck = (lookup.addressCheck && lookup.addressCheck.status) || "unverified";
     }
+    if (lookup && lookup.status === "address_mismatch") {
+      patch.lookupFoundAddress = lookup.address || "";
+    }
+    patch.voucherAddress = (result && result.voucherAddress) || "";
+    patch.voucherType = (result && result.voucherTypeLabel && result.voucherType !== "unknown") ? result.voucherTypeLabel : "";
     return patch;
   }
 
@@ -353,74 +447,133 @@
   // simultaneous OCR requests at once, and so the status line can report
   // real per-file progress; a failure on one file is reported and the rest
   // still proceed (never lets one bad upload silently drop the others).
+  var batchRunning = false;
+
+  function isBlankHotel(h) {
+    return !h.source && !h.voucherFileName && !(h.hotelName || h.city || h.checkIn || h.checkOut || h.address || h.phone ||
+      h.confirmationNumber || h.leadGuestName || h.roomType || h.noOfAdults || h.noOfChildren || h.noOfRooms ||
+      (h.guestNames && h.guestNames.length));
+  }
+
   function runBatchHotelVoucherOcr(app, files, r) {
     var statusEl = utils.qs("[data-hotel-batch-upload-status]", r);
+    var uploadBtn = utils.qs("[data-action='upload-hotel-vouchers']", r);
+    if (batchRunning) {
+      if (statusEl) statusEl.textContent = "Vouchers are still being read — please wait for the current upload to finish.";
+      return;
+    }
+    batchRunning = true;
+    if (uploadBtn) uploadBtn.disabled = true;
+    // A completely empty hotel row (nothing typed, nothing uploaded) would
+    // otherwise sit above the new vouchers; remove it so the list is exactly
+    // the uploaded vouchers, in the order they were selected.
+    (app.hotels || []).filter(isBlankHotel).forEach(function (h) {
+      global.KhannaState.removeHotel(app.id, h.id);
+    });
+    // One work item per voucher PAGE, kept in upload order: a multi-page PDF
+    // contributes extra items (pages 2..n) right after its first page once the
+    // backend reports how many pages it has.
+    var queue = files.map(function (file) { return { file: file, page: 0, optional: false, label: file.name }; });
     var total = files.length;
+    var done = 0;
     var failures = []; // the OCR call itself errored (network/backend down/unreadable file)
     var noFieldsFound = []; // OCR ran fine but found nothing usable
     var extracted = 0;
     var lookedUp = 0;
     var notLookedUp = []; // hotel named on the voucher, but the online lookup found nothing
     var warned = []; // the backend flagged something to check (e.g. nights vs dates)
+    var added = 0;
 
-    function next(index) {
-      if (index >= total) {
-        renderList();
-        if (statusEl) {
-          var parts = [total + " hotel(s) added, one per voucher — review every field below (extraction is never auto-verified)."];
-          if (extracted > 0) parts.push(extracted + " had readable details filled in automatically.");
-          if (lookedUp > 0) parts.push("Address, phone and city of " + lookedUp + " hotel(s) were looked up online by hotel name — please verify them.");
-          if (notLookedUp.length) parts.push("Address / phone / city could not be looked up for: " + notLookedUp.join(", ") + " — fill them in from the voucher.");
-          warned.forEach(function (w) { parts.push(w); });
-          if (noFieldsFound.length) parts.push("No details found on: " + noFieldsFound.join(", ") + ".");
-          if (failures.length) parts.push("Could not read: " + failures.join(", ") + ".");
-          statusEl.textContent = parts.join(" ");
-        }
-        // Every hotel read OK and complete -> generate the voucher straight
-        // away, one block per uploaded voucher. Anything missing stays for the
-        // staff member to fill in first (never guessed).
-        autoPreviewIfReady(false);
+    function finish() {
+      batchRunning = false;
+      if (uploadBtn) uploadBtn.disabled = false;
+      renderList();
+      if (statusEl) {
+        var parts = [added + " hotel(s) added, one per voucher, in the order uploaded — review every field below (extraction is never auto-verified)."];
+        if (extracted > 0) parts.push(extracted + " had readable details filled in automatically.");
+        if (lookedUp > 0) parts.push("Address, phone and city of " + lookedUp + " hotel(s) were looked up online by hotel name — please verify them.");
+        if (notLookedUp.length) parts.push("Address / phone / city could not be looked up for: " + notLookedUp.join(", ") + " — fill them in from the voucher.");
+        warned.forEach(function (w) { parts.push(w); });
+        if (noFieldsFound.length) parts.push("No details found on: " + noFieldsFound.join(", ") + ".");
+        if (failures.length) parts.push("Could not read: " + failures.join(", ") + ".");
+        statusEl.textContent = parts.join(" ");
+      }
+      // Every hotel read OK and complete -> generate the voucher straight
+      // away, one block per uploaded voucher. Anything missing stays for the
+      // staff member to fill in first (never guessed).
+      autoPreviewIfReady(false);
+    }
+
+    function next() {
+      if (!queue.length) {
+        finish();
         return;
       }
-      var file = files[index];
+      var item = queue.shift();
+      var file = item.file;
+      done += 1;
       if (statusEl) {
-        statusEl.textContent = "Processing voucher " + (index + 1) + " of " + total + " (" + file.name + ")…";
+        statusEl.textContent = "Processing voucher " + done + " of " + (done + queue.length) + " (" + item.label + ")…";
       }
       // The hotel record is created up front and kept regardless of what
       // happens below — a blank, manually-fillable entry is more useful
       // than silently dropping the voucher, and the card shows the uploaded
-      // file immediately while it is being read.
+      // file immediately while it is being read. (A later page of a PDF is
+      // only kept when it turns out to be a voucher itself.)
       var hotel = global.KhannaState.addHotel(app.id);
       voucherFiles[hotel.id] = { name: file.name, type: file.type || "", url: URL.createObjectURL(file) };
       readingVoucher[hotel.id] = true;
-      global.KhannaState.updateHotel(app.id, hotel.id, { source: "voucher", voucherFileName: file.name }, null);
+      global.KhannaState.updateHotel(app.id, hotel.id, { source: "voucher", voucherFileName: item.page > 0 ? file.name + " (page " + (item.page + 1) + ")" : file.name }, null);
       renderList();
-      api.processHotelVoucher(file).then(
+      api.processHotelVoucher(file, item.page).then(
         function (result) {
           delete readingVoucher[hotel.id];
+          if (item.page === 0 && result && result.totalPages > 1) {
+            // Queue the remaining pages directly after this one so hotels stay in file order.
+            var extra = [];
+            for (var p = 1; p < result.totalPages; p++) {
+              extra.push({ file: file, page: p, optional: true, label: file.name + ", page " + (p + 1) });
+            }
+            queue = extra.concat(queue);
+          }
           var patch = ocrResultToPatch(result);
-          if (Object.keys(patch).length > 0) {
+          var isVoucherPage = !!(result && (result.voucherType !== "unknown" || (result.fields && result.fields.hotelName)));
+          if (item.optional && !isVoucherPage) {
+            // An extra PDF page that is not a voucher (terms, cancellation policy ...).
+            global.KhannaState.removeHotel(app.id, hotel.id);
+            renderList();
+            next();
+            return;
+          }
+          added += 1;
+          var hasFields = Object.keys(result.fields || {}).some(function (k) { return result.fields[k]; }) || (result.guestNames || []).length;
+          if (hasFields) {
             global.KhannaState.updateHotel(app.id, hotel.id, patch, "Hotel voucher details extracted");
             extracted += 1;
             if (patch.lookupSource) lookedUp += 1;
-            else if (result.lookup && result.lookup.status !== "skipped") notLookedUp.push(file.name);
-            (result.warnings || []).forEach(function (w) { warned.push(file.name + ": " + w); });
+            else if (result.lookup && result.lookup.status !== "skipped") notLookedUp.push(item.label);
+            (result.warnings || []).forEach(function (w) { warned.push(item.label + ": " + w); });
           } else {
-            noFieldsFound.push(file.name);
+            noFieldsFound.push(item.label);
             renderList();
           }
-          next(index + 1);
+          next();
         },
         function () {
           delete readingVoucher[hotel.id];
-          failures.push(file.name);
+          if (item.optional) {
+            global.KhannaState.removeHotel(app.id, hotel.id);
+          } else {
+            added += 1;
+            failures.push(item.label);
+          }
           renderList();
-          next(index + 1);
+          next();
         }
       );
     }
 
-    next(0);
+    next();
   }
 
   function openPanel(hotelId, r) {
@@ -488,7 +641,7 @@
     var app = getApp();
     if (!app) return false;
     var hotels = app.hotels || [];
-    return hotels.length > 0 && hotels.every(isHotelComplete);
+    return hotels.length > 0;
   }
 
   function showVoucherError(message) {
@@ -548,6 +701,7 @@
     var previewBox = utils.qs("[data-voucher-preview]", r);
     if (!previewBox) return null;
     var editor = global.KhannaPreviewEditor.create({
+      cellUnits: true, // every value is a table cell: edits never move into the next cell
       getHotels: function () {
         var a = getApp();
         return (a && a.hotels) || [];
@@ -569,7 +723,7 @@
         var a = getApp();
         var hotels = completeHotels(a.hotels);
         if (!hotels.length) {
-          return Promise.reject(new Error("Add at least one hotel with name, city and check-in/check-out dates first."));
+          return Promise.reject(new Error("Add at least one hotel first."));
         }
         return api.previewHotelVoucher(hotels, applicantNameOf(a)).then(function (res) {
           res.hotelIds = hotels.map(function (h) { return h.id; });
@@ -594,6 +748,82 @@
   // DOCX/PDF both come from the shared viewer. `btn` is optional (the
   // automatic previews after an upload / from Recent Hotel Blockings have no
   // button click behind them).
+  // Hotels whose name has already been looked up this session, so a hotel the
+  // internet does not know is not searched again on every Regenerate.
+  var detailsLookedUp = {};
+
+  function isMissingDetails(h) {
+    return !h.address || !h.phone || !h.city || !h.country;
+  }
+
+  // Fills a hotel's BLANK address / phone / city / country from the internet
+  // (Google Places when the backend has a key) before the voucher is made.
+  // Details already on the hotel are never replaced. Resolves with a short
+  // report for the page; a failed lookup never stops the voucher.
+  function completeMissingDetails(app) {
+    var todo = ((app && app.hotels) || []).filter(function (h) {
+      return (h.hotelName || "").trim().length >= 3 && isMissingDetails(h) && !detailsLookedUp[h.id + "|" + h.hotelName];
+    });
+    if (!todo.length) return Promise.resolve({ filled: [], notFound: [] });
+    todo.forEach(function (h) { detailsLookedUp[h.id + "|" + h.hotelName] = true; });
+    var payload = todo.map(function (h) {
+      return {
+        id: h.id, hotelName: h.hotelName, address: h.address || "", phone: h.phone || "", city: h.city || "", country: h.country || "",
+        // a voucher-read name that was never looked up: the listing's own name wins
+        useListingName: h.source === "voucher" && !h.lookupSource,
+      };
+    });
+    return api.completeHotelDetails(payload).then(function (res) {
+      var filled = [];
+      var notFound = [];
+      (res.results || []).forEach(function (r) {
+        var h = todo.filter(function (x) { return x.id === r.id; })[0];
+        if (!h) return;
+        var patch = {};
+        Object.keys(r.fields || {}).forEach(function (k) { patch[k] = r.fields[k]; });
+        if (r.hotelName) {
+          patch.hotelName = r.hotelName;
+          patch.voucherHotelName = r.voucherHotelName || h.hotelName;
+        }
+        if (Object.keys(patch).length) {
+          patch.lookupSource = lookupSourceLabel(r.source);
+          patch.addressCheck = h.addressCheck || "unverified";
+          global.KhannaState.updateHotel(app.id, h.id, patch, "Hotel details looked up online");
+          filled.push({ name: patch.hotelName || h.hotelName, fields: r.filled || [], source: patch.lookupSource });
+        } else if (r.status !== "skipped") {
+          notFound.push(h.hotelName);
+        }
+      });
+      return { filled: filled, notFound: notFound };
+    }).catch(function () { return { filled: [], notFound: [] }; });
+  }
+
+  var lastDetailsReport = null; // {appId, report}: kept so re-drawing the bar does not lose it
+
+  function showDetailsReport(report) {
+    var app = getApp();
+    if (report) lastDetailsReport = { appId: app && app.id, report: report };
+    else if (lastDetailsReport && app && lastDetailsReport.appId === app.id) report = lastDetailsReport.report;
+    if (!report) return;
+    var r = root();
+    var box = r && utils.qs("[data-voucher-lookup-report]", r);
+    if (!box) return;
+    var parts = [];
+    report.filled.forEach(function (f) {
+      parts.push("<strong>" + utils.escapeHtml(f.name) + "</strong>: " + f.fields.join(", ") + " from " + utils.escapeHtml(f.source));
+    });
+    var html = "";
+    if (parts.length) {
+      html += '<div class="notice" data-hotel-lookup-filled><svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span>Blank details were filled in from the internet — Please Verify: ' + parts.join("; ") + ".</span></div>";
+    }
+    if (report.notFound.length) {
+      html += '<div class="notice notice-warning" data-hotel-lookup-missing><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg><span>No online details found for ' +
+        report.notFound.map(function (n) { return "<strong>" + utils.escapeHtml(n) + "</strong>"; }).join(", ") +
+        ". Add them with Edit on the hotel, or edit the preview.</span></div>";
+    }
+    box.innerHTML = html;
+  }
+
   function generateAndPreview(btn) {
     var app = getApp();
     if (!app) return Promise.resolve();
@@ -608,8 +838,12 @@
       btn.disabled = true;
       btn.textContent = "Generating…";
     }
-    return handle
-      .refresh()
+    return completeMissingDetails(app)
+      .then(function (report) {
+        if (report.filled.length) renderList();
+        showDetailsReport(report.filled.length || report.notFound.length ? report : null);
+        return handle.refresh();
+      })
       .catch(function (err) {
         showVoucherError(err && err.message ? err.message : "Could not generate the hotel voucher.");
       })
@@ -884,6 +1118,11 @@
     },
     isHotelComplete: isHotelComplete,
     completeHotels: completeHotels,
+    sortHotels: sortHotels,
+    sequenceProblems: sequenceProblems,
+    // Used by the Upload Documents page to read a voucher the same way the
+    // Hotel Blocking page does (project rule 15: one mapping, not two).
+    ocrResultToPatch: ocrResultToPatch,
   };
 
   if (document.readyState === "loading") {

@@ -18,8 +18,9 @@
     "new-application",
     "admin",
     "auth",
+    // One page for "Profile" and "Settings" (the old #/settings address
+    // still works: parseHash() maps it here).
     "profile",
-    "settings",
     // Document-first redesign (Phase 1): six standalone document workspaces
     // plus the passport-upload entry point. Each is a plain top-level view
     // like "dashboard"/"admin" above — setActiveView()'s existing generic
@@ -36,6 +37,9 @@
     "checklist-letter",
     "invitation-letter",
     "upload-passport",
+    // Document sorter: passports + hotel vouchers of one traveller or a group,
+    // sorted around the main applicant and turned into documents.
+    "upload-documents",
     // "Recent Passports" list (reached from the Upload Passport page).
     "passport-applications",
   ];
@@ -86,6 +90,7 @@
   function parseHash() {
     var raw = (location.hash || "").replace(/^#\/?/, "");
     var parts = raw.split("/").filter(Boolean);
+    if (parts[0] === "settings") parts[0] = "profile";
     var view = VALID_VIEWS.indexOf(parts[0]) !== -1 ? parts[0] : DEFAULT_VIEW;
     var mode = parts[1] === "preview" && PREVIEW_VIEWS.indexOf(view) !== -1 ? "preview" : null;
     var step = parts[1] && !mode ? parseInt(parts[1], 10) : null;

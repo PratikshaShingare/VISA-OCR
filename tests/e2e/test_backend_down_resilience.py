@@ -84,6 +84,17 @@ async def _expect_honest_failure_in_viewer(page, generate_selector: str, preview
     checks.check(f"{generate_selector}: button text reverted to its normal label (not stuck on 'Generating…')", btn_text_after == original_text, btn_text_after)
 
 
+async def _seed_session(page, email, name, role):
+    await page.evaluate(
+        """([email, name, role]) => {
+            localStorage.setItem('khanna_session_v1', JSON.stringify({ email, name, role, token: 'session-from-before-backend-went-down' }));
+        }""",
+        [email, name, role],
+    )
+    await page.reload()
+    await page.wait_for_timeout(500)
+
+
 async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -91,12 +102,11 @@ async def main():
         await page.goto(BASE + "/index.html")
         await page.evaluate("localStorage.clear()")
         await page.reload()
-        await page.evaluate("location.hash = '#/auth'")
-        await page.wait_for_timeout(200)
-        await page.fill("[data-login-form] input[type='email']", STAFF_EMAIL)
-        await page.fill("[data-login-form] input[type='password']", STAFF_PASSWORD)
-        await page.click("[data-login-form] button[type='submit']")
-        await page.wait_for_timeout(300)
+        # Logging in needs the backend (accounts live there), and this script
+        # runs with the backend deliberately down — so start from a session
+        # that was "already signed in" before the backend went away. The app
+        # must keep such a session (only a definite 401 ends it).
+        await _seed_session(page, STAFF_EMAIL, "Staff", "staff")
         # Frontend rework, section 2: the header's "New Application"
         # dropdown is now the only entry point (Dashboard's own duplicate
         # button was removed) — see start_guided_wizard_application() in
@@ -197,14 +207,9 @@ async def main():
         await page.wait_for_timeout(100)
         await page.click("[data-action='logout']")
         await page.wait_for_timeout(200)
-        await page.evaluate("location.hash = '#/auth'")
-        await page.wait_for_timeout(200)
-        from _common import ADMIN_EMAIL, ADMIN_PASSWORD
+        from _common import ADMIN_EMAIL
 
-        await page.fill("[data-login-form] input[type='email']", ADMIN_EMAIL)
-        await page.fill("[data-login-form] input[type='password']", ADMIN_PASSWORD)
-        await page.click("[data-login-form] button[type='submit']")
-        await page.wait_for_timeout(300)
+        await _seed_session(page, ADMIN_EMAIL, "Admin", "admin")
         await page.evaluate("location.hash = '#/admin'")
         await page.wait_for_timeout(400)
         await _expect_honest_failure(

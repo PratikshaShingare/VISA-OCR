@@ -131,9 +131,22 @@
       });
   }
 
+  // `options.timeoutMs` (optional) gives up on a request the server accepted
+  // but never answers (a stuck or restarting backend), so the screen shows a
+  // message instead of spinning forever. Long jobs (OCR) don't set it.
   function request(url, options) {
-    return fetch(url, options).then(
+    var timeoutMs = options && options.timeoutMs;
+    var fetchOptions = options;
+    var timer = null;
+    if (timeoutMs && typeof AbortController !== "undefined") {
+      var controller = new AbortController();
+      fetchOptions = Object.assign({}, options, { signal: controller.signal });
+      delete fetchOptions.timeoutMs;
+      timer = setTimeout(function () { controller.abort(); }, timeoutMs);
+    }
+    return fetch(url, fetchOptions).then(
       function (res) {
+        if (timer) clearTimeout(timer);
         if (!res.ok) {
           return parseErrorResponse(res).then(function (err) {
             throw err;
@@ -141,7 +154,16 @@
         }
         return res.json();
       },
-      function () {
+      function (fetchErr) {
+        if (timer) clearTimeout(timer);
+        if (fetchErr && fetchErr.name === "AbortError") {
+          var slow = new Error(
+            "The backend did not answer in time. Close the \"Start Backend\" window, start it again, " +
+            "wait for it to say it is running, then try again."
+          );
+          slow.isBackendUnreachable = true;
+          throw slow;
+        }
         // fetch() itself rejected: network error, refused connection, CORS —
         // in this app's setup that almost always means the local server
         // simply isn't running.
@@ -168,6 +190,61 @@
       }
       return body;
     });
+  }
+
+  /* ---------------------------------------------------------------------
+   * Accounts (backend/python/auth_service.py) — login, own profile, and the
+   * admin-only staff list. Everything except login sends the session token
+   * as "Authorization: Bearer <token>"; the backend decides what the token
+   * may do. A 401 on one of those calls means the session ended (expired,
+   * password changed elsewhere, account removed), so the app signs out.
+   * ------------------------------------------------------------------- */
+  function authedJson(method, path, body) {
+    var token = global.KhannaAuth ? global.KhannaAuth.getToken() : null;
+    var headers = {};
+    if (token) headers.Authorization = "Bearer " + token;
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    return request(API_BASE_URL + path, {
+      method: method,
+      headers: headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }).catch(function (err) {
+      if (err && err.status === 401 && token && global.KhannaAuth) global.KhannaAuth.sessionEnded();
+      throw err;
+    });
+  }
+
+  function login(email, password) {
+    return request(API_BASE_URL + "/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email, password: password }),
+      timeoutMs: 20000,
+    });
+  }
+  function logoutOnServer() {
+    return authedJson("POST", "/api/auth/logout", {});
+  }
+  function getMe() {
+    return authedJson("GET", "/api/auth/me");
+  }
+  function updateMyName(name) {
+    return authedJson("PATCH", "/api/auth/profile", { name: name });
+  }
+  function changeMyPassword(currentPassword, newPassword) {
+    return authedJson("POST", "/api/auth/change-password", { currentPassword: currentPassword, newPassword: newPassword });
+  }
+  function listStaff() {
+    return authedJson("GET", "/api/admin/staff");
+  }
+  function createStaff(name, email, password) {
+    return authedJson("POST", "/api/admin/staff", { name: name, email: email, password: password, role: "staff" });
+  }
+  function resetStaffPassword(email, newPassword) {
+    return authedJson("POST", "/api/admin/staff/reset-password", { email: email, newPassword: newPassword });
+  }
+  function removeStaff(email) {
+    return authedJson("POST", "/api/admin/staff/remove", { email: email });
   }
 
   function getPageCount(file) {
@@ -344,6 +421,20 @@
    * @returns {Promise<{fields: Array<Object>}>} one {fieldKey: html} dict
    *   per hotel, same order as `hotels`.
    */
+  /**
+   * Looks each named hotel up online and returns the details still BLANK on it
+   * (address, phone, city, country) — see hotel_voucher_ocr.complete_hotel_details.
+   * @param {Array<{id,hotelName,address,phone,city,country,useListingName}>} hotels
+   * @returns {Promise<{results: Array}>}
+   */
+  function completeHotelDetails(hotels) {
+    return request(API_BASE_URL + "/api/documents/hotel-voucher/complete-details", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hotels: hotels }),
+    });
+  }
+
   function composeHotelFields(hotels) {
     return request(API_BASE_URL + "/api/documents/hotel-voucher/compose-fields", {
       method: "POST",
@@ -353,9 +444,9 @@
   }
 
   /**
-   * Generates the Passport Authorization Letter (Phase 8) for 1-2
-   * travellers — the backend enforces that limit itself (it matches the
-   * two real reference templates on file), this is just the request shape.
+   * Generates the Passport Authorization Letter (Phase 8) for one or more
+   * travellers (one or two use the two reference templates unchanged), this
+   * is just the request shape.
    * @param {Object} payload { people, recipientCentreName, recipientAddress, collectorName, dateOverride, format, applicantName }
    */
   function downloadPassportAuthorization(payload) {
@@ -381,10 +472,9 @@
 
   /**
    * Generates a Cover Letter (Phase 9) — Europe/Japan/Singapore, discriminated
-   * by `payload.region`. The backend itself enforces each region's real
-   * person-count limit (Europe/Japan: applicant + exactly 1 companion;
-   * Singapore: applicant alone or + any number), matching what each
-   * region's own reference template's fixed wording actually supports.
+   * by `payload.region`. Any number of people can be listed in every region
+   * (the backend writes the single-companion wording of each reference
+   * template unchanged and extends it for several).
    * @param {Object} payload { region, people, recipientText, destinationCountry,
    *   travelStartDate, travelEndDate, fundingArrangement, dateOverride, format,
    *   applicantName, ...region-specific fields (see backend/python/app.py) }
@@ -497,10 +587,9 @@
   }
 
   /**
-   * Generates the Invitation Letter (Phase 10) for exactly 2 invitees,
-   * with an optional staff-uploaded signature image. The backend enforces
-   * the 2-invitee limit itself (it matches the real reference template's
-   * own fixed "my Parents" wording).
+   * Generates the Invitation Letter (Phase 10) for one or more invitees,
+   * with an optional staff-uploaded signature image. The backend adapts the
+   * template's wording to the number of invitees.
    * @param {Object} payload { inviter, invitees, travelStartDate, travelEndDate,
    *   purpose, accommodationDetails, returnDate, fundingArrangement, dateOverride,
    *   format, applicantName }
@@ -693,12 +782,22 @@
     API_BASE_URL: API_BASE_URL,
     previewWithLayout: previewWithLayout,
     checkHealth: checkHealth,
+    login: login,
+    logoutOnServer: logoutOnServer,
+    getMe: getMe,
+    updateMyName: updateMyName,
+    changeMyPassword: changeMyPassword,
+    listStaff: listStaff,
+    createStaff: createStaff,
+    resetStaffPassword: resetStaffPassword,
+    removeStaff: removeStaff,
     getPageCount: getPageCount,
     processPassport: processPassport,
     processPassportOpenRouter: processPassportOpenRouter,
     previewConvertToPdf: previewConvertToPdf,
     downloadHotelVoucher: downloadHotelVoucher,
     composeHotelFields: composeHotelFields,
+    completeHotelDetails: completeHotelDetails,
     previewHotelVoucher: previewHotelVoucher,
     processHotelVoucher: processHotelVoucher,
     downloadPassportAuthorization: downloadPassportAuthorization,

@@ -24,6 +24,12 @@
    dependency for a Vercel deployment and keeps this working with no
    network egress at all).
 
+   Fallback: when the PDF cannot be made (HTTP 5xx from the conversion step,
+   e.g. LibreOffice not installed) and the module supplies loadDocx, the
+   generated .docx is shown with docx-preview (assets/vendor/docx-preview/)
+   instead of an empty preview; Download as Docx keeps working and Download
+   as PDF is disabled with an honest reason.
+
    Usage (see any of hotels.js/authorization.js/cover-letter.js/
    invitation.js/checklist-letter.js for a real caller):
 
@@ -70,6 +76,43 @@
       document.head.appendChild(script);
     });
     return PDFJS_READY;
+  }
+
+  // docx-preview (Apache-2.0) + JSZip (MIT), vendored locally like pdf.js —
+  // no CDN, no external service. Used ONLY as a fallback: when the PDF cannot
+  // be made (for example LibreOffice is not installed on the machine running
+  // the backend) the generated Word document is shown in the same viewer so
+  // Preview still works and "Download as Docx" is unaffected. The PDF stays
+  // the preferred preview whenever it can be made — it is the exact file that
+  // "Download as PDF" hands over, while this is a browser rendering of the .docx.
+  var DOCX_VENDOR_DIR = "assets/vendor/docx-preview/";
+  var DOCX_READY = null;
+
+  function loadScriptOnce(src) {
+    return new Promise(function (resolve, reject) {
+      var script = document.createElement("script");
+      script.src = src;
+      script.onload = function () { resolve(); };
+      script.onerror = function () { reject(new Error("Could not load " + src)); };
+      document.head.appendChild(script);
+    });
+  }
+
+  function ensureDocxPreview() {
+    if (DOCX_READY) return DOCX_READY;
+    var ready = global.docx && global.docx.renderAsync
+      ? Promise.resolve(global.docx)
+      : (global.JSZip ? Promise.resolve() : loadScriptOnce(DOCX_VENDOR_DIR + "jszip.min.js"))
+          .then(function () { return loadScriptOnce(DOCX_VENDOR_DIR + "docx-preview.min.js"); })
+          .then(function () {
+            if (!global.docx || !global.docx.renderAsync) throw new Error("The Word viewer library did not start.");
+            return global.docx;
+          });
+    DOCX_READY = ready.catch(function (err) {
+      DOCX_READY = null; // allow a later retry
+      throw err;
+    });
+    return DOCX_READY;
   }
 
   var ZOOM_STEPS = [0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
@@ -137,12 +180,17 @@
       "</button>" +
       "</div>" +
       "</div>" +
+      '<div class="doc-viewer__note" data-dv="note" role="status" hidden></div>' +
       '<div class="doc-viewer__body" data-dv="body">' +
       '<div class="doc-viewer__status" data-dv="status">Generating document…</div>' +
       '<div class="doc-viewer__page" data-dv="page" hidden>' +
       '<canvas class="doc-viewer__canvas" data-dv="canvas" hidden></canvas>' +
-      '<div class="doc-viewer__overlay" data-dv="overlay"></div>' +
       "</div>" +
+      // The whole letter as one continuous, editable page — shown instead of
+      // the PDF page while Edit is on (js/preview-editor.js fills it).
+      '<div class="doc-viewer__letter" data-dv="letter" hidden></div>' +
+      // Fallback only: the Word document rendered by docx-preview.
+      '<div class="doc-viewer__docx" data-dv="docx" hidden></div>' +
       "</div>" +
       '<div class="doc-viewer__actions">' +
       '<div class="doc-viewer__actions-left" data-dv="meta"></div>' +
@@ -185,7 +233,10 @@
     this.statusEl = this.el.querySelector("[data-dv='status']");
     this.canvasEl = this.el.querySelector("[data-dv='canvas']");
     this.pageEl = this.el.querySelector("[data-dv='page']");
-    this.overlayEl = this.el.querySelector("[data-dv='overlay']");
+    this.letterEl = this.el.querySelector("[data-dv='letter']");
+    this.docxHostEl = this.el.querySelector("[data-dv='docx']");
+    this.noteEl = this.el.querySelector("[data-dv='note']");
+    this.wordMode = false; // true while the Word (docx-preview) fallback is what is shown
     this.formatToolsEl = this.el.querySelector("[data-dv='format-tools']");
     this.editBtn = this.el.querySelector("[data-dv='edit-toggle']");
     this.editLabelEl = this.el.querySelector("[data-dv-label]");
@@ -262,12 +313,14 @@
         case "prev-page":
           if (self.currentPage > 1) {
             self.currentPage -= 1;
+            self._wordJump = true;
             self._renderCurrentPage();
           }
           break;
         case "next-page":
           if (self.currentPage < self.numPages) {
             self.currentPage += 1;
+            self._wordJump = true;
             self._renderCurrentPage();
           }
           break;
@@ -325,6 +378,7 @@
     this.statusEl.classList.toggle("doc-viewer__status--warning", level === "warning");
     this.canvasEl.hidden = !!message;
     this.pageEl.hidden = !!message;
+    if (this.docxHostEl) this.docxHostEl.hidden = true;
   };
 
   // Root-cause fix: PDF conversion can genuinely be unavailable in an
@@ -353,7 +407,7 @@
   DocumentViewerInstance.prototype._updatePdfButtonAvailability = function () {
     if (!this.pdfBtn) return;
     this.pdfBtn.disabled = !this.pdfBlob;
-    this.pdfBtn.title = this.pdfBlob ? "" : "PDF preview is currently unavailable — see the message above.";
+    this.pdfBtn.title = this.pdfBlob ? "" : "PDF is currently unavailable — see the message above.";
   };
 
   DocumentViewerInstance.prototype.refresh = function () {
@@ -361,6 +415,7 @@
     var token = ++this._renderToken;
     this._loading = true; // keeps Edit mode on across a regeneration
     this._setStatus("Generating document…", false);
+    this._leaveWordMode();
     this.docxBlob = null;
     this.pdfBlob = null;
     this._updatePdfButtonAvailability();
@@ -407,16 +462,110 @@
         self._loading = false;
         self._updatePdfButtonAvailability();
         self._syncEditUi();
-        self._setPdfUnavailable((err && err.message ? err.message : "Unknown error.").replace(/\.?$/, "."));
+        var reason = (err && err.message ? err.message : "Unknown error.").replace(/\.?$/, ".");
+        // The PDF could not be made (server-side conversion problem) but the
+        // Word file may still be: show it instead of an empty preview. A
+        // validation problem (HTTP 4xx) or an unreachable backend would fail
+        // the Word request too, so those keep the plain message.
+        var worthTrying = typeof self.options.loadDocx === "function" && !(err && (err.isBackendUnreachable || (err.status && err.status < 500)));
+        if (!worthTrying) {
+          self._setPdfUnavailable(reason);
+          return;
+        }
+        return self._showWordFallback(reason, token).catch(function () {
+          if (token !== self._renderToken || self.destroyed) return;
+          self._setPdfUnavailable(reason);
+        });
       });
+  };
+
+  // ---- Word (docx-preview) fallback ----------------------------------------
+  DocumentViewerInstance.prototype._leaveWordMode = function () {
+    this.wordMode = false;
+    if (this.docxHostEl) {
+      this.docxHostEl.hidden = true;
+      this.docxHostEl.innerHTML = "";
+    }
+    if (this.noteEl) {
+      this.noteEl.hidden = true;
+      this.noteEl.textContent = "";
+    }
+  };
+
+  DocumentViewerInstance.prototype._showWordFallback = function (reason, token) {
+    var self = this;
+    return Promise.all([ensureDocxPreview(), this.options.loadDocx()]).then(function (results) {
+      if (token !== self._renderToken || self.destroyed) return;
+      var docxLib = results[0];
+      var file = results[1];
+      self.docxBlob = file.blob;
+      self.docxFilename = file.filename || "document.docx";
+      self.docxHostEl.innerHTML = "";
+      return docxLib
+        .renderAsync(self.docxBlob, self.docxHostEl, null, {
+          className: "docx",
+          inWrapper: true,
+          breakPages: true,
+          renderHeaders: true,
+          renderFooters: true,
+          renderFootnotes: true,
+          renderEndnotes: true,
+          ignoreLastRenderedPageBreak: true,
+          useBase64URL: true, // images inline: nothing to revoke, nothing fetched
+        })
+        .then(function () {
+          if (token !== self._renderToken || self.destroyed) return;
+          var pages = self.docxHostEl.querySelectorAll("section.docx");
+          if (!pages.length) throw new Error("The Word document had no pages to show.");
+          self.wordMode = true;
+          self.numPages = pages.length;
+          self.currentPage = 1;
+          self.fitMode = true;
+          self._setStatus("", false);
+          self.docxHostEl.hidden = false;
+          self.noteEl.hidden = false;
+          self.noteEl.textContent =
+            "Showing the Word version of this document because the PDF could not be made (" + reason.replace(/\.$/, "") +
+            "). Spacing may differ slightly from the final PDF. Download as Docx works as normal.";
+          self._updatePdfButtonAvailability();
+          self._syncEditUi();
+          self._updateMeta();
+          return self._renderCurrentPage();
+        });
+    });
+  };
+
+  // Fit / zoom / page-jump for the Word view (CSS zoom on the rendered pages).
+  DocumentViewerInstance.prototype._renderWordPage = function () {
+    var host = this.docxHostEl;
+    var pages = host.querySelectorAll("section.docx");
+    if (!pages.length) return Promise.resolve();
+    var wrapper = host.querySelector(".docx-wrapper") || host;
+    wrapper.style.zoom = "1";
+    if (this.fitMode) {
+      var pageWidth = pages[0].getBoundingClientRect().width || 794;
+      var avail = Math.max(200, this.bodyEl.clientWidth - 32);
+      this.scale = Math.max(0.25, Math.min(3, avail / pageWidth));
+    }
+    wrapper.style.zoom = String(this.scale);
+    this.numPages = pages.length;
+    this.currentPage = Math.max(1, Math.min(this.numPages, this.currentPage));
+    this.pageLabelEl.textContent = "Page " + this.currentPage + " of " + this.numPages;
+    this.zoomLabelEl.textContent = Math.round(this.scale * 100) + "%";
+    var target = pages[this.currentPage - 1];
+    if (this._wordJump && target) {
+      this.bodyEl.scrollTop = Math.max(0, target.offsetTop * this.scale - 8);
+    }
+    this._wordJump = false;
+    return Promise.resolve();
   };
 
   DocumentViewerInstance.prototype._updateMeta = function () {
     var hint = "";
     if (this.editor && this.editor.hasLayout()) {
       hint = this.editing
-        ? " · Click anywhere on the page's text to edit it — the whole letter is editable. Turn Edit off to see the finished page."
-        : " · Press Edit to change the wording right on the page.";
+        ? " · Edit the whole letter like a Word document — click anywhere, select, delete or add lines. Press Done editing to see the finished page."
+        : " · Press Edit to change any part of the letter.";
     }
     var edited = this.editor && this.editor.editedCount ? this.editor.editedCount() : 0;
     var lost = this.editor && this.editor.unmatchedCount ? this.editor.unmatchedCount() : 0;
@@ -435,16 +584,21 @@
     }
     btn.hidden = false;
     var ready = !!(this.editor && this.pdfBlob && this.editor.hasLayout());
-    if (!ready && this.editing && !this._loading) this.editing = false;
+    if (!ready && this.editing && !this._loading) {
+      this.editing = false;
+      if (this.editor) this.editor.closeLetter();
+    }
     btn.disabled = !ready;
-    if (ready) btn.title = this.editing ? "Stop editing and show the finished page" : "Edit the wording directly on the page";
+    if (ready) btn.title = this.editing ? "Stop editing and show the finished page" : "Edit the whole letter like a Word document";
     else if (!this.editor) btn.title = reason;
+    else if (this.wordMode) btn.title = "Editing needs the PDF page layout, which is not available right now. The Word file can be downloaded and edited in Word.";
     else if (!this.pdfBlob) btn.title = "Press Preview first — editing works on the generated page.";
     else btn.title = this.options.editLayoutError || "Editing is not available for this preview right now.";
     btn.setAttribute("aria-pressed", this.editing ? "true" : "false");
     btn.classList.toggle("is-on", this.editing);
     this.editLabelEl.textContent = this.editing ? "Done editing" : "Edit";
     this.el.classList.toggle("is-editing", this.editing);
+    this.letterEl.hidden = !this.editing;
     if (this.editor) this.formatToolsEl.hidden = !this.editing;
   };
 
@@ -458,6 +612,8 @@
     if (wasEditing) this.editor.commit();
     this.editing = on;
     this._syncEditUi();
+    if (on) this.editor.openLetter(this.letterEl);
+    else this.editor.closeLetter();
     this._updateMeta();
     if (wasEditing && !on && this.editor.isDirty()) return this.refresh();
     return Promise.resolve();
@@ -465,6 +621,7 @@
 
   DocumentViewerInstance.prototype._renderCurrentPage = function () {
     var self = this;
+    if (this.wordMode) return this._renderWordPage();
     if (!this.pdfDoc) return Promise.resolve();
     var token = this._renderToken;
     return this.pdfDoc.getPage(this.currentPage).then(function (page) {
@@ -494,23 +651,12 @@
       canvas.style.height = viewport.height / (global.devicePixelRatio || 1) + "px";
       canvas.hidden = false;
       self.pageEl.hidden = false;
-      self.overlayEl.innerHTML = "";
       var ctx = canvas.getContext("2d");
       var renderTask = page.render({ canvasContext: ctx, viewport: viewport });
       self.pageLabelEl.textContent = "Page " + self.currentPage + " of " + self.numPages;
       self.zoomLabelEl.textContent = Math.round(self.scale * 100) + "%";
       return renderTask.promise.then(function () {
         if (token !== self._renderToken || self.destroyed) return;
-        if (self.editor) {
-          self.editor.onPageRendered({
-            viewer: self,
-            overlayEl: self.overlayEl,
-            canvasEl: canvas,
-            scale: self.scale,
-            pageNumber: self.currentPage,
-            result: self.lastResult,
-          });
-        }
       });
     });
   };
@@ -531,6 +677,7 @@
   // is opened. Falls back to opening the PDF in a new tab if even that fails.
   DocumentViewerInstance.prototype._print = function () {
     var self = this;
+    if (this.wordMode) return this._printWord();
     return this._freshen().then(function () {
       if (!self.pdfBlob || !self.pdfDoc) return;
       var doc = self.pdfDoc;
@@ -581,6 +728,31 @@
         iframe.srcdoc = html;
       });
     });
+  };
+
+  // Word view: print the rendered pages from a hidden iframe (A4, no margins).
+  DocumentViewerInstance.prototype._printWord = function () {
+    var self = this;
+    var iframe = document.createElement("iframe");
+    iframe.setAttribute("aria-hidden", "true");
+    iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
+    var wrapper = this.docxHostEl.querySelector(".docx-wrapper") || this.docxHostEl;
+    iframe.onload = function () {
+      try {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      } catch (e) { /* the browser refused to print; the Word file can still be downloaded */ }
+      setTimeout(function () { iframe.remove(); }, 60000);
+    };
+    iframe.srcdoc =
+      "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + utils.escapeHtml(self.docxFilename || "Document") + "</title><style>" +
+      "@page{size:A4;margin:0}html,body{margin:0;padding:0;background:#fff}" +
+      ".docx-wrapper{padding:0!important;background:none!important;display:block!important}" +
+      "section.docx{box-shadow:none!important;margin:0!important;page-break-after:always;break-after:page}" +
+      "section.docx:last-child{page-break-after:auto;break-after:auto}" +
+      "</style></head><body>" + wrapper.outerHTML + "</body></html>";
+    document.body.appendChild(iframe);
+    return Promise.resolve();
   };
 
   DocumentViewerInstance.prototype._toggleFullscreen = function () {

@@ -9,7 +9,7 @@ Covers (static server only; nothing here generates):
   - Passport list (saved applications + saved profiles); picking a person
     copies them onto the active application as a traveller (source
     untouched) and ticks them.
-  - Passport Authorization takes at most 2 people; a third pick is refused.
+  - Both letters take any number of people; a third pick is accepted.
   - Company Authorization takes any number; picking clears positional edits.
   - Already-selected picks are reported, not duplicated.
   - 375px: no horizontal overflow; no console errors.
@@ -100,10 +100,7 @@ async def main():
             await pick(page, card, group, "P3333333")
             ticked = await card.locator(f"[data-auth-person='{group}']:checked").count()
             status = await card.locator("[data-auth-existing-status]").inner_text()
-            if max_people:
-                checks.check(f"{group}: a third person is refused (max 2)", ticked == 2 and "1 or 2" in status, f"{ticked} {status}")
-            else:
-                checks.check(f"{group}: any number of people can be added", ticked == 3, str(ticked))
+            checks.check(f"{group}: any number of people can be added", ticked == 3, str(ticked))
             src_name = await page.evaluate(f"KhannaState.getApplication('{ids['a']}').applicant.fullName")
             checks.check(f"{group}: the source application is untouched", src_name == "Rahul Sharma")
 

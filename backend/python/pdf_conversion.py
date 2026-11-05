@@ -134,11 +134,86 @@ def convert_via_word(docx_bytes: bytes, base_name: str = "document") -> bytes:
             raise PdfConversionError("PowerShell was not found, so Microsoft Word cannot be used for PDF export.")
         except subprocess.TimeoutExpired:
             raise PdfConversionError("PDF conversion with Microsoft Word timed out.")
-        if result.returncode != 0 or not os.path.isfile(pdf_path):
-            detail = (result.stderr or result.stdout or "unknown error").strip()[:400]
+        if returncode != 0 or not os.path.isfile(pdf_path):
+            detail = (stderr or stdout or "unknown error").strip()[:400]
             raise PdfConversionError(f"PDF conversion with Microsoft Word failed: {detail}")
         with open(pdf_path, "rb") as f:
             return f.read()
+
+
+# ---------------------------------------------------------------------------
+# Bounded, self-cleaning LibreOffice runs
+# ---------------------------------------------------------------------------
+# Many staff can press "Generate" at the same moment. Every conversion starts
+# its own LibreOffice process (soffice.bin plus helpers, ~200-400 MB each), so
+# an unbounded number at once can exhaust the machine's memory and make every
+# one of them fail. A small semaphore lets at most KHANNA_MAX_PARALLEL_PDF run
+# at the same time; the rest wait their turn in a queue (nothing is refused and
+# there is no limit on how many documents can be made — they simply line up).
+# The 60 s conversion timeout only counts once a conversion has started.
+
+_QUEUE_WAIT_SECONDS = 180  # longest a request waits for a free slot before a clear "busy" error
+_CONVERSION_TIMEOUT_SECONDS = 60
+
+
+def _max_parallel_conversions() -> int:
+    raw = os.environ.get("KHANNA_MAX_PARALLEL_PDF", "").strip()
+    if raw.isdigit() and int(raw) >= 1:
+        return int(raw)
+    return max(1, min(4, os.cpu_count() or 2))
+
+
+_conversion_slots = threading.BoundedSemaphore(_max_parallel_conversions())
+
+
+def _kill_process_tree(proc: "subprocess.Popen") -> None:
+    """Stops LibreOffice AND every helper process it started. On timeout
+    subprocess.run() only kills the launcher ('soffice'), leaving 'soffice.bin'
+    running (and holding memory and its profile folder) after the request is over."""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True, timeout=15,
+            )
+        else:
+            import signal
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _run_libreoffice(command: list, timeout: int = _CONVERSION_TIMEOUT_SECONDS):
+    """Runs one LibreOffice command with the concurrency cap, in its own process
+    group, killing the whole group on timeout. Returns (returncode, stdout, stderr).
+    Raises FileNotFoundError (not installed) or PdfConversionError (busy/timeout)."""
+    if not _conversion_slots.acquire(timeout=_QUEUE_WAIT_SECONDS):
+        raise PdfConversionError(
+            "The PDF converter is busy with other documents right now. Please try again in a moment."
+        )
+    try:
+        popen_kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            popen_kwargs["start_new_session"] = True  # own process group, so it can be killed as one
+        proc = subprocess.Popen(command, **popen_kwargs)
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_process_tree(proc)
+            try:
+                proc.communicate(timeout=10)
+            except Exception:
+                pass
+            raise PdfConversionError("PDF conversion timed out.")
+        return proc.returncode, out, err
+    finally:
+        _conversion_slots.release()
 
 
 def convert_via_local_libreoffice(docx_bytes: bytes, base_name: str = "document") -> bytes:
@@ -172,7 +247,7 @@ def convert_via_local_libreoffice(docx_bytes: bytes, base_name: str = "document"
         soffice = _find_soffice() or "soffice"
 
         try:
-            result = subprocess.run(
+            returncode, stdout, stderr = _run_libreoffice(
                 [
                     soffice,
                     "--headless",
@@ -183,10 +258,7 @@ def convert_via_local_libreoffice(docx_bytes: bytes, base_name: str = "document"
                     "--outdir",
                     tmp_dir,
                     docx_path,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=60,
+                ]
             )
         except FileNotFoundError:
             raise PdfConversionError(
@@ -194,12 +266,10 @@ def convert_via_local_libreoffice(docx_bytes: bytes, base_name: str = "document"
                 "Word installed on the machine running this backend. The Word "
                 "(.docx) document can still be generated and downloaded without it."
             )
-        except subprocess.TimeoutExpired:
-            raise PdfConversionError("PDF conversion timed out.")
 
         pdf_path = os.path.join(tmp_dir, f"{base_name}.pdf")
-        if result.returncode != 0 or not os.path.isfile(pdf_path):
-            detail = (result.stderr or result.stdout or "unknown error").strip()
+        if returncode != 0 or not os.path.isfile(pdf_path):
+            detail = (stderr or stdout or "unknown error").strip()
             raise PdfConversionError(f"PDF conversion failed: {detail}")
 
         with open(pdf_path, "rb") as f:

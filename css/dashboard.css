@@ -140,10 +140,21 @@
     font-size: 0.8rem;
     line-height: 1.25;
     min-width: 0;
+    overflow-wrap: break-word;
   }
 
   .dashboard-recent {
     margin-top: var(--space-5);
+  }
+}
+
+/* Very narrow screens (folding phones closed, ~280px): two columns leave each
+   card about 100px, which cuts words in the middle ("Passpo-rt"). One column
+   keeps every label on whole words. Real phones (300px and up) keep the
+   compact two-column grid above. */
+@media (max-width: 299px) {
+  .dashboard-doc-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

@@ -15,12 +15,11 @@
    `global.KhannaAuthorization` export rather than re-derived here (project
    rule 15).
 
-   Real-person-count limits, enforced both in the UI (checkbox caps, exactly
-   like Passport Authorization's own 1-2 cap in authorization.js) and by the
-   backend itself: Europe and Japan each require the applicant plus exactly
-   one companion (their own reference templates' fixed sentences assume
-   exactly one); Singapore accepts the applicant alone or with any number of
-   companions.
+   Traveller counts: no region limits how many people are on a letter. The
+   applicant alone is written in the singular; one companion keeps the
+   reference wording ("along with my wife, Name"); several companions each
+   get their own relation (and Europe job / Japan occupation) card, and the
+   backend (cover_letter_engine.py) names every one of them.
 
    Re-render discipline (same reasoning as authorization.js's own file
    header): the person checklist and Generate bar redraw freely on every
@@ -198,8 +197,245 @@
     });
   }
 
-  function maxPeopleFor(region) {
-    return region === "Singapore" ? null : 2;
+  // No region limits how many people can be on a cover letter any more
+  // (Europe and Japan used to stop at the applicant plus one companion).
+  // Kept as a function so every place that checks a limit still reads the
+  // same way — it simply never reports one.
+  function maxPeopleFor() {
+    return null;
+  }
+
+  /* ---------------------------------------------------------------------
+   * Sentence case — "MUMBAI" -> "Mumbai". Mirrors
+   * backend/python/letter_shared.sentence_case_value (which also applies it
+   * to everything that reaches a letter): short all-capital words are kept
+   * because they are almost always abbreviations (UAE, TCS).
+   * ------------------------------------------------------------------- */
+
+  var KNOWN_ACRONYMS = ["UAE", "USA", "UK", "US", "UN", "NCR", "NYC", "LLP", "PVT", "LTD", "IT", "HR", "CEO", "CFO"];
+  var WORD_SEPARATORS = /([\s,\/()&\-]+)/;
+
+  function sentenceCase(value, isPlace) {
+    var text = String(value == null ? "" : value).trim().replace(/[ \t]{2,}/g, " ");
+    return text
+      .split(WORD_SEPARATORS)
+      .map(function (part) {
+        if (!part || WORD_SEPARATORS.test(part) || !/[A-Za-z]/.test(part)) return part;
+        var isUpper = part === part.toUpperCase();
+        var isLower = part === part.toLowerCase();
+        if (isUpper && KNOWN_ACRONYMS.indexOf(part) !== -1) return part;
+        if (isUpper) {
+          var letters = part.replace(/[^A-Za-z]/g, "");
+          if (part.indexOf(".") !== -1 || (!isPlace && letters.length <= 3)) return part;
+          return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+        }
+        if (isPlace && isLower) return part.charAt(0).toUpperCase() + part.slice(1);
+        return part;
+      })
+      .join("");
+  }
+
+  // Fields whose typed value is tidied to sentence case as soon as it is
+  // entered: places in full, other details only lose long ALL-CAPITAL words.
+  var PLACE_FIELDS = ["top:destinationCountry", "europe:cityOfResidence", "europe:countryOfResidence", "europe:nextCountry"];
+  var DETAIL_FIELDS = [
+    "europe:applicantJobTitle", "europe:applicantEmployerName", "europe:companionJobTitle", "europe:companionEmployerName",
+    "japan:applicantEmployerOccupation", "japan:companionOccupation", "singapore:hotelName",
+  ];
+
+  /* ---------------------------------------------------------------------
+   * How two travellers are related ("along with my wife")
+   * ------------------------------------------------------------------- */
+
+  var TRAVELLER_RELATIONS = [
+    "Family member", "Husband", "Wife", "Father", "Mother", "Son", "Daughter",
+    "Brother", "Sister", "Cousin", "Friend", "Colleague", "Business partner",
+  ];
+
+  // The Passport/Traveller record stores Spouse/Child/Parent/Sibling plus a
+  // sex; the dropdown is gendered words, so a recorded relation pre-selects
+  // the matching one.
+  var RECORD_RELATIONS = {
+    Spouse: { M: "Husband", F: "Wife" },
+    Child: { M: "Son", F: "Daughter" },
+    Parent: { M: "Father", F: "Mother" },
+    Sibling: { M: "Brother", F: "Sister" },
+    Friend: { "*": "Friend" },
+    Colleague: { "*": "Colleague" },
+  };
+
+  // The one non-applicant person ticked on this letter (Europe/Japan).
+  function companionOf(app) {
+    return selectedPeople(app).filter(function (p) { return !p.isApplicant; })[0] || null;
+  }
+
+  function recordedRelationChoice(companion) {
+    if (!companion || !companion.relation) return "";
+    var by = RECORD_RELATIONS[companion.relation];
+    if (!by) return "";
+    return by["*"] || by[String(companion.sex || "").toUpperCase()] || "";
+  }
+
+  // What the dropdown shows: staff's own pick, else what the traveller
+  // record says, else the generic "Family member".
+  function relationChoiceFor(app) {
+    return coverState(app).travellerRelation || recordedRelationChoice(companionOf(app)) || "Family member";
+  }
+
+  // "my wife" / the typed wording — mirrors letter_shared.traveller_relation.
+  function relationPhrase(app) {
+    var custom = (coverState(app).travellerRelationText || "").replace(/\s+/g, " ").trim().replace(/^[ ,.;]+|[ ,.;]+$/g, "");
+    if (custom) return /^(my|our)\s/i.test(custom) ? custom : "my " + custom;
+    return "my " + relationChoiceFor(app).toLowerCase();
+  }
+
+  // "my wife" -> "Wife" (how the Singapore passenger table prints a relation).
+  function bareRelation(phrase) {
+    var bare = String(phrase || "").replace(/^(my|our)\s+/i, "");
+    return bare.charAt(0).toUpperCase() + bare.slice(1);
+  }
+
+  function relationPreviewText(app) {
+    var companion = companionOf(app);
+    if (!companion) return "";
+    // Names print in capitals on a passport; the letter shows them in sentence case.
+    // The letter names the companion by their full name, without a salutation.
+    var name = sentenceCase(companion.fullName || "", true);
+    if (coverState(app).region === "Singapore") {
+      return "The letter will read: \u201Cfor me & " + relationPhrase(app) + "\u201D, and the passenger table lists " + (name || "them") + " as \u201C" + bareRelation(relationPhrase(app)) + "\u201D.";
+    }
+    return "The letter will read: \u201Calong with " + relationPhrase(app) + (name ? ", " + name : "") + "\u201D.";
+  }
+
+  function relationFieldsHtml(app, state) {
+    var choice = relationChoiceFor(app);
+    var options = TRAVELLER_RELATIONS.map(function (o) {
+      return '<option value="' + o + '"' + (o === choice ? " selected" : "") + ">" + o + "</option>";
+    }).join("");
+    return (
+      '<div class="field-grid">' +
+      '<div class="field">' +
+      '<label for="cover-top-travellerRelation">Relation between the travellers</label>' +
+      '<select id="cover-top-travellerRelation" data-cover-field="top:travellerRelation">' + options + "</select>" +
+      "</div>" +
+      fieldRowHtml("top", "travellerRelationText", "Or write the relation in your own words (optional)", state.travellerRelationText, false, {
+        placeholder: "e.g. business partner",
+      }) +
+      "</div>" +
+      '<p class="field-hint cover-relation-hint" data-cover-relation-preview>' + utils.escapeHtml(relationPreviewText(app)) + "</p>"
+    );
+  }
+
+  function refreshRelationPreview() {
+    var app = getApp();
+    var el = utils.qs("[data-cover-relation-preview]", root());
+    if (app && el) el.textContent = relationPreviewText(app);
+  }
+
+  /* ---------------------------------------------------------------------
+   * Several companions (Europe/Japan, three or more people on the letter)
+   *
+   * With ONE companion the letter keeps its original single set of fields
+   * (the relation control above and the companion job/occupation fields).
+   * With two or more, each companion gets their own small card: how they
+   * are related to the applicant, and — Europe: job title, employer, year
+   * employed since; Japan: occupation — all optional, because not everyone
+   * travelling works (a child, a parent). Only what is entered is used in
+   * the letter.
+   * ------------------------------------------------------------------- */
+
+  function companionsOf(app) {
+    var auth = authHelpers();
+    var chosen = selectedPeople(app).filter(function (p) { return !p.isApplicant; });
+    return auth ? auth.orderPeopleForLetter(chosen) : chosen;
+  }
+
+  function companionDetail(app, personId) {
+    return (coverState(app).companionDetails || {})[personId] || {};
+  }
+
+  function companionRelationChoice(app, person) {
+    return companionDetail(app, person.id).relationChoice || recordedRelationChoice(person) || "Family member";
+  }
+
+  function companionRelationPhrase(app, person) {
+    var custom = (companionDetail(app, person.id).relationText || "").replace(/\s+/g, " ").trim().replace(/^[ ,.;]+|[ ,.;]+$/g, "");
+    if (custom) return /^(my|our)\s/i.test(custom) ? custom : "my " + custom;
+    return "my " + companionRelationChoice(app, person).toLowerCase();
+  }
+
+  function companionPreviewText(app, person) {
+    var name = sentenceCase(person.fullName || "", true);
+    if (coverState(app).region === "Singapore") {
+      return "The passenger table will list " + (name || "this person") + " as \u201C" + bareRelation(companionRelationPhrase(app, person)) + "\u201D.";
+    }
+    return "The letter will say: \u201C" + companionRelationPhrase(app, person) + (name ? ", " + name : "") + "\u201D.";
+  }
+
+  function companionInputHtml(person, key, label, value, placeholder) {
+    var id = "cover-companion-" + person.id + "-" + key;
+    return (
+      '<div class="field">' +
+      '<label for="' + utils.escapeHtml(id) + '">' + utils.escapeHtml(label) + "</label>" +
+      '<input type="text" id="' + utils.escapeHtml(id) + '" data-cover-companion="' + utils.escapeHtml(person.id) + ":" + key + '"' +
+      (placeholder ? ' placeholder="' + utils.escapeHtml(placeholder) + '"' : "") +
+      ' value="' + utils.escapeHtml(value || "") + '" />' +
+      "</div>"
+    );
+  }
+
+  function companionDetailsHtml(app, region) {
+    var auth = authHelpers();
+    var companions = companionsOf(app);
+    if (companions.length < 2 || !auth) return "";
+    var cards = companions
+      .map(function (p) {
+        var d = companionDetail(app, p.id);
+        var choice = companionRelationChoice(app, p);
+        var options = TRAVELLER_RELATIONS.map(function (o) {
+          return '<option value="' + o + '"' + (o === choice ? " selected" : "") + ">" + o + "</option>";
+        }).join("");
+        var selectId = "cover-companion-" + p.id + "-relationChoice";
+        var fields =
+          '<div class="field"><label for="' + utils.escapeHtml(selectId) + '">Relation to the applicant</label>' +
+          '<select id="' + utils.escapeHtml(selectId) + '" data-cover-companion="' + utils.escapeHtml(p.id) + ':relationChoice">' + options + "</select></div>" +
+          companionInputHtml(p, "relationText", "Or write it in your own words (optional)", d.relationText, "e.g. business partner");
+        if (region === "Europe") {
+          fields +=
+            companionInputHtml(p, "jobTitle", "Job title (optional)", d.jobTitle) +
+            companionInputHtml(p, "employerName", "Employer (optional)", d.employerName) +
+            companionInputHtml(p, "employmentStartYear", "Employed since — year (optional)", d.employmentStartYear);
+        } else if (region === "Japan") {
+          fields += companionInputHtml(p, "occupation", "Occupation (optional)", d.occupation);
+        }
+        return (
+          '<div class="cover-companion-card" data-cover-companion-card="' + utils.escapeHtml(p.id) + '">' +
+          '<h4 class="cover-subheading">' + utils.escapeHtml(auth.personDisplayName(p)) + "</h4>" +
+          '<div class="field-grid">' + fields + "</div>" +
+          '<p class="field-hint" data-cover-companion-preview="' + utils.escapeHtml(p.id) + '">' + utils.escapeHtml(companionPreviewText(app, p)) + "</p>" +
+          "</div>"
+        );
+      })
+      .join("");
+    return (
+      '<h4 class="cover-subheading">Travelling companions</h4>' +
+      '<p class="field-hint">' +
+      (region === "Singapore"
+        ? "Each companion's relation to the applicant is printed in the passenger table; the letter itself says \u201Cme & my family\u201D."
+        : "Each companion is named in the letter with their own relation to the applicant. " +
+          (region === "Europe"
+        ? "Add job details only for companions who work — the letter mentions them only when entered."
+        : "Add an occupation only for companions who have one — it is left out of their line otherwise.")) +
+      "</p>" +
+      '<div class="cover-companion-list">' + cards + "</div>"
+    );
+  }
+
+  function refreshCompanionPreview(personId) {
+    var app = getApp();
+    var el = root() && root().querySelector('[data-cover-companion-preview="' + personId + '"]');
+    var person = app && companionsOf(app).filter(function (p) { return p.id === personId; })[0];
+    if (el && person) el.textContent = companionPreviewText(app, person);
   }
 
   /* ---------------------------------------------------------------------
@@ -294,10 +530,24 @@
   }
 
   var FUNDING_PAYER_LABELS = {
-    inviter: { name: "Inviter's name", relation: "Relation with the inviter", relationHint: "e.g. Brother" },
-    company: { name: "Company name", relation: "Relation with the company", relationHint: "e.g. Employer" },
-    other: { name: "Paying person's name", relation: "Relation with the paying person", relationHint: "e.g. Uncle" },
+    inviter: { name: "Inviter's name", relation: "Relation with the inviter" },
+    company: { name: "Company name", relation: "Relation with the company" },
+    other: { name: "Paying person's name", relation: "Relation with the paying person" },
   };
+
+  var PERSON_PAYER_RELATIONS = ["Brother", "Sister", "Father", "Mother", "Son", "Daughter", "Spouse", "Uncle", "Aunt", "Cousin", "Friend", "Relative", "Other"];
+  var COMPANY_PAYER_RELATIONS = ["Employer", "Own company", "Business partner", "Client", "Other"];
+
+  function fundingRelationOptions(type) {
+    return type === "company" ? COMPANY_PAYER_RELATIONS : PERSON_PAYER_RELATIONS;
+  }
+
+  // The relation as it reads in the letter, from the dropdown (and, for
+  // "Other", the typed value).
+  function fundingRelationFrom(state) {
+    var choice = state.fundingRelationChoice || "";
+    return choice === "Other" ? (state.fundingRelationCustom || "").trim() : choice;
+  }
 
   // The one phrase the letter templates read after "will be borne by".
   // Self -> "myself" (one traveller) / "ourselves" (several, paying individually);
@@ -325,6 +575,15 @@
       working.fundingType = patch.fundingType = "other";
       working.fundingPayerName = patch.fundingPayerName = state.fundingArrangement.trim();
     }
+    // A letter saved before the relation dropdown has the relation as plain
+    // text: a matching option is selected, anything else becomes "Other".
+    if (!state.fundingRelationChoice && (state.fundingRelation || "").trim() && FUNDING_PAYER_LABELS[state.fundingType]) {
+      var saved = state.fundingRelation.trim();
+      var match = fundingRelationOptions(state.fundingType).filter(function (o) { return o.toLowerCase() === saved.toLowerCase(); })[0];
+      working.fundingRelationChoice = patch.fundingRelationChoice = match || "Other";
+      working.fundingRelationCustom = patch.fundingRelationCustom = match ? "" : saved;
+      working.fundingRelation = patch.fundingRelation = match || saved;
+    }
     var composed = composeFunding(working, travellerCount(app) > 1);
     if (composed !== (state.fundingArrangement || "") && (working.fundingType || state.fundingArrangement)) patch.fundingArrangement = composed;
     if (!Object.keys(patch).length) return app;
@@ -339,13 +598,41 @@
     var problems = [];
     var names = FUNDING_PAYER_LABELS[type];
     if (!(state.fundingPayerName || "").trim()) problems.push("Enter the " + names.name.toLowerCase() + " for the travel expenses.");
-    if (!(state.fundingRelation || "").trim()) problems.push("Enter the " + names.relation.toLowerCase() + ".");
+    if (!(state.fundingRelation || "").trim()) {
+      problems.push(
+        state.fundingRelationChoice === "Other"
+          ? "Specify the " + names.relation.toLowerCase() + "."
+          : "Choose the " + names.relation.toLowerCase() + "."
+      );
+    }
     return problems;
   }
 
   /* ---------------------------------------------------------------------
    * Readiness — mirrors authorization.js's passportReadiness/companyReadiness
    * ------------------------------------------------------------------- */
+
+  // Singapore's single-traveller letter has a sentence "I am currently ..."
+  // that needs the applicant's occupation; the multi-traveller letter only
+  // prints an optional occupation column.
+  function singaporePeople(app) {
+    var state = coverState(app);
+    var manual = (state.manualApplicantName || "").trim();
+    var list = [];
+    if (manual) list.push({ id: "manual-applicant", name: manual, isApplicant: true });
+    selectedPeople(app).forEach(function (p) {
+      if (manual && p.isApplicant) return;
+      list.push({ id: p.id, name: authHelpers().personDisplayName(p), isApplicant: !!p.isApplicant });
+    });
+    return list;
+  }
+
+  function singaporeProblems(app) {
+    var people = singaporePeople(app);
+    if (people.length !== 1) return [];
+    var occupations = (coverState(app).singapore || {}).occupations || {};
+    return (occupations[people[0].id] || "").trim() ? [] : ["Enter the applicant's occupation."];
+  }
 
   function isReady(app) {
     var auth = authHelpers();
@@ -370,8 +657,10 @@
     if (!applicantSelected || !companionsToCheck.every(auth.personHasCoreFields)) return false;
     var effectiveCount = (manualName ? 1 : 0) + companionsToCheck.length;
 
+    // Singapore's letters are addressed to its Consulate General by the
+    // template itself, so there is no consulate to fill in for it.
     var commonOk =
-      !!(state.recipientText && state.recipientText.trim()) &&
+      (region === "Singapore" || !!(state.recipientText && state.recipientText.trim())) &&
       !!state.travelStartDate &&
       !!state.travelEndDate &&
       !!state.fundingType &&
@@ -384,33 +673,34 @@
     if (!commonOk) return false;
 
     if (region === "Europe") {
-      if (effectiveCount !== 2) return false;
+      // The applicant alone, or with companions. With exactly one companion
+      // their job details are required (the reference wording names them);
+      // with several, each companion's job details are optional (children,
+      // parents ...) and only used when entered.
+      if (effectiveCount < 1) return false;
       var e = state.europe || {};
-      return [
-        "cityOfResidence",
-        "countryOfResidence",
-        "numberOfNights",
-        "applicantEmploymentStatus",
-        "applicantJobTitle",
-        "applicantEmployerName",
-        "companionJobTitle",
-        "companionEmployerName",
-        "companionEmploymentStartYear",
-      ].every(function (key) {
+      var europeKeys = ["cityOfResidence", "countryOfResidence", "numberOfNights", "applicantEmploymentStatus", "applicantJobTitle", "applicantEmployerName"];
+      if (effectiveCount === 2) europeKeys = europeKeys.concat(["companionJobTitle", "companionEmployerName", "companionEmploymentStartYear"]);
+      return europeKeys.every(function (key) {
         return !!(e[key] && String(e[key]).trim());
       });
     }
 
     if (region === "Japan") {
-      if (effectiveCount !== 2) return false;
+      // One companion: their occupation is required (the reference line
+      // asks for it); with several it is optional per person.
+      if (effectiveCount < 1) return false;
       var j = state.japan || {};
-      return !!(j.applicantEmployerOccupation && j.applicantEmployerOccupation.trim()) && !!(j.companionOccupation && j.companionOccupation.trim());
+      return (
+        !!(j.applicantEmployerOccupation && j.applicantEmployerOccupation.trim()) &&
+        (effectiveCount !== 2 || !!(j.companionOccupation && j.companionOccupation.trim()))
+      );
     }
 
     if (region === "Singapore") {
       if (effectiveCount < 1) return false;
       var s = state.singapore || {};
-      return !!(s.hotelName && s.hotelName.trim()) && !!(s.hotelAddress && s.hotelAddress.trim());
+      return !!(s.hotelName && s.hotelName.trim()) && !!(s.hotelAddress && s.hotelAddress.trim()) && singaporeProblems(app).length === 0;
     }
 
     return false;
@@ -462,23 +752,41 @@
   // Plain country names only — the old right-hand "Schengen Europe" / "Japan"
   // / "Singapore" tags were removed on request; the format that applies is
   // still shown once a country is chosen (see the hint under the field).
+  function suggestedCoverCountry() {
+    var lib = countryLib();
+    var app = getApp();
+    var dest = app && app.travel && app.travel.destination;
+    var entry = lib && dest ? lib.byName(dest) : null;
+    return entry ? entry.name : "";
+  }
+
+  function countryOptionHtml(name, i, chosen) {
+    var selected = chosen && name === chosen;
+    return (
+      '<button type="button" class="country-combo__option' + (selected ? " is-selected" : "") + '" role="option" id="cover-country-opt-' + i +
+      '" aria-selected="' + (selected ? "true" : "false") + '" data-cover-country-option="' + utils.escapeHtml(name) + '">' +
+      "<span>" + utils.escapeHtml(name) + "</span></button>"
+    );
+  }
+
   function countryOptionsHtml(query) {
     var lib = countryLib();
     var matches = lib ? lib.search(query) : [];
     if (!matches.length) {
       return '<p class="field-hint country-combo__empty">No matching country.</p>';
     }
-    return matches
-      .map(function (c, i) {
-        return (
-          '<button type="button" class="country-combo__option" role="option" id="cover-country-opt-' + i + '" data-cover-country-option="' +
-          utils.escapeHtml(c.name) +
-          '">' +
-          "<span>" + utils.escapeHtml(c.name) + "</span>" +
-          "</button>"
-        );
-      })
-      .join("");
+    var chosen = coverState(getApp()).country || "";
+    var html = "";
+    var i = 0;
+    var suggested = (query || "").trim() ? "" : suggestedCoverCountry();
+    if (suggested) {
+      html += '<p class="country-combo__group">Suggested for this application</p>' + countryOptionHtml(suggested, i++, chosen);
+      html += '<p class="country-combo__group">All countries</p>';
+    }
+    matches.forEach(function (c) {
+      html += countryOptionHtml(c.name, i++, chosen);
+    });
+    return html;
   }
 
   function countrySelectorHtml(state) {
@@ -592,14 +900,7 @@
   }
 
   function readinessMessage(region) {
-    if (region === "Europe" || region === "Japan") {
-      return (
-        "Select the applicant plus exactly one companion (matching " +
-        region +
-        "'s own fixed letter wording, each with a name and passport number on file), and fill in every required field above to generate this letter."
-      );
-    }
-    if (region === "Singapore") {
+    if (region) {
       return "Select the applicant (with a name and passport number on file), any travelling companions, and fill in every required field above to generate this letter.";
     }
     return "Choose a region to begin.";
@@ -610,12 +911,17 @@
     var box = utils.qs("[data-cover-readiness]", root());
     if (!app || !box) return;
     var region = coverState(app).region;
+    // Details the letter prints that are still empty (they would show as a dash).
+    var emptyDetails = region
+      ? global.KhannaAddTraveller.missingDetailsHtml("coverLetter", selectedPeople(app), "data-complete-cover")
+      : "";
     if (!region || isReady(app)) {
-      box.innerHTML = "";
+      box.innerHTML = emptyDetails;
       return;
     }
     var reasons = peopleProblems(app, region);
     dateProblems(coverState(app)).forEach(function (m) { reasons.push(m); });
+    if (region === "Singapore") singaporeProblems(app).forEach(function (m) { reasons.push(m); });
     var missing = missingRequiredFieldLabels();
     if (missing.length) reasons.push("Fill in: " + missing.join(", ") + ".");
     // Specific reasons when there are any; the generic sentence only as a fallback.
@@ -624,7 +930,7 @@
       '<div class="notice notice-warning">' +
       '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>' +
       "<span>" + utils.escapeHtml("Can't generate yet. " + text) + "</span>" +
-      "</div>";
+      "</div>" + emptyDetails;
   }
 
   // Why the people checklist above is not yet acceptable, in plain words —
@@ -650,14 +956,7 @@
       }
     });
     var count = selected.filter(function (p) { return !(manualName && p.isApplicant); }).length + (manualName ? 1 : 0);
-    if (region === "Europe" || region === "Japan") {
-      if (count !== 2) {
-        problems.push(
-          region + " letters need the applicant plus exactly one companion — " +
-          (count === 1 ? "only 1 person is" : count + " people are") + " ticked (tick the companion too)."
-        );
-      }
-    } else if (region === "Singapore" && count < 1) {
+    if (count < 1 && applicantSelected) {
       problems.push("Tick at least the applicant in the people list above.");
     }
     return problems;
@@ -739,9 +1038,20 @@
       "</div>";
     if (type && type !== "self" && FUNDING_PAYER_LABELS[type]) {
       var l = FUNDING_PAYER_LABELS[type];
+      var relChoice = state.fundingRelationChoice || "";
       html +=
         fieldRowHtml("top", "fundingPayerName", l.name, state.fundingPayerName, true) +
-        fieldRowHtml("top", "fundingRelation", l.relation, state.fundingRelation, true, { placeholder: l.relationHint });
+        '<div class="field">' +
+        '<label for="cover-top-fundingRelationChoice">' + utils.escapeHtml(l.relation) + " *</label>" +
+        '<select id="cover-top-fundingRelationChoice" data-cover-field="top:fundingRelationChoice">' +
+        '<option value="">Select…</option>' +
+        fundingRelationOptions(type).map(function (o) {
+          return '<option value="' + o + '"' + (relChoice === o ? " selected" : "") + ">" + o + "</option>";
+        }).join("") +
+        "</select></div>";
+      if (relChoice === "Other") {
+        html += fieldRowHtml("top", "fundingRelationCustom", "Specify the relation", state.fundingRelationCustom, true, { placeholder: "e.g. Neighbour" });
+      }
     }
     return html;
   }
@@ -753,12 +1063,14 @@
       // India) sits on the next line of the letter. Both stay editable.
       // A letter saved before this split only has the old single line —
       // that line is shown as the name with no address, untouched.
-      fieldRowHtml("top", "consulateName", "Consulate name", consulateNameValue(state), true, {
+      // Singapore's templates carry the Consulate General's address
+      // themselves, so neither box is shown for it.
+      (region === "Singapore" ? "" : fieldRowHtml("top", "consulateName", "Consulate name", consulateNameValue(state), true, {
         placeholder: "e.g. The Consulate General of France",
       }) +
       fieldRowHtml("top", "consulateAddress", "Address of Consulate", consulateAddressValue(state), false, {
         placeholder: "e.g. Mumbai, India",
-      }) +
+      })) +
       (region === "Singapore"
         ? ""
         : fieldRowHtml("top", "destinationCountry", "Destination country", state.destinationCountry, true)) +
@@ -809,8 +1121,8 @@
     var city = (addr.city || "").trim();
     var country = (addr.country || "").trim();
     var patch = {};
-    if (!(e.cityOfResidence && e.cityOfResidence.trim()) && city) patch.cityOfResidence = city;
-    if (!(e.countryOfResidence && e.countryOfResidence.trim()) && country) patch.countryOfResidence = country;
+    if (!(e.cityOfResidence && e.cityOfResidence.trim()) && city) patch.cityOfResidence = sentenceCase(city, true);
+    if (!(e.countryOfResidence && e.countryOfResidence.trim()) && country) patch.countryOfResidence = sentenceCase(country, true);
     if (!Object.keys(patch).length) return app;
     global.KhannaState.updateApplication(app.id, { coverLetter: { europe: patch } }, null);
     return getApp();
@@ -827,7 +1139,7 @@
     return [city, country].filter(Boolean).join(", ");
   }
 
-  function europeFieldsHtml(state) {
+  function europeFieldsHtml(state, withCompanion) {
     var e = state.europe || {};
     return (
       '<div class="field-grid">' +
@@ -855,9 +1167,11 @@
       }) +
       fieldRowHtml("europe", "applicantJobTitle", "Applicant job title", e.applicantJobTitle, true) +
       fieldRowHtml("europe", "applicantEmployerName", "Applicant employer", e.applicantEmployerName, true) +
-      fieldRowHtml("europe", "companionJobTitle", "Companion job title", e.companionJobTitle, true) +
-      fieldRowHtml("europe", "companionEmployerName", "Companion employer", e.companionEmployerName, true) +
-      fieldRowHtml("europe", "companionEmploymentStartYear", "Companion employed since (year)", e.companionEmploymentStartYear, true) +
+      (withCompanion
+        ? fieldRowHtml("europe", "companionJobTitle", "Companion job title", e.companionJobTitle, true) +
+          fieldRowHtml("europe", "companionEmployerName", "Companion employer", e.companionEmployerName, true) +
+          fieldRowHtml("europe", "companionEmploymentStartYear", "Companion employed since (year)", e.companionEmploymentStartYear, true)
+        : "") +
       "</div>" +
       "<p class=\"field-hint\">Optional — only if the trip continues to a second country.</p>" +
       '<div class="field-grid">' +
@@ -893,7 +1207,7 @@
     );
   }
 
-  function japanFieldsHtml(state) {
+  function japanFieldsHtml(state, withCompanion) {
     var j = state.japan || {};
     var hotels = j.hotels || [];
     return (
@@ -901,7 +1215,7 @@
       fieldRowHtml("japan", "applicantEmployerOccupation", "Applicant employer / occupation", j.applicantEmployerOccupation, true, {
         placeholder: "e.g. Software Engineer at Acme Corp",
       }) +
-      fieldRowHtml("japan", "companionOccupation", "Companion occupation", j.companionOccupation, true) +
+      (withCompanion ? fieldRowHtml("japan", "companionOccupation", "Companion occupation", j.companionOccupation, true) : "") +
       "</div>" +
       '<h4 class="cover-subheading">Hotels in Japan (optional)</h4>' +
       '<div class="cover-hotel-list">' +
@@ -911,17 +1225,23 @@
     );
   }
 
-  function singaporeFieldsHtml(state, selected) {
+  function singaporeFieldsHtml(app, state) {
     var s = state.singapore || {};
     var occupations = s.occupations || {};
-    var occupationRows = selected.length
-      ? selected
+    var people = singaporePeople(app);
+    var single = people.length === 1;
+    var occupationRows = people.length
+      ? people
           .map(function (p) {
-            var auth = authHelpers();
+            var label = single
+              ? "Occupation *"
+              : utils.escapeHtml(p.name) + " — occupation (optional)";
+            var id = "cover-occupation-" + p.id;
             return (
               '<div class="field">' +
-              "<label>" + utils.escapeHtml(auth.personDisplayName(p)) + " — occupation</label>" +
-              '<input type="text" data-cover-occupation="' + utils.escapeHtml(p.id) + '" value="' +
+              '<label for="' + utils.escapeHtml(id) + '">' + (single ? label : label) + "</label>" +
+              '<input type="text" id="' + utils.escapeHtml(id) + '" data-cover-occupation="' + utils.escapeHtml(p.id) + '" placeholder="' +
+              (single ? "e.g. a student at XYZ College" : "e.g. Employed, Homemaker, Student") + '" value="' +
               utils.escapeHtml(occupations[p.id] || "") +
               '" /></div>'
             );
@@ -929,11 +1249,18 @@
           .join("")
       : '<p class="field-hint">Select at least the applicant above to enter occupations.</p>';
     return (
+      '<h4 class="cover-subheading">Singapore letter details</h4>' +
+      '<p class="field-hint" style="margin-bottom:var(--space-3);">' +
+      (single
+        ? "Single-traveller letter: addressed to the Consulate General of the Republic of Singapore, Mumbai (already in the template); no passenger table."
+        : "Two-or-multiple-traveller letter: addressed to the Consulate General of the Republic of Singapore, Mumbai (already in the template); every traveller is listed in the passenger table.") +
+      "</p>" +
       '<div class="field-grid">' +
       fieldRowHtml("singapore", "hotelName", "Hotel name", s.hotelName, true) +
       fieldRowHtml("singapore", "hotelAddress", "Hotel address", s.hotelAddress, true) +
       "</div>" +
-      '<h4 class="cover-subheading">Occupations (optional)</h4>' +
+      '<h4 class="cover-subheading">' + (single ? "Occupation" : "Occupations (shown in the passenger table)") + "</h4>" +
+      (single ? '<p class="field-hint" style="margin-bottom:var(--space-3);">Completes the sentence \u201CI am currently \u2026\u201D.</p>' : "") +
       '<div class="field-grid">' + occupationRows + "</div>"
     );
   }
@@ -949,7 +1276,7 @@
   // as the header's own "New Application" menu (app.js) rather than
   // inventing a second dropdown look.
   function useExistingDetailsHtml() {
-    return (
+    var existing =
       '<div class="cover-use-existing" data-cover-use-existing>' +
       '<button type="button" class="btn btn-secondary btn-sm" data-cover-use-existing-toggle aria-haspopup="true" aria-expanded="false">' +
       "Use Existing Details " +
@@ -965,7 +1292,9 @@
       "</div>" +
       '<div class="cover-existing-list" data-cover-existing-list hidden></div>' +
       "</div>" +
-      "</div>" +
+      "</div>";
+    return (
+      global.KhannaAddTraveller.sourceChoiceHtml(existing, "coverLetter") +
       '<div class="cover-existing-status" data-cover-existing-status role="status" aria-live="polite" hidden></div>'
     );
   }
@@ -1113,7 +1442,7 @@
       if (nights) { europePatch.numberOfNights = nights; filled.push("number of nights"); } else missing.push("number of nights");
       var second = hotels[1];
       if (second) {
-        if (second.country) europePatch.nextCountry = second.country;
+        if (second.country) europePatch.nextCountry = sentenceCase(second.country, true);
         europePatch.nextTravelStartDate = second.checkIn || "";
         europePatch.nextTravelEndDate = second.checkOut || "";
         europePatch.nextNumberOfNights = nightsBetween(second.checkIn, second.checkOut) || "";
@@ -1122,7 +1451,7 @@
       coverPatch.europe = europePatch;
     } else if (region === "Singapore") {
       var sg = {};
-      if (first.hotelName) { sg.hotelName = first.hotelName; filled.push("hotel name"); } else missing.push("hotel name");
+      if (first.hotelName) { sg.hotelName = sentenceCase(first.hotelName); filled.push("hotel name"); } else missing.push("hotel name");
       if (first.address) { sg.hotelAddress = first.address; filled.push("hotel address"); } else missing.push("hotel address");
       coverPatch.singapore = sg;
     } else if (region === "Japan") {
@@ -1130,7 +1459,7 @@
         hotels: hotels.map(function (h) {
           return {
             id: utils.generateId("CLH"),
-            name: h.hotelName || "",
+            name: sentenceCase(h.hotelName || ""),
             checkIn: h.checkIn || "",
             checkOut: h.checkOut || "",
             contactNo: h.phone || "",
@@ -1184,15 +1513,24 @@
     );
   }
 
+  var stepHeadingHtml = utils.stepHeadingHtml;
+
   function regionBodyHtml(app, state, region) {
     var selected = selectedPeople(app);
-    var body = useExistingDetailsHtml();
+    var body = stepHeadingHtml(1, "Who is travelling", "Pick travellers already on this application, or add someone manually.");
+    body += useExistingDetailsHtml();
     body += manualApplicantNameHtml(app, state);
     body += '<div class="auth-person-list" data-cover-checklist>' + checklistHtml(app, region) + "</div>";
+    var count = travellerCount(app);
+    var withCompanion = count === 2; // exactly one companion: the original single-companion fields
+    var severalCompanions = count >= 3;
+    if (withCompanion) body += relationFieldsHtml(app, state);
+    body += stepHeadingHtml(2, "Letter details", "Fields marked * are needed before the letter can be generated.");
     body += commonFieldsHtml(app, state, region);
-    if (region === "Europe") body += europeFieldsHtml(state);
-    else if (region === "Japan") body += japanFieldsHtml(state);
-    else if (region === "Singapore") body += singaporeFieldsHtml(state, selected);
+    if (region === "Europe") body += europeFieldsHtml(state, withCompanion);
+    else if (region === "Japan") body += japanFieldsHtml(state, withCompanion);
+    if (severalCompanions) body += companionDetailsHtml(app, region);
+    if (region === "Singapore") body += singaporeFieldsHtml(app, state);
     body += '<div data-cover-readiness></div><div data-cover-generate-bar></div><div data-cover-error></div>';
     return body;
   }
@@ -1245,6 +1583,24 @@
       };
     });
 
+    // Several companions (Europe/Japan): each one's own relation and
+    // job/occupation details travel with them. With a single companion the
+    // original single set of fields is sent instead (below), unchanged.
+    if (people.filter(function (q) { return !q.isApplicant; }).length >= 2) {
+      people.forEach(function (q, i) {
+        if (q.isApplicant) return;
+        var d = companionDetail(app, q.id);
+        var source = selected[i];
+        q.travellerRelation = d.relationChoice || recordedRelationChoice(source) || "";
+        q.travellerRelationText = (d.relationText || "").trim();
+        q.jobTitle = d.jobTitle || "";
+        q.employerName = d.employerName || "";
+        q.employmentStartYear = d.employmentStartYear || "";
+        // Singapore keeps each person's occupation in its own list (above).
+        if (region !== "Singapore") q.occupation = d.occupation || "";
+      });
+    }
+
     // Manual applicant name (used instead of this application's own saved
     // passport data — see the field above the checklist): stands in for
     // the applicant row only. Every field besides the name itself is left
@@ -1263,7 +1619,7 @@
         phone: "",
         email: "",
         isApplicant: true,
-        occupation: "",
+        occupation: region === "Singapore" ? occupations["manual-applicant"] || "" : "",
       }].concat(people);
     }
 
@@ -1277,6 +1633,9 @@
       travelStartDate: state.travelStartDate || "",
       travelEndDate: state.travelEndDate || "",
       fundingArrangement: composeFunding(state, travellerCount(app) > 1) || state.fundingArrangement || "",
+      fundingPayerName: (state.fundingPayerName || "").trim(),
+      travellerRelation: relationChoiceFor(app),
+      travellerRelationText: (state.travellerRelationText || "").trim(),
       format: format,
       applicantName: applicantName,
     };
@@ -1596,6 +1955,42 @@
       else useHotelBlockingFromSource(target.getAttribute("data-app-id"));
     });
 
+    // "+ Add another traveller": a person typed in here becomes a real
+    // traveller on the application and is ticked on this letter (within the
+    // region's people limit).
+    // "Complete details" beside a person whose printed details are empty.
+    utils.on(r, "click", "[data-complete-cover]", function (e, target) {
+      var personId = target.getAttribute("data-complete-details");
+      if (!personId || !global.KhannaAddTraveller) return;
+      global.KhannaAddTraveller.open(function () {
+        renderCard();
+      }, { docKey: "coverLetter", personId: personId });
+    });
+
+    utils.on(r, "click", "[data-action='add-another-traveller']", function () {
+      var app0 = getApp();
+      if (!app0 || !global.KhannaAddTraveller) return;
+      global.KhannaAddTraveller.open(function (travellerId, info) {
+        var app1 = getApp();
+        if (!app1) return;
+        var state1 = coverState(app1);
+        var ids1 = (state1.selectedPersonIds || []).slice();
+        var maxCount1 = maxPeopleFor(state1.region);
+        var selectedNow = !(maxCount1 && ids1.length >= maxCount1);
+        if (selectedNow) {
+          ids1.push(travellerId);
+          global.KhannaState.updateApplication(app1.id, { coverLetter: { selectedPersonIds: ids1 } }, null);
+        }
+        renderCard();
+        setExistingStatus(
+          selectedNow
+            ? "Added " + info.fullName + " and selected them on this letter."
+            : "Added " + info.fullName + " to the application. This letter format takes only " + maxCount1 + " people — untick one below to select them.",
+          !selectedNow
+        );
+      }, { docKey: "coverLetter" });
+    });
+
     utils.on(r, "change", "[data-cover-person]", function (e, target) {
       var current = getApp();
       if (!current) return;
@@ -1643,12 +2038,23 @@
         }
         showError("");
       }
+      // Places and typed details are tidied to sentence case ("MUMBAI" -> "Mumbai").
+      var fieldId = scope + ":" + key;
+      var typedValue = target.value;
+      if (PLACE_FIELDS.indexOf(fieldId) !== -1 || DETAIL_FIELDS.indexOf(fieldId) !== -1) {
+        typedValue = sentenceCase(typedValue, PLACE_FIELDS.indexOf(fieldId) !== -1);
+        if (typedValue !== target.value) target.value = typedValue;
+      }
+      if (fieldId === "top:fundingRelationCustom" && typedValue) {
+        typedValue = typedValue.trim().charAt(0).toUpperCase() + typedValue.trim().slice(1);
+        target.value = typedValue;
+      }
       var patch = { coverLetter: {} };
       if (scope === "top") {
-        patch.coverLetter[key] = target.value;
+        patch.coverLetter[key] = typedValue;
       } else {
         patch.coverLetter[scope] = {};
-        patch.coverLetter[scope][key] = target.value;
+        patch.coverLetter[scope][key] = typedValue;
       }
       if (scope === "top" && (key === "consulateName" || key === "consulateAddress")) {
         // recipientText is what the letter reads: the two lines joined.
@@ -1675,10 +2081,25 @@
       }
       // Funding: choosing "Self" drops any payer details; every change
       // recomposes the one sentence-ready value the letter reads.
-      if (scope === "top" && (key === "fundingType" || key === "fundingPayerName" || key === "fundingRelation")) {
+      var fundingKeys = ["fundingType", "fundingPayerName", "fundingRelation", "fundingRelationChoice", "fundingRelationCustom"];
+      if (scope === "top" && fundingKeys.indexOf(key) !== -1) {
+        var clearRelation = function () {
+          patch.coverLetter.fundingRelation = "";
+          patch.coverLetter.fundingRelationChoice = "";
+          patch.coverLetter.fundingRelationCustom = "";
+        };
         if (key === "fundingType" && target.value !== "inviter" && target.value !== "company" && target.value !== "other") {
           patch.coverLetter.fundingPayerName = "";
-          patch.coverLetter.fundingRelation = "";
+          clearRelation();
+        } else if (key === "fundingType") {
+          // The relation list depends on who pays: drop a choice the new list doesn't have.
+          var keptChoice = coverState(current).fundingRelationChoice || "";
+          if (keptChoice && fundingRelationOptions(target.value).indexOf(keptChoice) === -1) clearRelation();
+        }
+        if (key === "fundingRelationChoice" || key === "fundingRelationCustom") {
+          var merged = Object.assign({}, coverState(current), patch.coverLetter);
+          if (key === "fundingRelationChoice" && target.value !== "Other") patch.coverLetter.fundingRelationCustom = "";
+          patch.coverLetter.fundingRelation = fundingRelationFrom(Object.assign(merged, patch.coverLetter));
         }
         patch.coverLetter.fundingArrangement = composeFunding(Object.assign({}, coverState(current), patch.coverLetter), travellerCount(current) > 1);
       }
@@ -1710,13 +2131,33 @@
         }
       }
       // The funding dropdown decides which payer boxes exist: rebuild.
-      if (scope === "top" && key === "fundingType") renderCard();
+      if (scope === "top" && (key === "fundingType" || key === "fundingRelationChoice")) renderCard();
+      if (scope === "top" && (key === "travellerRelation" || key === "travellerRelationText")) refreshRelationPreview();
       // This one field is an exception to "never rebuild the card on a
       // plain field edit" (see file header) — filling or clearing it changes
       // who counts as selected (the Singapore occupation list and the
       // Europe/Japan people cap both key off that), the same class of
       // "changes this panel's own shape" action as a checklist toggle.
       if (isManualNameField) renderCard();
+      if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
+    });
+
+    utils.on(r, "change", "[data-cover-companion]", function (e, target) {
+      var current = getApp();
+      if (!current) return;
+      var spec = target.getAttribute("data-cover-companion");
+      var cut = spec.lastIndexOf(":");
+      var personId = spec.slice(0, cut);
+      var key = spec.slice(cut + 1);
+      var value = target.value;
+      if (key === "jobTitle" || key === "employerName" || key === "occupation") value = sentenceCase(value, false);
+      if (key !== "relationChoice" && key !== "relationText" && value !== target.value) target.value = value;
+      var details = {};
+      details[key] = value;
+      var patch = { coverLetter: { companionDetails: {} } };
+      patch.coverLetter.companionDetails[personId] = details;
+      global.KhannaState.updateApplication(current.id, patch, null);
+      refreshCompanionPreview(personId);
       if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
     });
 
@@ -1727,6 +2168,9 @@
       var patch = { coverLetter: { singapore: { occupations: {} } } };
       patch.coverLetter.singapore.occupations[personId] = target.value;
       global.KhannaState.updateApplication(current.id, patch, null);
+      refreshGenerateBar();
+      refreshReadinessNotice();
+      if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
     });
 
     utils.on(r, "change", "[data-cover-hotel-field]", function (e, target) {

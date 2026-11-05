@@ -31,7 +31,14 @@
 
   function updateToggleButtons(theme) {
     global.KhannaUtils.qsa("[data-theme-toggle]").forEach(function (btn) {
-      btn.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
+      // A switch reports on/off with aria-checked (on = dark theme); a plain
+      // toggle button (the signed-out header icon) uses aria-pressed.
+      var state = theme === "dark" ? "true" : "false";
+      if (btn.getAttribute("role") === "switch") {
+        btn.setAttribute("aria-checked", state);
+        return;
+      }
+      btn.setAttribute("aria-pressed", state);
       btn.setAttribute(
         "aria-label",
         theme === "dark" ? "Switch to light theme" : "Switch to dark theme"

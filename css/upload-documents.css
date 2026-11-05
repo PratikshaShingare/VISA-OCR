@@ -1,0 +1,248 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Upload Documents page (document sorter)
+   Brand colours only (blue / red / white / grey / black) via the tokens in
+   base.css. Layout is one column of cards; the two upload areas sit side by
+   side on wide screens and stack on narrow ones.
+   ========================================================================== */
+
+.ud-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 920px;
+}
+
+.ud-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ud-card__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.ud-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  font-size: 0.8rem;
+  font-weight: 600;
+  flex: none;
+}
+
+/* ---- upload areas ---- */
+.ud-drops {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.ud-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-5) var(--space-3);
+  border: 1.5px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+  text-align: center;
+  cursor: pointer;
+  position: relative;
+  min-width: 0;
+}
+
+.ud-drop:hover,
+.ud-drop.is-over,
+.ud-drop:focus-within {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.ud-drop input[type="file"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ud-drop .icon {
+  color: var(--color-primary);
+  width: 22px;
+  height: 22px;
+}
+
+.ud-drop span {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.ud-drop__or {
+  font-size: 0.78rem !important;
+  color: var(--color-text-faint) !important;
+}
+
+/* ---- sorted results ---- */
+.ud-group {
+  margin: var(--space-2) 0 0;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
+}
+
+.ud-empty {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.ud-warn {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+}
+
+.ud-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.ud-row__tick {
+  padding-top: 2px;
+}
+
+.ud-row__tick input {
+  width: 18px;
+  height: 18px;
+}
+
+.ud-row__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ud-row__head strong {
+  overflow-wrap: anywhere;
+}
+
+.ud-row__file,
+.ud-row__meta,
+.ud-row__reason {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.ud-row__flags {
+  margin-top: 2px;
+  font-size: 0.85rem;
+  color: var(--color-danger);
+  overflow-wrap: anywhere;
+}
+
+.ud-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
+/* ---- generate ---- */
+.ud-docs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.ud-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.ud-details h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 0.95rem;
+}
+
+.ud-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: var(--space-3);
+}
+
+.ud-format {
+  max-width: 240px;
+}
+
+.ud-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* ---- progress popup ---- */
+.ud-jobs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ud-job {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.92rem;
+}
+
+@media (max-width: 640px) {
+  .ud-drops {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ud-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .ud-row__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+[data-ud-details] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}

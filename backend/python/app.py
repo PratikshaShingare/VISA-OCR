@@ -22,6 +22,7 @@ import io
 import os
 import re
 import tempfile
+import threading
 from datetime import datetime, timezone
 from typing import Any, ClassVar, Literal, Optional
 
@@ -40,13 +41,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import pytesseract
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, model_validator
 
 import admin_export_engine
+import auth_service
 import authorization_letter_engine
+import singapore_letter_engine
 import cover_letter_engine
 import data_model
 import docx_utils
@@ -55,6 +59,7 @@ import hotel_voucher_ocr
 import invitation_letter_engine
 import letter_shared
 import ocr_providers
+import ocr_azapi
 import ocr_runner
 import openrouter_ocr
 import pdf_conversion
@@ -105,6 +110,10 @@ def health():
         # without needing to upload a passport first just to find out
         # (project rule 9 — never fake status).
         "ocrEngine": ocr_runner.get_ocr_engine_status(),
+        # azapi.ai Passport OCR (optional extra reader): whether a token is
+        # configured and how many paid calls THIS run has made — never the
+        # token itself, and never a live call (that would spend credits).
+        "azapi": ocr_azapi.get_status(),
         # Same honesty rule applied to PDF conversion: confirms whether
         # CLOUDCONVERT_API_KEY is actually visible to THIS running
         # deployment (never the key's value — project rule 12), so a
@@ -112,6 +121,111 @@ def health():
         # instead of only after a staff member tries to generate a document.
         "pdfConversion": pdf_conversion.get_pdf_conversion_status(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Accounts and login (auth_service.py)
+#
+# Real server-side login: passwords are hashed, sessions are random tokens
+# sent back as "Authorization: Bearer <token>", and only an admin can create
+# or remove staff accounts or reset a password (checked here, not in the
+# browser).
+# ---------------------------------------------------------------------------
+
+
+def _bearer(authorization: Optional[str]) -> Optional[str]:
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip() or None
+    return None
+
+
+def _auth_call(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except auth_service.AuthError as e:
+        raise HTTPException(e.status, e.message)
+
+
+class LoginRequest(BaseModel):
+    email: str = ""
+    password: str = ""
+
+
+class UpdateProfileRequest(BaseModel):
+    name: str = ""
+
+
+class ChangePasswordRequest(BaseModel):
+    currentPassword: str = ""
+    newPassword: str = ""
+
+
+class CreateStaffRequest(BaseModel):
+    name: str = ""
+    email: str = ""
+    password: str = ""
+    role: Literal["staff", "admin"] = "staff"
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str = ""
+    newPassword: str = ""
+
+
+class RemoveStaffRequest(BaseModel):
+    email: str = ""
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: LoginRequest):
+    return _auth_call(auth_service.login, payload.email, payload.password)
+
+
+@app.post("/api/auth/logout")
+def auth_logout(authorization: Optional[str] = Header(None)):
+    auth_service.logout(_bearer(authorization))
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def auth_me(authorization: Optional[str] = Header(None)):
+    return {"user": _auth_call(auth_service.user_for_token, _bearer(authorization))}
+
+
+@app.patch("/api/auth/profile")
+def auth_update_profile(payload: UpdateProfileRequest, authorization: Optional[str] = Header(None)):
+    return {"user": _auth_call(auth_service.update_own_name, _bearer(authorization), payload.name)}
+
+
+@app.post("/api/auth/change-password")
+def auth_change_password(payload: ChangePasswordRequest, authorization: Optional[str] = Header(None)):
+    _auth_call(auth_service.change_own_password, _bearer(authorization), payload.currentPassword, payload.newPassword)
+    return {"ok": True}
+
+
+@app.get("/api/admin/staff")
+def admin_list_staff(authorization: Optional[str] = Header(None)):
+    return {"staff": _auth_call(auth_service.list_staff, _bearer(authorization))}
+
+
+@app.post("/api/admin/staff")
+def admin_create_staff(payload: CreateStaffRequest, authorization: Optional[str] = Header(None)):
+    user = _auth_call(
+        auth_service.create_staff, _bearer(authorization), payload.name, payload.email, payload.password, payload.role
+    )
+    return {"user": user}
+
+
+@app.post("/api/admin/staff/reset-password")
+def admin_reset_staff_password(payload: ResetPasswordRequest, authorization: Optional[str] = Header(None)):
+    _auth_call(auth_service.reset_staff_password, _bearer(authorization), payload.email, payload.newPassword)
+    return {"ok": True}
+
+
+@app.post("/api/admin/staff/remove")
+def admin_remove_staff(payload: RemoveStaffRequest, authorization: Optional[str] = Header(None)):
+    _auth_call(auth_service.remove_staff, _bearer(authorization), payload.email)
+    return {"ok": True}
 
 
 @app.post("/api/passport/process")
@@ -135,8 +249,10 @@ async def process_passport(
         tmp_path = tmp.name
 
     try:
-        result = ocr_runner.process_passport_file(
-            tmp_path, page_index=page_index, forced_rotation=forced_rotation
+        # OCR is CPU-heavy and blocking: run it on a worker thread so the rest
+        # of the backend (login, health, other pages) keeps answering meanwhile.
+        result = await _run_ocr_job(
+            ocr_runner.process_passport_file, tmp_path, page_index=page_index, forced_rotation=forced_rotation
         )
     except IndexError as e:
         raise HTTPException(400, str(e))
@@ -196,7 +312,7 @@ async def process_passport_openrouter(file: UploadFile = File(...)):
         raise HTTPException(400, "Uploaded file is empty.")
 
     try:
-        result = openrouter_ocr.extract_passport_fields_via_openrouter(contents, file.filename or "")
+        result = await run_in_threadpool(openrouter_ocr.extract_passport_fields_via_openrouter, contents, file.filename or "")
     except openrouter_ocr.OpenRouterOCRError as e:
         raise HTTPException(503, str(e))
     except Exception as e:  # noqa: BLE001 — surface as a clean 500, never a raw stack trace to the UI
@@ -217,7 +333,7 @@ async def page_count(file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
-        pages = ocr_runner.load_pages(tmp_path)
+        pages = await run_in_threadpool(ocr_runner.load_pages, tmp_path)
         return {"totalPages": len(pages)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"Could not read file: {e}")
@@ -256,7 +372,7 @@ async def process_hotel_voucher_upload(
         tmp_path = tmp.name
 
     try:
-        result = hotel_voucher_ocr.process_hotel_voucher_file(tmp_path, page_index=page_index)
+        result = await _run_ocr_job(hotel_voucher_ocr.process_hotel_voucher_file, tmp_path, page_index=page_index)
     except IndexError as e:
         raise HTTPException(400, str(e))
     except pytesseract.pytesseract.TesseractNotFoundError:
@@ -278,7 +394,24 @@ async def process_hotel_voucher_upload(
 
     # Address / phone / city come from an online lookup by hotel name (Google
     # Places when a key is configured, else OpenStreetMap); never raises.
-    return hotel_voucher_ocr.enrich_with_hotel_lookup(result)
+    return await run_in_threadpool(hotel_voucher_ocr.enrich_with_hotel_lookup, result)
+
+
+# At most this many OCR reads run at once. Each read already uses a full CPU
+# core, so more than a couple in parallel only makes every one of them slower.
+MAX_PARALLEL_OCR_JOBS = int(os.environ.get("KHANNA_MAX_PARALLEL_OCR", "2") or 2)
+_ocr_slots = threading.BoundedSemaphore(max(1, MAX_PARALLEL_OCR_JOBS))
+
+
+def _limited_ocr_call(fn, *args, **kwargs):
+    with _ocr_slots:
+        return fn(*args, **kwargs)
+
+
+async def _run_ocr_job(fn, *args, **kwargs):
+    """Runs a blocking OCR function on a worker thread (never on the event
+    loop), with at most MAX_PARALLEL_OCR_JOBS running at the same time."""
+    return await run_in_threadpool(_limited_ocr_call, fn, *args, **kwargs)
 
 
 PREVIEW_CONVERTIBLE_EXTENSIONS = {".docx"}
@@ -321,7 +454,7 @@ async def preview_convert(file: UploadFile = File(...)):
 
     base_name = os.path.splitext(file.filename or "document")[0] or "document"
     try:
-        pdf_bytes = docx_utils.convert_docx_bytes_to_pdf(contents, base_name=base_name)
+        pdf_bytes = await run_in_threadpool(docx_utils.convert_docx_bytes_to_pdf, contents, base_name=base_name)
     except docx_utils.DocxBuildError as e:
         # Never silently fall back to "just download the original" — that
         # would hide the real reason a staff member sees no preview at all
@@ -546,6 +679,34 @@ def hotel_voucher_preview(payload: HotelVoucherRequest):
     )
 
 
+class CompleteHotelDetailsItem(BaseModel):
+    id: Optional[str] = None
+    hotelName: str = ""
+    address: str = ""
+    phone: str = ""
+    city: str = ""
+    country: str = ""
+    useListingName: bool = False
+
+
+class CompleteHotelDetailsRequest(BaseModel):
+    hotels: list[CompleteHotelDetailsItem] = []
+
+
+@app.post("/api/documents/hotel-voucher/complete-details")
+async def complete_hotel_details(payload: CompleteHotelDetailsRequest):
+    """Looks each named hotel up online (Google Places when a key is set) and
+    returns the details that are still BLANK on it — address, phone, city,
+    country — so the voucher never prints a blank the internet can fill. Only
+    empty details are filled; never raises (a failed lookup is reported per
+    hotel)."""
+    if len(payload.hotels) > 30:
+        raise HTTPException(400, "Too many hotels in one request.")
+    items = [h.model_dump() for h in payload.hotels]
+    results = await run_in_threadpool(hotel_voucher_ocr.complete_hotel_details, items)
+    return {"results": results}
+
+
 class ComposeHotelFieldsRequest(BaseModel):
     hotels: list[HotelItem]
 
@@ -593,6 +754,13 @@ class PassportAuthorizationRequest(BaseModel):
     # auto-only). None means "no edits — every field auto-generates as
     # normal", same contract as the Europe Cover Letter's editedBodyHtml.
     editedFields: Optional[dict[str, Optional[str]]] = None
+    # "singapore" = Singapore's own letter in place of this one: the
+    # Authorisation Letter for Visa Application (singapore_letter_engine.py).
+    # Edits then are whole-document blocks only; the fields below are the
+    # Singapore form's own inputs and are ignored for "standard".
+    letterFormat: Literal["standard", "singapore"] = "standard"
+    representativeName: str = ""
+    feePerApplicant: str = ""
 
 
 class CompanyAuthPerson(_DisplayNames):
@@ -610,6 +778,11 @@ class CompanyAuthorizationRequest(BaseModel):
     # see authorization_letter_engine.compose_company_editable_fields for
     # the key set ("date", "recipient", "applicant_<index>" per person).
     editedFields: Optional[dict[str, Optional[str]]] = None
+    # "singapore" = Singapore's Sub-Agent Declaration Form in place of this
+    # letter; contactPerson/designation are that form's own inputs.
+    letterFormat: Literal["standard", "singapore"] = "standard"
+    contactPerson: str = ""
+    designation: str = ""
 
 
 @app.post("/api/documents/passport-authorization")
@@ -618,6 +791,23 @@ def passport_authorization(payload: PassportAuthorizationRequest):
         raise HTTPException(400, "At least one traveller is required.")
 
     people = [p.model_dump() for p in payload.people]
+    if payload.letterFormat == "singapore":
+        blocks = payload.editedFields
+        return _stream_document(
+            build_docx=lambda: singapore_letter_engine.generate_authorisation_letter_docx(
+                people, payload.representativeName, payload.feePerApplicant, blocks
+            ),
+            build_pdf=lambda: singapore_letter_engine.generate_authorisation_letter_pdf(
+                people, payload.representativeName, payload.feePerApplicant, blocks
+            ),
+            fmt=payload.format,
+            error_types=(singapore_letter_engine.SingaporeLetterError, docx_utils.DocxBuildError),
+            applicant_name=payload.applicantName,
+            suffix="Singapore_Authorisation_Letter",
+            build_layout=lambda: singapore_letter_engine.compute_authorisation_letter_layout(
+                people, payload.representativeName, payload.feePerApplicant, blocks
+            ),
+        )
     return _stream_document(
         build_docx=lambda: authorization_letter_engine.generate_passport_authorization_docx(
             people, payload.recipientCentreName, payload.recipientAddress, payload.collectorName,
@@ -639,6 +829,7 @@ def passport_authorization(payload: PassportAuthorizationRequest):
 
 
 class ComposePassportFieldsRequest(BaseModel):
+    letterFormat: Literal["standard", "singapore"] = "standard"
     people: list[AuthPerson]
     recipientCentreName: str = ""
     recipientAddress: str = ""
@@ -650,6 +841,8 @@ class ComposePassportFieldsRequest(BaseModel):
 def compose_passport_fields(payload: ComposePassportFieldsRequest):
     if not payload.people:
         raise HTTPException(400, "At least one traveller is required.")
+    if payload.letterFormat == "singapore":
+        return {"fields": {}}  # Singapore's letter is edited as whole-document blocks only
     people = [p.model_dump() for p in payload.people]
     try:
         fields = authorization_letter_engine.compose_passport_editable_fields(
@@ -666,6 +859,23 @@ def company_authorization(payload: CompanyAuthorizationRequest):
         raise HTTPException(400, "At least one applicant is required.")
 
     people = [p.model_dump() for p in payload.people]
+    if payload.letterFormat == "singapore":
+        blocks = payload.editedFields
+        return _stream_document(
+            build_docx=lambda: singapore_letter_engine.generate_sub_agent_declaration_docx(
+                people, payload.contactPerson, payload.designation, payload.dateOverride, blocks
+            ),
+            build_pdf=lambda: singapore_letter_engine.generate_sub_agent_declaration_pdf(
+                people, payload.contactPerson, payload.designation, payload.dateOverride, blocks
+            ),
+            fmt=payload.format,
+            error_types=(singapore_letter_engine.SingaporeLetterError, docx_utils.DocxBuildError),
+            applicant_name=payload.applicantName,
+            suffix="Singapore_Sub_Agent_Declaration",
+            build_layout=lambda: singapore_letter_engine.compute_sub_agent_declaration_layout(
+                people, payload.contactPerson, payload.designation, payload.dateOverride, blocks
+            ),
+        )
     return _stream_document(
         build_docx=lambda: authorization_letter_engine.generate_company_authorization_docx(
             people, payload.recipientText, payload.dateOverride, payload.editedFields
@@ -684,6 +894,7 @@ def company_authorization(payload: CompanyAuthorizationRequest):
 
 
 class ComposeCompanyFieldsRequest(BaseModel):
+    letterFormat: Literal["standard", "singapore"] = "standard"
     people: list[CompanyAuthPerson]
     recipientText: str = ""
     dateOverride: Optional[str] = None
@@ -693,6 +904,8 @@ class ComposeCompanyFieldsRequest(BaseModel):
 def compose_company_fields(payload: ComposeCompanyFieldsRequest):
     if not payload.people:
         raise HTTPException(400, "At least one applicant is required.")
+    if payload.letterFormat == "singapore":
+        return {"fields": {}}
     people = [p.model_dump() for p in payload.people]
     fields = authorization_letter_engine.compose_company_editable_fields(people, payload.recipientText, payload.dateOverride)
     return {"fields": fields}
@@ -711,6 +924,24 @@ class CoverLetterPerson(_DisplayNames):
     email: str = ""
     isApplicant: bool = False
     occupation: str = ""
+    # Per-person details used when SEVERAL companions travel (Europe/Japan):
+    # how this person is related to the applicant, and (Europe) their job.
+    # With a single companion the form's own single set of fields is used
+    # instead, exactly as before.
+    travellerRelation: str = ""
+    travellerRelationText: str = ""
+    jobTitle: str = ""
+    employerName: str = ""
+    employmentStartYear: str = ""
+
+    @model_validator(mode="after")
+    def _sentence_case_place(self):
+        # "MUMBAI" on a passport reads "Mumbai" in a letter.
+        self.placeOfIssue = letter_shared.sentence_case_value(self.placeOfIssue, place=True)
+        self.occupation = letter_shared.sentence_case_value(self.occupation)
+        self.jobTitle = letter_shared.sentence_case_value(self.jobTitle)
+        self.employerName = letter_shared.sentence_case_value(self.employerName)
+        return self
 
 
 class CoverLetterHotel(BaseModel):
@@ -728,6 +959,8 @@ class CoverLetterRequest(BaseModel):
     travelStartDate: str = ""
     travelEndDate: str = ""
     fundingArrangement: str = ""
+    # Singapore's multi-traveller letter names the payer's bank account.
+    fundingPayerName: str = ""
     dateOverride: Optional[str] = None
     format: Literal["docx", "pdf", "layout"] = "docx"
     applicantName: Optional[str] = None
@@ -761,6 +994,26 @@ class CoverLetterRequest(BaseModel):
     # Singapore-only
     hotelName: str = ""
     hotelAddress: str = ""
+    # How the travellers are related ("along with my wife"): a choice from
+    # letter_shared.TRAVELLER_RELATION_OPTIONS and/or wording typed by staff,
+    # which wins over the choice. Ignored when the applicant travels alone.
+    travellerRelation: str = ""
+    travellerRelationText: str = ""
+
+    @model_validator(mode="after")
+    def _sentence_case_details(self):
+        # Places in sentence case ("Mumbai"); other typed details only lose
+        # long ALL-CAPITAL words ("TCS CONSULTANCY" -> "TCS Consultancy").
+        for name in ("destinationCountry", "cityCountryOfResidence", "nextCountry"):
+            setattr(self, name, letter_shared.sentence_case_value(getattr(self, name), place=True))
+        for name in (
+            "applicantJobTitle", "applicantEmployerName", "companionJobTitle", "companionEmployerName",
+            "applicantEmployerOccupation", "companionOccupation", "hotelName",
+        ):
+            setattr(self, name, letter_shared.sentence_case_value(getattr(self, name)))
+        for hotel in self.hotels:
+            hotel.name = letter_shared.sentence_case_value(hotel.name)
+        return self
 
 
 def _split_applicant_and_companions(people: list[dict]) -> tuple[Optional[dict], list[dict]]:
@@ -792,13 +1045,15 @@ def cover_letter(payload: CoverLetterRequest):
     }
 
     if payload.region in ("Europe", "Japan"):
-        if len(companions) != 1:
-            raise HTTPException(
-                400,
-                f"The {payload.region} Cover Letter is written for the applicant plus exactly one companion "
-                f"(matching the reference template's own fixed wording) — {len(companions)} companion(s) were given.",
-            )
-        companion = companions[0]
+        # Any number of companions (none = the applicant travelling alone).
+        # One companion keeps the reference template's single-companion
+        # wording; several are each named with their own relation.
+        companion = companions or None
+        common_fields = dict(
+            common_fields,
+            travellerRelation=payload.travellerRelation,
+            travellerRelationText=payload.travellerRelationText,
+        )
 
         if payload.region == "Europe":
             fields = dict(
@@ -865,6 +1120,9 @@ def cover_letter(payload: CoverLetterRequest):
         hotelName=payload.hotelName,
         hotelAddress=payload.hotelAddress,
         occupations=occupations,
+        fundingPayerName=payload.fundingPayerName,
+        travellerRelation=payload.travellerRelation,
+        travellerRelationText=payload.travellerRelationText,
     )
     return _stream_document(
         build_docx=lambda: cover_letter_engine.generate_singapore_cover_letter_docx(
@@ -912,13 +1170,7 @@ def cover_letter_compose_body(payload: CoverLetterRequest):
 
     people = [p.model_dump() for p in payload.people]
     applicant, companions = _split_applicant_and_companions(people)
-    if len(companions) != 1:
-        raise HTTPException(
-            400,
-            "The Europe Cover Letter is written for the applicant plus exactly one companion "
-            f"(matching the reference template's own fixed wording) — {len(companions)} companion(s) were given.",
-        )
-    companion = companions[0]
+    companion = companions or None
 
     fields = {
         "recipientText": payload.recipientText,
@@ -938,6 +1190,8 @@ def cover_letter_compose_body(payload: CoverLetterRequest):
         "nextTravelStartDate": payload.nextTravelStartDate,
         "nextTravelEndDate": payload.nextTravelEndDate,
         "nextNumberOfNights": payload.nextNumberOfNights,
+        "travellerRelation": payload.travellerRelation,
+        "travellerRelationText": payload.travellerRelationText,
     }
 
     try:
@@ -981,6 +1235,7 @@ class InvitationLetterInvitee(_DisplayNames):
     passportNumber: str = ""
     placeOfIssue: str = ""
     passportIssueDate: str = ""
+    sex: str = ""
 
 
 class InvitationLetterRequest(BaseModel):
@@ -992,6 +1247,9 @@ class InvitationLetterRequest(BaseModel):
     accommodationDetails: str = ""
     returnDate: str = ""
     fundingArrangement: str = ""
+    # How the invitees are related to the inviter ("parents", "family", ...);
+    # blank = "parents" for two invitees, "family" otherwise.
+    inviteeRelation: str = ""
     dateOverride: Optional[str] = None
     format: Literal["docx", "pdf", "layout"] = "docx"
     applicantName: Optional[str] = None
@@ -1023,8 +1281,10 @@ async def invitation_letter(
         "accommodationDetails": parsed.accommodationDetails,
         "returnDate": parsed.returnDate,
         "fundingArrangement": parsed.fundingArrangement,
+        "inviteeRelation": parsed.inviteeRelation,
     }
-    return _stream_document(
+    return await run_in_threadpool(
+        _stream_document,
         build_docx=lambda: invitation_letter_engine.generate_invitation_letter_docx(
             inviter, invitees, fields, signature_bytes, parsed.dateOverride, parsed.editedFields
         ),
@@ -1050,6 +1310,7 @@ class ComposeInvitationFieldsRequest(BaseModel):
     accommodationDetails: str = ""
     returnDate: str = ""
     fundingArrangement: str = ""
+    inviteeRelation: str = ""
     dateOverride: Optional[str] = None
 
 
@@ -1064,6 +1325,7 @@ def compose_invitation_fields(payload: ComposeInvitationFieldsRequest):
         "accommodationDetails": payload.accommodationDetails,
         "returnDate": payload.returnDate,
         "fundingArrangement": payload.fundingArrangement,
+        "inviteeRelation": payload.inviteeRelation,
     }
     try:
         fields_out = invitation_letter_engine.compose_invitation_editable_fields(inviter, invitees, fields, payload.dateOverride)
@@ -1143,7 +1405,8 @@ async def initors_covering_letter(
         "otherCommitments": parsed.otherCommitments,
         "invitationSupportingDocuments": parsed.invitationSupportingDocuments,
     }
-    return _stream_document(
+    return await run_in_threadpool(
+        _stream_document,
         build_docx=lambda: invitation_letter_engine.generate_initors_covering_letter_docx(
             subject, spouse, inviting_person, fields, signature_bytes, parsed.dateOverride, parsed.editedFields
         ),

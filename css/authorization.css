@@ -30,7 +30,7 @@
 
 .auth-tab.is-active {
   color: var(--color-primary);
-  border-bottom-color: var(--color-primary);
+  border-bottom-color: var(--brand-red);
 }
 
 .auth-tab-panel {

@@ -2,15 +2,16 @@
    Khanna Travels & Holidays — Admin dashboard (Phase 11)
    Real content behind the Phase 3 Admin gate: an application-count
    overview, an all-applications table, the Master Excel
-   Export, CSV bulk import, a read-only Document Templates reference, and a
-   read-only Staff Directory. Mounted into the existing [data-admin-gate]
+   Export, CSV bulk import, a read-only Document Templates reference, and the
+   admin-only Staff accounts panel (add staff, reset password, remove). Mounted into the existing [data-admin-gate]
    markup (index.html) — auth-view.js already owns showing/hiding that
    wrapper; this module only ever fills the mount points inside it.
 
-   Honesty notes (project rule 9): the Staff Directory and Document
-   Templates cards are explicitly read-only — there is no backend user
-   store or template-editing capability to back a real CRUD UI, so none is
-   offered. Everything else here (the export, the import)
+   Honesty notes (project rule 9): the Document Templates card is explicitly
+   read-only — there is no template-editing capability to back a real CRUD
+   UI, so none is offered. Staff accounts are real: they live in the backend
+   database (backend/python/auth_service.py) and the backend enforces that
+   only an admin can change them. Everything else here (the export, the import)
    is fully real: every claimed action actually happens against
    KhannaState/the local backend, nothing is decorative.
    ========================================================================== */
@@ -163,70 +164,43 @@
    * up, not to let anyone touch the templates.
    * ------------------------------------------------------------------- */
   var DOCUMENT_TEMPLATES = [
-    { name: "Hotel Voucher", category: "Hotel Blocking (step 5)" },
-    { name: "Passport Authorization Letter", category: "Cover & Authorization (step 6)" },
-    { name: "Company Authorization Letter", category: "Cover & Authorization (step 6)" },
-    { name: "Cover Letter — Europe", category: "Cover & Authorization (step 6)" },
-    { name: "Cover Letter — Japan", category: "Cover & Authorization (step 6)" },
-    { name: "Cover Letter — Singapore", category: "Cover & Authorization (step 6)" },
-    { name: "Invitation Letter", category: "Invitation Letter (step 7)" },
-    { name: "Inviter Covering Letter", category: "Invitation Letter (step 7)" },
+    { name: "Hotel Voucher", category: "Hotel Blocking" },
+    { name: "Cover Letter — Europe", category: "Cover Letter" },
+    { name: "Cover Letter — Japan", category: "Cover Letter" },
+    { name: "Cover Letter — Singapore", category: "Cover Letter" },
+    { name: "Passport Authorization Letter", category: "Authorization Letters" },
+    { name: "Company Authorization Letter", category: "Authorization Letters" },
+    { name: "Invitation Letter", category: "Invitation Letter" },
+    { name: "Inviter Covering Letter", category: "Invitation Letter" },
+    { name: "Required Document Letter", category: "Checklist Letter" },
   ];
 
   /* ---------------------------------------------------------------------
-   * Overview — total applications only (application status was removed from
-   * the product; see claude/ project docs).
+   * Overview + All Applications — the same application list as the
+   * Applications page and the Dashboard's Recent Applications (shared row
+   * markup from js/dashboard.js, list rules from js/applications.js), so the
+   * count here always matches the rows listed below it.
    * ------------------------------------------------------------------- */
+  function listedApplications() {
+    var list = global.KhannaApplicationsList;
+    return list ? list.listedApplications() : global.KhannaState.getApplications();
+  }
+
   function renderOverview() {
     var container = utils.qs("[data-admin-overview]");
     if (!container) return;
     container.innerHTML =
       '<div class="card stat-card">' +
       '<span class="stat-card__label">Total Applications</span>' +
-      '<span class="stat-card__value">' + global.KhannaState.getApplications().length + "</span>" +
+      '<span class="stat-card__value">' + listedApplications().length + "</span>" +
       "</div>";
-  }
-
-  /* ---------------------------------------------------------------------
-   * All Applications table — reuses global.KhannaApplicationsList's own
-   * applicantLabel() (applications.js) rather than a second copy of it.
-   * ------------------------------------------------------------------- */
-  function applicationRowHtml(app) {
-    var list = global.KhannaApplicationsList;
-    var name = list ? list.applicantLabel(app) : (app.applicant && app.applicant.fullName) || "Untitled applicant";
-    var travel = app.travel || {};
-    return (
-      "<tr>" +
-      "<td>" + utils.escapeHtml(name) + "</td>" +
-      "<td>" + utils.escapeHtml(travel.destination || "—") + "</td>" +
-      "<td>" + utils.escapeHtml(travel.visaCategory || "—") + "</td>" +
-      "<td>" + ((app.travellers || []).length) + "</td>" +
-      "<td>" + utils.formatDate(app.updatedAt) + "</td>" +
-      "</tr>"
-    );
   }
 
   function renderApplicationsTable() {
     var container = utils.qs("[data-admin-applications-table]");
     if (!container) return;
-    var apps = global.KhannaState.getApplications();
-
-    if (apps.length === 0) {
-      container.innerHTML =
-        '<div class="empty-state">' +
-        '<svg class="icon" viewBox="0 0 24 24"><path d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z"/></svg>' +
-        "<h3>No applications yet</h3>" +
-        "</div>";
-      return;
-    }
-
-    container.innerHTML =
-      '<div class="scroll-fade admin-table-scroll-fade"><div class="admin-table-wrap"><table class="admin-table"><thead><tr>' +
-      "<th>Applicant</th><th>Destination</th><th>Visa Category</th><th>Travellers</th><th>Updated</th>" +
-      "</tr></thead><tbody>" +
-      apps.map(applicationRowHtml).join("") +
-      "</tbody></table></div></div>";
-    wireTableScrollFade(container);
+    var list = global.KhannaApplicationsList;
+    container.innerHTML = list ? list.listHtml(listedApplications()) : "";
   }
 
   /* A real data table narrower than its own contents (project rule 13 —
@@ -265,27 +239,132 @@
   }
 
   /* ---------------------------------------------------------------------
-   * Staff Directory (read-only — see the header comment above)
+   * Staff accounts — the only place logins are created. The list, creation,
+   * password reset and removal all go to the backend, which refuses anyone
+   * who is not an admin; this panel just drives those calls.
    * ------------------------------------------------------------------- */
+  var staffList = [];
+  var resetOpenFor = null;
+
+  function showStaffMessage(kind, text) {
+    var box = utils.qs("[data-staff-message]");
+    if (!box) return;
+    box.innerHTML = text
+      ? '<div class="notice notice-' + kind + '" role="status" style="margin-bottom:var(--space-3);"><span>' +
+        utils.escapeHtml(text) + "</span></div>"
+      : "";
+  }
+
+  function paintStaffTable() {
+    var container = utils.qs("[data-admin-staff-directory]");
+    if (!container) return;
+    var me = global.KhannaAuth && global.KhannaAuth.getCurrentUser();
+    var myEmail = me ? me.email.toLowerCase() : "";
+    var rows = staffList
+      .map(function (u) {
+        var isMe = u.email.toLowerCase() === myEmail;
+        var main =
+          "<tr><td>" + utils.escapeHtml(u.name) + (isMe ? " (you)" : "") + "</td><td>" + utils.escapeHtml(u.email) + "</td><td>" +
+          '<span class="badge ' + (u.role === "admin" ? "badge-info" : "") + '">' + utils.escapeHtml(u.role) + "</span></td><td>" +
+          '<div class="staff-actions">' +
+          '<button class="btn btn-secondary btn-sm" type="button" data-staff-reset-toggle="' + utils.escapeHtml(u.email) + '">Reset password</button>' +
+          (isMe
+            ? ""
+            : '<button class="btn btn-secondary btn-sm" type="button" data-staff-remove="' + utils.escapeHtml(u.email) + '">Remove</button>') +
+          "</div></td></tr>";
+        var reset =
+          resetOpenFor === u.email
+            ? '<tr class="staff-reset-row"><td colspan="4"><form class="staff-reset" data-staff-reset-form="' +
+              utils.escapeHtml(u.email) + '" autocomplete="off">' +
+              '<input type="password" name="newPassword" required minlength="8" autocomplete="new-password" placeholder="New password (min. 8 characters)" aria-label="New password for ' +
+              utils.escapeHtml(u.name) + '" />' +
+              '<button class="btn btn-primary btn-sm" type="submit">Set password</button></form></td></tr>'
+            : "";
+        return main + reset;
+      })
+      .join("");
+    container.innerHTML =
+      '<div class="scroll-fade admin-table-scroll-fade"><div class="admin-table-wrap"><table class="admin-table"><thead><tr>' +
+      "<th>Name</th><th>Email</th><th>Role</th><th>Actions</th>" +
+      "</tr></thead><tbody>" + rows + "</tbody></table></div></div>";
+    wireTableScrollFade(container);
+  }
+
   function renderStaffDirectory() {
     var container = utils.qs("[data-admin-staff-directory]");
     if (!container) return;
-    var staff = global.KhannaAuth ? global.KhannaAuth.getStaffDirectory() : [];
-    container.innerHTML =
-      '<div class="scroll-fade admin-table-scroll-fade"><div class="admin-table-wrap"><table class="admin-table"><thead><tr>' +
-      "<th>Name</th><th>Email</th><th>Role</th>" +
-      "</tr></thead><tbody>" +
-      staff
-        .map(function (u) {
-          return (
-            "<tr><td>" + utils.escapeHtml(u.name) + "</td><td>" + utils.escapeHtml(u.email) + "</td><td>" +
-            '<span class="badge ' + (u.role === "admin" ? "badge-info" : "") + '">' + utils.escapeHtml(u.role) + "</span>" +
-            "</td></tr>"
-          );
-        })
-        .join("") +
-      "</tbody></table></div></div>";
-    wireTableScrollFade(container);
+    if (!global.KhannaAuth || !global.KhannaAuth.isAdmin()) {
+      container.innerHTML = "";
+      return;
+    }
+    global.KhannaApi.listStaff().then(
+      function (body) {
+        staffList = (body && body.staff) || [];
+        paintStaffTable();
+      },
+      function (err) {
+        container.innerHTML = "";
+        showStaffMessage("danger", (err && err.message) || "Could not load the staff list.");
+      }
+    );
+  }
+
+  function initStaffPanel() {
+    utils.on(document, "submit", "[data-staff-form]", function (e) {
+      e.preventDefault();
+      var form = this;
+      var name = form.elements.name.value;
+      var email = form.elements.email.value;
+      var password = form.elements.password.value;
+      global.KhannaApi.createStaff(name, email, password).then(
+        function (body) {
+          form.reset();
+          showStaffMessage("success", "Added " + body.user.name + ". They can log in with " + body.user.email + " and the password you set.");
+          renderStaffDirectory();
+        },
+        function (err) {
+          showStaffMessage("danger", (err && err.message) || "Could not add the staff member.");
+        }
+      );
+    });
+
+    utils.on(document, "click", "[data-staff-reset-toggle]", function (e, target) {
+      e.preventDefault();
+      var email = target.getAttribute("data-staff-reset-toggle");
+      resetOpenFor = resetOpenFor === email ? null : email;
+      paintStaffTable();
+    });
+
+    utils.on(document, "submit", "[data-staff-reset-form]", function (e) {
+      e.preventDefault();
+      var form = this;
+      var email = form.getAttribute("data-staff-reset-form");
+      global.KhannaApi.resetStaffPassword(email, form.elements.newPassword.value).then(
+        function () {
+          resetOpenFor = null;
+          paintStaffTable();
+          showStaffMessage("success", "Password changed for " + email + ". Any session they had open has been ended.");
+        },
+        function (err) {
+          showStaffMessage("danger", (err && err.message) || "Could not change the password.");
+        }
+      );
+    });
+
+    utils.on(document, "click", "[data-staff-remove]", function (e, target) {
+      e.preventDefault();
+      var email = target.getAttribute("data-staff-remove");
+      if (!global.confirm("Remove " + email + "? They will no longer be able to log in.")) return;
+      global.KhannaApi.removeStaff(email).then(
+        function () {
+          showStaffMessage("success", "Removed " + email + ".");
+          renderStaffDirectory();
+        },
+        function (err) {
+          showStaffMessage("danger", (err && err.message) || "Could not remove the account.");
+        }
+      );
+    });
   }
 
   /* ---------------------------------------------------------------------
@@ -431,16 +510,18 @@
     renderOverview();
     renderApplicationsTable();
     renderTemplates();
-    renderStaffDirectory();
   }
 
   function init() {
     renderAll();
     global.KhannaState.subscribe(renderAll);
-    if (global.KhannaAuth) global.KhannaAuth.subscribe(renderStaffDirectory);
+    initStaffPanel();
 
     document.addEventListener("khanna:navigate", function (e) {
-      if (e.detail.view === "admin") renderAll();
+      if (e.detail.view === "admin") {
+        renderAll();
+        renderStaffDirectory();
+      }
     });
 
     utils.on(document, "click", "[data-action='export-excel']", function (e) {

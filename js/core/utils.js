@@ -208,12 +208,23 @@
     return update;
   }
 
+  /** Numbered section heading used to split long letter forms (see .form-step in components.css). */
+  function stepHeadingHtml(n, title, hint) {
+    return (
+      '<div class="form-step"><span class="form-step__num" aria-hidden="true">' + n + "</span><div>" +
+      '<h3 class="form-step__title">' + escapeHtml(title) + "</h3>" +
+      (hint ? '<p class="form-step__hint">' + escapeHtml(hint) + "</p>" : "") +
+      "</div></div>"
+    );
+  }
+
   global.KhannaUtils = {
     qs: qs,
     qsa: qsa,
     on: on,
     debounce: debounce,
     escapeHtml: escapeHtml,
+    stepHeadingHtml: stepHeadingHtml,
     generateId: generateId,
     formatDate: formatDate,
     todayIso: todayIso,

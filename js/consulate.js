@@ -98,17 +98,40 @@
 
   var comboSeq = 0;
 
-  function optionsHtml(listId, query) {
+  // The country the active application is travelling to, when it is one of
+  // the known countries — offered at the top of the list as a one-tap choice.
+  function suggestedCountry() {
+    try {
+      var app = global.KhannaState && global.KhannaState.getActiveApplication();
+      return byName(app && app.travel && app.travel.destination);
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function optionHtml(listId, name, i, chosen) {
+    var selected = chosen && name === chosen;
+    return (
+      '<button type="button" class="country-combo__option' + (selected ? " is-selected" : "") + '" role="option" id="' + listId + "-opt-" + i +
+      '" aria-selected="' + (selected ? "true" : "false") + '" data-ccombo-option="' + utils.escapeHtml(name) + '"><span>' +
+      utils.escapeHtml(name) + "</span></button>"
+    );
+  }
+
+  function optionsHtml(listId, query, chosen) {
     var matches = search(query);
     if (!matches.length) return '<p class="field-hint country-combo__empty">No matching country.</p>';
-    return matches
-      .map(function (name, i) {
-        return (
-          '<button type="button" class="country-combo__option" role="option" id="' + listId + "-opt-" + i + '" data-ccombo-option="' +
-          utils.escapeHtml(name) + '"><span>' + utils.escapeHtml(name) + "</span></button>"
-        );
-      })
-      .join("");
+    var html = "";
+    var i = 0;
+    var suggested = (query || "").trim() ? "" : suggestedCountry();
+    if (suggested) {
+      html += '<p class="country-combo__group">Suggested for this application</p>' + optionHtml(listId, suggested, i++, chosen);
+      html += '<p class="country-combo__group">All countries</p>';
+    }
+    matches.forEach(function (name) {
+      html += optionHtml(listId, name, i++, chosen);
+    });
+    return html;
   }
 
   /**
@@ -147,7 +170,7 @@
     var list = combo.querySelector("[data-ccombo-list]");
     var input = combo.querySelector("[data-ccombo-input]");
     if (!list) return;
-    list.innerHTML = optionsHtml(list.id, query);
+    list.innerHTML = optionsHtml(list.id, query, combo.getAttribute("data-ccombo-chosen") || "");
     list.removeAttribute("hidden");
     if (input) input.setAttribute("aria-expanded", "true");
     setActive(combo, 0);
@@ -249,5 +272,6 @@
     addressOrDefault: addressOrDefault,
     comboHtml: comboHtml,
     wire: wire,
+    suggestedCountry: suggestedCountry,
   };
 })(window);

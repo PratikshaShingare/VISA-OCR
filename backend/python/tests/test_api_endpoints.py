@@ -322,16 +322,83 @@ def test_cover_letter_endpoint_europe(sample_applicant, sample_companion):
     assert resp.content[:2] == b"PK"
 
 
-def test_cover_letter_endpoint_europe_rejects_wrong_companion_count(sample_applicant):
+def test_cover_letter_endpoint_europe_and_japan_accept_the_applicant_alone(sample_applicant):
+    for region in ("Europe", "Japan"):
+        resp = client.post(
+            "/api/documents/cover-letter",
+            json={
+                "region": region,
+                "people": [dict(sample_applicant, isApplicant=True)],  # zero companions
+                "format": "docx",
+            },
+        )
+        assert resp.status_code == 200, (region, resp.text)
+        assert resp.content[:2] == b"PK"
+
+
+def test_cover_letter_endpoint_europe_and_japan_accept_several_companions(sample_applicant, sample_companion):
+    from docx import Document
+    import io
+
+    for region in ("Europe", "Japan"):
+        resp = client.post(
+            "/api/documents/cover-letter",
+            json={
+                "region": region,
+                "people": [
+                    dict(sample_applicant, isApplicant=True),
+                    dict(sample_companion, id="c1", fullName="Companion One", passportNumber="C0000001",
+                         relationToApplicant="Spouse", sex="F", jobTitle="Teacher", employerName="DPS",
+                         employmentStartYear="2010", occupation="Teacher"),
+                    dict(sample_companion, id="c2", fullName="Companion Two", passportNumber="C0000002",
+                         relationToApplicant="Child", sex="M"),
+                    dict(sample_companion, id="c3", fullName="Companion Three", passportNumber="C0000003",
+                         relationToApplicant="Child", sex="F"),
+                ],
+                "destinationCountry": "France" if region == "Europe" else "Japan",
+                "format": "docx",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        text = "\n".join(p.text for p in Document(io.BytesIO(resp.content)).paragraphs)
+        for name in ("Companion One", "Companion Two", "Companion Three"):
+            assert name in text, (region, name)
+        if region == "Japan":
+            for number in ("C0000001", "C0000002", "C0000003"):
+                assert number in text
+
+
+def test_cover_letter_endpoint_writes_places_in_sentence_case(sample_applicant):
+    from docx import Document
+    import io
+
     resp = client.post(
         "/api/documents/cover-letter",
         json={
             "region": "Europe",
-            "people": [dict(sample_applicant, isApplicant=True)],  # zero companions
+            "people": [dict(sample_applicant, isApplicant=True, placeOfIssue="MUMBAI")],
+            "destinationCountry": "BELGIUM",
+            "cityCountryOfResidence": "NAVI MUMBAI, INDIA",
+            "applicantEmployerName": "TCS CONSULTANCY",
             "format": "docx",
         },
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    text = "\n".join(p.text for p in Document(io.BytesIO(resp.content)).paragraphs)
+    assert "issued at Mumbai on" in text and "MUMBAI" not in text
+    assert "Belgium" in text and "BELGIUM" not in text
+    assert "Navi Mumbai, India" in text
+    assert "TCS Consultancy" in text
+
+
+def test_cover_letter_compose_body_for_the_applicant_alone(sample_applicant):
+    resp = client.post(
+        "/api/documents/cover-letter/compose-body",
+        json={"region": "Europe", "people": [dict(sample_applicant, isApplicant=True)]},
+    )
+    assert resp.status_code == 200
+    html = resp.json()["html"]
+    assert "I and my" not in html and "We both" not in html
 
 
 def _europe_cover_letter_payload(sample_applicant, sample_companion, **overrides):
@@ -384,12 +451,21 @@ def test_cover_letter_compose_body_endpoint_rejects_non_europe_region(sample_app
     assert resp.status_code == 400
 
 
-def test_cover_letter_compose_body_endpoint_rejects_wrong_companion_count(sample_applicant):
+def test_cover_letter_compose_body_endpoint_names_every_companion(sample_applicant, sample_companion):
     resp = client.post(
         "/api/documents/cover-letter/compose-body",
-        json={"region": "Europe", "people": [dict(sample_applicant, isApplicant=True)]},
+        json={
+            "region": "Europe",
+            "people": [
+                dict(sample_applicant, isApplicant=True),
+                dict(sample_companion, id="c1", fullName="Companion One"),
+                dict(sample_companion, id="c2", fullName="Companion Two"),
+            ],
+        },
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    html = resp.json()["html"]
+    assert "Companion One" in html and "Companion Two" in html
 
 
 def test_cover_letter_endpoint_with_edited_body_html_regenerates_the_real_docx(sample_applicant, sample_companion):

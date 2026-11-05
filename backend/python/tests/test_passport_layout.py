@@ -326,7 +326,8 @@ def test_speck_tokens_are_dropped_from_address_lines():
 def test_old_passport_number_normalisation():
     assert pl.normalise_old_passport_number("£4311420") == ("E4311420", True)
     assert pl.normalise_old_passport_number("R0I93O7O") == ("R0193070", True)
-    assert pl.normalise_old_passport_number("69355663") == ("69355663", False)  # first char could be a letter
+    assert pl.normalise_old_passport_number("69355663") == ("G9355663", False)  # digit -> look-alike letter, still uncertain
+    assert pl.normalise_old_passport_number("19035592") == ("J9035592", False)
     assert pl.normalise_old_passport_number("$8323309") == ("S8323309", True)
 
 

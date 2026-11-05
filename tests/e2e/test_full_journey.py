@@ -356,7 +356,11 @@ async def main():
         if await init_edit.is_enabled():
             await init_edit.click()
             await page.wait_for_timeout(500)
-            n_init = await page.locator(f"{init_scope} .pe-field").count()
+            await page.wait_for_selector(f"{init_scope} .lw-stage .ql-editor")
+            n_init = await page.evaluate(
+                "(sel) => new Set(Array.from(document.querySelectorAll(sel + ' .ql-editor [data-unit]')).map(e => e.getAttribute('data-unit'))).size",
+                f"{init_scope} .lw-stage",
+            )
             checks.check("Step 7: Initors letter is editable as a whole document", n_init >= 5, str(n_init))
             await init_edit.click()
             await page.wait_for_timeout(200)
@@ -413,8 +417,8 @@ async def main():
         # unscoped selector here would resolve to 2 elements.
         gate_hidden = await page.get_attribute("[data-view='admin'] [data-admin-gate]", "hidden")
         checks.check("Admin: gate visible for admin account", gate_hidden is None)
-        admin_rows = await page.locator("[data-admin-applications-table] tbody tr").count()
-        checks.check("Admin: all-applications table includes the journey's own application", admin_rows >= 1, str(admin_rows))
+        admin_rows = await page.locator("[data-admin-applications-table] .dashboard-recent-row").count()
+        checks.check("Admin: all-applications list includes the journey's own application", admin_rows >= 1, str(admin_rows))
 
         async with page.expect_download() as dl_info:
             await page.click("[data-action='export-excel']")
