@@ -74,7 +74,15 @@ class AuthError(Exception):
 
 
 def db_path() -> str:
-    return os.environ.get("KHANNA_AUTH_DB") or DEFAULT_DB_PATH
+    override = os.environ.get("KHANNA_AUTH_DB")
+    if override:
+        return override
+    # Vercel / AWS Lambda: the deployed project folder is read-only, only /tmp
+    # is writable. (Data in /tmp lives only as long as that one function
+    # instance — set KHANNA_AUTH_DB to a persistent location for real use.)
+    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        return "/tmp/khanna_users.db"
+    return DEFAULT_DB_PATH
 
 
 @contextmanager

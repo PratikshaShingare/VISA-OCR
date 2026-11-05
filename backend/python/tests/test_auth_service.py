@@ -153,3 +153,30 @@ def test_expired_sessions_are_refused(monkeypatch):
     real_time = auth_service.time.time
     monkeypatch.setattr(auth_service.time, "time", lambda: real_time() + auth_service.SESSION_TTL_SECONDS + 5)
     assert client.get("/api/auth/me", headers=_bearer(token)).status_code == 401
+
+
+# ---- serverless (Vercel / AWS Lambda): the project folder is read-only, use /tmp ----
+def test_db_path_uses_tmp_on_vercel(monkeypatch):
+    monkeypatch.delenv("KHANNA_AUTH_DB", raising=False)
+    monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
+    monkeypatch.setenv("VERCEL", "1")
+    assert auth_service.db_path() == "/tmp/khanna_users.db"
+
+
+def test_db_path_uses_tmp_on_lambda(monkeypatch):
+    monkeypatch.delenv("KHANNA_AUTH_DB", raising=False)
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.setenv("AWS_LAMBDA_FUNCTION_NAME", "fn")
+    assert auth_service.db_path() == "/tmp/khanna_users.db"
+
+
+def test_explicit_override_wins_even_on_vercel(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("KHANNA_AUTH_DB", "/data/persistent/users.db")
+    assert auth_service.db_path() == "/data/persistent/users.db"
+
+
+def test_db_path_is_project_folder_locally(monkeypatch):
+    for k in ("KHANNA_AUTH_DB", "VERCEL", "AWS_LAMBDA_FUNCTION_NAME"):
+        monkeypatch.delenv(k, raising=False)
+    assert auth_service.db_path() == auth_service.DEFAULT_DB_PATH
