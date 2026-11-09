@@ -126,6 +126,26 @@ async def main():
         checks.check("A hotel the internet does not know is named in a notice", "Ghost Hotel Nowhere" in missing, missing)
         checks.check("...and the voucher is still generated", await page.locator(".view.is-active [data-voucher-preview] canvas").count() > 0)
 
+        # a hotel that already has its address, phone and city is NOT reported as
+        # "nothing found" just because the internet had no country for it
+        await page.evaluate("() => { var a = KhannaState.getActiveApplication(); var h = KhannaState.addHotel(a.id); KhannaState.updateHotel(a.id, h.id, {hotelName: 'Complete Except Country Hotel', city: 'Oslo', address: 'Karl Johans gate 1', phone: '+47 1', checkIn: '2027-02-01', checkOut: '2027-02-03'}, 'seed'); }")
+        await page.evaluate("location.hash = '#/applications'"); await page.wait_for_timeout(300)
+        await page.evaluate("location.hash = '#/hotel-blocking'"); await page.wait_for_timeout(800)
+        await page.click("[data-action='generate-voucher']")
+        await wait_preview_ready(page, ".view.is-active [data-voucher-preview]")
+        missing = await page.inner_text("[data-hotel-lookup-missing]") if await page.locator("[data-hotel-lookup-missing]").count() else ""
+        checks.check("A hotel with address, phone and city is not called 'not found'", "Complete Except Country" not in missing, missing)
+        checks.check("The notice says what is still blank", "still blank" in missing and "address" in missing, missing)
+
+        # once the staff fill the blank details in, the warning goes away by itself
+        await page.evaluate("() => { var a = KhannaState.getActiveApplication(); var g = a.hotels.filter(h => h.hotelName === 'Ghost Hotel Nowhere')[0]; KhannaState.updateHotel(a.id, g.id, {address: 'Ghost St 1', phone: '+1 2', city: 'Ghost Town'}, 'typed'); }")
+        await page.evaluate("location.hash = '#/applications'"); await page.wait_for_timeout(300)
+        await page.evaluate("location.hash = '#/hotel-blocking'"); await page.wait_for_timeout(800)
+        await page.click("[data-action='generate-voucher']")
+        await wait_preview_ready(page, ".view.is-active [data-voucher-preview]")
+        left = await page.inner_text("[data-hotel-lookup-missing]") if await page.locator("[data-hotel-lookup-missing]").count() else ""
+        checks.check("After the staff fill the details in, the 'nothing found' notice is gone", "Ghost Hotel" not in left, left)
+
         # a check-out before its own check-in
         await page.evaluate("(id) => { var a = KhannaState.getActiveApplication(); KhannaState.updateHotel(a.id, id, {checkIn: '2026-12-30', checkOut: '2026-12-28'}, 'seed'); }", ids["third"])
         await page.evaluate("location.hash = '#/applications'"); await page.wait_for_timeout(300)

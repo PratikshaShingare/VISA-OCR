@@ -478,29 +478,31 @@ def _synthetic_two_page_pdf(tmp_path, with_back=True):
     return str(path)
 
 
-def test_whole_pipeline_makes_one_azapi_call_for_the_data_page_and_none_for_the_address_page(tmp_path, monkeypatch):
+def test_whole_pipeline_makes_one_azapi_call_for_the_whole_passport(tmp_path, monkeypatch):
+    # azapi is the only passport reader: front + back go in ONE call, and the
+    # later page of the same file costs nothing and is not read locally.
     path = _synthetic_two_page_pdf(tmp_path)
     post = FakePost(FakeResp(200, success_body(id_number="P9988776")))
     monkeypatch.setattr(az.requests, "post", post)
 
     bio = ocr_runner.process_passport_file(path, page_index=0)
-    assert bio["pageKind"] == "bio" and bio["azapi"]["used"] is True
-    assert bio["mrz"]["valid"] is True
-    assert bio["fields"]["passportNumber"]["source"] == az.SOURCE_CONFIRMED
-    assert bio["fields"]["addressPincode"]["value"] == "411001"  # azapi's address, not the local reader's
+    assert bio["pageKind"] == "bio" and bio["azapi"]["used"] is True and bio["azapi"]["standalone"] is True
+    assert bio["mrz"] is None  # no local MRZ reading in azapi-only mode
+    assert bio["fields"]["passportNumber"]["value"] == "P9988776"
+    assert bio["fields"]["addressPincode"]["value"] == "411001"
     assert set(post.calls[0]["files"]) == {"front", "back"}
 
-    back = ocr_runner.process_passport_file(path, page_index=1)
-    assert back["pageKind"] == "back" and "azapi" not in back
+    second = ocr_runner.process_passport_file(path, page_index=1)
+    assert second["pageKind"] == "other" and "azapi" not in second
     assert len(post.calls) == 1  # the whole passport cost one call
 
 
-def test_whole_pipeline_survives_azapi_being_down(tmp_path, monkeypatch):
+def test_whole_pipeline_reports_azapi_being_down(tmp_path, monkeypatch):
     path = _synthetic_two_page_pdf(tmp_path, with_back=False)
     monkeypatch.setattr(az.requests, "post", FakePost(requests.ConnectionError("down")))
-    result = ocr_runner.process_passport_file(path, page_index=0)
-    assert result["pageKind"] == "bio" and result["fields"]["passportNumber"]["value"] == "P9988776"
-    assert result["azapi"] == {"used": False, "reason": "network"}
+    with pytest.raises(az.AzapiError) as e:
+        ocr_runner.process_passport_file(path, page_index=0)
+    assert e.value.kind == "network"
 
 
 def test_api_route_returns_the_azapi_result(tmp_path, monkeypatch):

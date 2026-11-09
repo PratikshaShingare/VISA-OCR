@@ -756,6 +756,17 @@
     return !h.address || !h.phone || !h.city || !h.country;
   }
 
+  // What the voucher really needs from the internet. A blank country alone is
+  // not "missing details": it can be left to the staff and must never raise a
+  // "nothing found" warning for a hotel whose address, phone and city are there.
+  function missingKeyDetails(h) {
+    var missing = [];
+    if (!(h.address || "").trim()) missing.push("address");
+    if (!(h.phone || "").trim()) missing.push("phone number");
+    if (!(h.city || "").trim()) missing.push("city");
+    return missing;
+  }
+
   // Fills a hotel's BLANK address / phone / city / country from the internet
   // (Google Places when the backend has a key) before the voucher is made.
   // Details already on the hotel are never replaced. Resolves with a short
@@ -764,7 +775,7 @@
     var todo = ((app && app.hotels) || []).filter(function (h) {
       return (h.hotelName || "").trim().length >= 3 && isMissingDetails(h) && !detailsLookedUp[h.id + "|" + h.hotelName];
     });
-    if (!todo.length) return Promise.resolve({ filled: [], notFound: [] });
+    if (!todo.length) return Promise.resolve({ filled: [], notFound: [], unreachable: [] });
     todo.forEach(function (h) { detailsLookedUp[h.id + "|" + h.hotelName] = true; });
     var payload = todo.map(function (h) {
       return {
@@ -776,6 +787,7 @@
     return api.completeHotelDetails(payload).then(function (res) {
       var filled = [];
       var notFound = [];
+      var unreachable = [];
       (res.results || []).forEach(function (r) {
         var h = todo.filter(function (x) { return x.id === r.id; })[0];
         if (!h) return;
@@ -790,12 +802,19 @@
           patch.addressCheck = h.addressCheck || "unverified";
           global.KhannaState.updateHotel(app.id, h.id, patch, "Hotel details looked up online");
           filled.push({ name: patch.hotelName || h.hotelName, fields: r.filled || [], source: patch.lookupSource });
-        } else if (r.status !== "skipped") {
-          notFound.push(h.hotelName);
+        }
+        // Warn only about a hotel that STILL lacks something the voucher needs
+        // after this lookup (what it already had counts), and say whether the
+        // lookup found nothing or could not run at all.
+        var after = {};
+        ["address", "phone", "city"].forEach(function (k) { after[k] = patch[k] || h[k] || ""; });
+        var stillMissing = missingKeyDetails(after);
+        if (stillMissing.length && r.status !== "skipped" && !Object.keys(patch).length) {
+          (r.status === "unavailable" ? unreachable : notFound).push({ id: h.id, name: h.hotelName });
         }
       });
-      return { filled: filled, notFound: notFound };
-    }).catch(function () { return { filled: [], notFound: [] }; });
+      return { filled: filled, notFound: notFound, unreachable: unreachable };
+    }).catch(function () { return { filled: [], notFound: [], unreachable: [] }; });
   }
 
   var lastDetailsReport = null; // {appId, report}: kept so re-drawing the bar does not lose it
@@ -808,6 +827,22 @@
     var r = root();
     var box = r && utils.qs("[data-voucher-lookup-report]", r);
     if (!box) return;
+    // A warning is only true while the hotel is still missing something: re-check
+    // against the hotel as it is NOW (the staff may have filled it in since).
+    function stillLacking(entry) {
+      var h = ((app && app.hotels) || []).filter(function (x) { return x.id === entry.id; })[0];
+      return h ? missingKeyDetails(h) : [];
+    }
+    var warnIcon = '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>';
+    function warning(attr, entries, lead, tail) {
+      var rows = entries.map(function (e) {
+        return { name: e.name, missing: stillLacking(e) };
+      }).filter(function (e) { return e.missing.length; });
+      if (!rows.length) return "";
+      return '<div class="notice notice-warning" ' + attr + ">" + warnIcon + "<span>" + lead +
+        rows.map(function (e) { return "<strong>" + utils.escapeHtml(e.name) + "</strong> (still blank: " + e.missing.join(", ") + ")"; }).join("; ") +
+        tail + "</span></div>";
+    }
     var parts = [];
     report.filled.forEach(function (f) {
       parts.push("<strong>" + utils.escapeHtml(f.name) + "</strong>: " + f.fields.join(", ") + " from " + utils.escapeHtml(f.source));
@@ -816,11 +851,8 @@
     if (parts.length) {
       html += '<div class="notice" data-hotel-lookup-filled><svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span>Blank details were filled in from the internet — Please Verify: ' + parts.join("; ") + ".</span></div>";
     }
-    if (report.notFound.length) {
-      html += '<div class="notice notice-warning" data-hotel-lookup-missing><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg><span>No online details found for ' +
-        report.notFound.map(function (n) { return "<strong>" + utils.escapeHtml(n) + "</strong>"; }).join(", ") +
-        ". Add them with Edit on the hotel, or edit the preview.</span></div>";
-    }
+    html += warning("data-hotel-lookup-missing", report.notFound || [], "The internet had nothing more for ", ". Add the blank details with Edit on the hotel, or edit the preview.");
+    html += warning("data-hotel-lookup-unreachable", report.unreachable || [], "The online lookup could not be reached for ", ". The voucher was made without it — try Regenerate later, or add the details with Edit on the hotel.");
     box.innerHTML = html;
   }
 
@@ -841,7 +873,7 @@
     return completeMissingDetails(app)
       .then(function (report) {
         if (report.filled.length) renderList();
-        showDetailsReport(report.filled.length || report.notFound.length ? report : null);
+        showDetailsReport(report.filled.length || report.notFound.length || (report.unreachable || []).length ? report : null);
         return handle.refresh();
       })
       .catch(function (err) {

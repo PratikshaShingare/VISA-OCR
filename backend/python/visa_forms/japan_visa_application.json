@@ -1,0 +1,155 @@
+{
+  "id": "japan-visa",
+  "name": "Japan — Visa Application Form to Enter Japan",
+  "country": "Japan",
+  "file": "japan_visa_application.pdf",
+  "outputName": "Japan_Visa_Application_Form",
+  "pageCount": 2,
+  "notes": [
+    "Official 2-page form. Values are written in CAPITAL letters, as in the Khanna sample.",
+    "\"-\" is written in fields that do not apply, \"NOT APPLICABLE\" in the free-text boxes.",
+    "Date of application and the signature are left blank: the applicant signs and dates by hand."
+  ],
+  "identify": [
+    "topmostSubform[0].Page1[0].T49[0]",
+    "topmostSubform[0].Page1[0].T2[0]",
+    "topmostSubform[0].Page2[0].#area[0].guarantor_name[0]"
+  ],
+  "sections": [
+    {
+      "title": "Applicant (as in passport)",
+      "fields": [
+        { "key": "surname", "label": "Surname (as shown in passport)", "type": "text", "pdf": "topmostSubform[0].Page1[0].T2[0]", "maxLength": 37, "source": "applicant.lastName", "compare": "surname", "required": true },
+        { "key": "givenNames", "label": "Given and middle names (as shown in passport)", "type": "text", "pdf": "topmostSubform[0].Page1[0].T7[0]", "maxLength": 37, "source": "applicant.firstName", "compare": "givenNames", "required": true },
+        { "key": "otherNames", "label": "Other names (any other names you are or have been known by)", "type": "text", "pdf": "topmostSubform[0].Page1[0].T16[1]", "default": "-" },
+        { "key": "dob", "label": "Date of birth", "type": "date", "dateFormat": "DD/MM/YYYY", "pdf": "topmostSubform[0].Page1[0].#area[4].T14[0]", "source": "applicant.dob", "compare": "dob", "required": true },
+        {
+          "key": "placeOfBirth", "label": "Place of birth", "type": "columns",
+          "pdf": "topmostSubform[0].Page1[0].#area[4].T16[0]", "compare": "placeOfBirth",
+          "parts": [
+            { "key": "birthCity", "label": "City", "offset": 17, "source": "applicant.placeOfBirth", "sourceFormat": "firstPart" },
+            { "key": "birthState", "label": "State or Province", "offset": 82, "source": "applicant.placeOfBirth", "sourceFormat": "secondPart" },
+            { "key": "birthCountry", "label": "Country", "offset": 185, "default": "INDIA" }
+          ]
+        },
+        {
+          "key": "sex", "label": "Sex", "type": "radio", "pdf": "topmostSubform[0].Page1[0].#area[5].#area[6].#area[7].RB1[0]", "source": "applicant.sex", "compare": "sex", "required": true,
+          "options": [ { "value": "M", "label": "Male", "state": "/0" }, { "value": "F", "label": "Female", "state": "/1" } ]
+        },
+        {
+          "key": "maritalStatus", "label": "Marital status", "type": "radio", "pdf": "topmostSubform[0].Page1[0].#area[8].RB2[0]", "required": true,
+          "options": [
+            { "value": "single", "label": "Single", "state": "/0" },
+            { "value": "married", "label": "Married", "state": "/1" },
+            { "value": "widowed", "label": "Widowed", "state": "/3" },
+            { "value": "divorced", "label": "Divorced", "state": "/2" }
+          ]
+        },
+        { "key": "nationality", "label": "Nationality or citizenship", "type": "text", "pdf": "topmostSubform[0].Page1[0].T50[0]", "source": "applicant.nationality", "sourceFormat": "nationality", "compare": "nationality", "required": true },
+        { "key": "formerNationalities", "label": "Former and/or other nationalities or citizenships", "type": "text", "pdf": "topmostSubform[0].Page1[0].T34[0]", "default": "-" },
+        { "key": "governmentId", "label": "ID No. issued to you by your government", "type": "text", "pdf": "topmostSubform[0].Page1[0].T37[0]", "maxLength": 20, "default": "-" }
+      ]
+    },
+    {
+      "title": "Passport",
+      "fields": [
+        {
+          "key": "passportType", "label": "Passport type", "type": "radio", "pdf": "topmostSubform[0].Page1[0].#area[1].#area[2].RB3[0]", "source": "applicant.passport.current.type", "sourceFormat": "passportType", "compare": "passportType", "required": true,
+          "options": [
+            { "value": "diplomatic", "label": "Diplomatic", "state": "/0" },
+            { "value": "official", "label": "Official", "state": "/1" },
+            { "value": "ordinary", "label": "Ordinary", "state": "/2" },
+            { "value": "other", "label": "Other", "state": "/3" }
+          ]
+        },
+        { "key": "passportNumber", "label": "Passport No.", "type": "text", "pdf": "topmostSubform[0].Page1[0].T49[0]", "source": "applicant.passport.current.number", "compare": "passportNumber", "required": true },
+        { "key": "issuePlace", "label": "Place of issue", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[9].T57[1]", "source": "applicant.passport.current.issuePlace", "compare": "issuePlace", "required": true },
+        { "key": "issueDate", "label": "Date of issue", "type": "date", "dateFormat": "DD/MM/YYYY", "pdf": "topmostSubform[0].Page1[0].#area[9].T53[0]", "source": "applicant.passport.current.issueDate", "compare": "issueDate", "required": true },
+        { "key": "issuingAuthority", "label": "Issuing authority", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[0].T57[0]", "source": "applicant.passport.current.issuingAuthority", "sourceFormat": "issuingAuthority", "compare": "issuingAuthority", "required": true },
+        { "key": "expiryDate", "label": "Date of expiry", "type": "date", "dateFormat": "DD/MM/YYYY", "pdf": "topmostSubform[0].Page1[0].#area[0].T59[0]", "source": "applicant.passport.current.expiryDate", "compare": "expiryDate", "required": true }
+      ]
+    },
+    {
+      "title": "Trip to Japan",
+      "fields": [
+        { "key": "purpose", "label": "Purpose of visit to Japan", "type": "text", "pdf": "topmostSubform[0].Page1[0].T62[0]", "source": "travel.purpose", "default": "TOURISM", "required": true },
+        { "key": "lengthOfStay", "label": "Intended length of stay in Japan", "type": "text", "pdf": "topmostSubform[0].Page1[0].T68[2]", "source": "travel.lengthOfStay", "help": "e.g. 11 DAYS", "required": true },
+        { "key": "arrivalDate", "label": "Date of arrival in Japan", "type": "date", "dateFormat": "DD-MM-YYYY", "pdf": "topmostSubform[0].Page1[0].T66[0]", "source": "travel.startDate", "compare": "arrivalDate", "required": true },
+        { "key": "portOfEntry", "label": "Port of entry into Japan", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[10].T68[0]", "required": true },
+        { "key": "airline", "label": "Name of ship or airline", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[10].T68[1]", "required": true },
+        { "key": "hotelName", "label": "Hotel / person you will stay with — Name", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[12].emp_name[1]", "source": "hotel.hotelName", "required": true },
+        { "key": "hotelTel", "label": "Hotel / person — Tel.", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[12].emp_tel[1]", "maxLength": 15, "source": "hotel.phone", "required": true },
+        { "key": "hotelAddress", "label": "Hotel / person — Address", "type": "textarea", "pdf": "topmostSubform[0].Page1[0].emp_adr[1]", "source": "hotel.fullAddress", "required": true },
+        { "key": "previousStays", "label": "Dates and duration of previous stays in Japan", "type": "text", "pdf": "topmostSubform[0].Page1[0].T64[0]", "maxLength": 50, "default": "NOT APPLICABLE" }
+      ]
+    },
+    {
+      "title": "Residence and occupation",
+      "fields": [
+        { "key": "homeAddress", "label": "Current residential address", "type": "textarea", "pdf": "topmostSubform[0].Page1[0].T0[1]", "source": "applicant.fullAddress", "required": true },
+        { "key": "homeTel", "label": "Tel.", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[11].T97[0]", "maxLength": 15, "default": "-" },
+        { "key": "mobile", "label": "Mobile No.", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[11].T3[0]", "maxLength": 15, "source": "applicant.contact.phone", "required": true },
+        { "key": "occupation", "label": "Current profession or occupation and position", "type": "text", "pdf": "topmostSubform[0].Page1[0].T5[0]", "maxLength": 68, "required": true },
+        { "key": "employerName", "label": "Employer — Name", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[3].emp_name[0]", "default": "-" },
+        { "key": "employerTel", "label": "Employer — Tel.", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[3].emp_tel[0]", "maxLength": 15, "default": "-" },
+        { "key": "employerAddress", "label": "Employer — Address", "type": "textarea", "pdf": "topmostSubform[0].Page1[0].emp_adr[0]", "default": "-" },
+        { "key": "partnerOccupation", "label": "Partner's profession/occupation (or that of parents, if applicant is a minor)", "type": "text", "pdf": "topmostSubform[0].Page2[0].T16[2]", "default": "-" }
+      ]
+    },
+    {
+      "title": "Guarantor or reference in Japan",
+      "copyFrom": { "label": "Same as the hotel above", "map": { "guarantorName": "hotelName", "guarantorTel": "hotelTel", "guarantorAddress": "hotelAddress" }, "set": { "guarantorRelationship": "HOTEL" } },
+      "fields": [
+        { "key": "guarantorName", "label": "Name", "type": "text", "pdf": "topmostSubform[0].Page2[0].#area[0].guarantor_name[0]", "maxLength": 40, "source": "hotel.hotelName", "required": true },
+        { "key": "guarantorTel", "label": "Tel.", "type": "text", "pdf": "topmostSubform[0].Page2[0].#area[0].guarantor_tel[0]", "maxLength": 15, "source": "hotel.phone", "required": true },
+        { "key": "guarantorAddress", "label": "Address", "type": "textarea", "pdf": "topmostSubform[0].Page2[0].guarantor_adr[0]", "maxLength": 100, "source": "hotel.fullAddress", "required": true },
+        { "key": "guarantorDob", "label": "Date of birth", "type": "text", "pdf": "topmostSubform[0].Page2[0].T14[1]", "default": "-" },
+        {
+          "key": "guarantorSex", "label": "Sex", "type": "radio", "pdf": "topmostSubform[0].Page2[0].RB1[0]",
+          "options": [ { "value": "M", "label": "Male", "state": "/0" }, { "value": "F", "label": "Female", "state": "/1" } ]
+        },
+        { "key": "guarantorRelationship", "label": "Relationship to applicant", "type": "text", "pdf": "topmostSubform[0].Page2[0].T25[1]", "maxLength": 64, "default": "HOTEL" },
+        { "key": "guarantorOccupation", "label": "Profession or occupation and position", "type": "text", "pdf": "topmostSubform[0].Page2[0].T5[0]", "maxLength": 51, "default": "-" },
+        { "key": "guarantorNationality", "label": "Nationality and immigration status", "type": "text", "pdf": "topmostSubform[0].Page2[0].T5[1]", "maxLength": 57, "default": "-" }
+      ]
+    },
+    {
+      "title": "Inviter in Japan",
+      "help": "Write \"SAME AS ABOVE\" if the inviting person and the guarantor are the same.",
+      "fields": [
+        { "key": "inviterName", "label": "Name", "type": "text", "pdf": "topmostSubform[0].Page2[0].#area[2].T19[0]", "maxLength": 40, "default": "-" },
+        { "key": "inviterTel", "label": "Tel.", "type": "text", "pdf": "topmostSubform[0].Page2[0].#area[2].T10[0]", "maxLength": 15, "default": "-" },
+        { "key": "inviterAddress", "label": "Address", "type": "textarea", "pdf": "topmostSubform[0].Page2[0].T23[0]", "maxLength": 100, "default": "-" },
+        { "key": "inviterDob", "label": "Date of birth", "type": "text", "pdf": "topmostSubform[0].Page2[0].T14[0]", "default": "-" },
+        {
+          "key": "inviterSex", "label": "Sex", "type": "radio", "pdf": "topmostSubform[0].Page2[0].RB1[1]",
+          "options": [ { "value": "M", "label": "Male", "state": "/0" }, { "value": "F", "label": "Female", "state": "/1" } ]
+        },
+        { "key": "inviterRelationship", "label": "Relationship to applicant", "type": "text", "pdf": "topmostSubform[0].Page2[0].T25[0]", "maxLength": 64, "default": "-" },
+        { "key": "inviterOccupation", "label": "Profession or occupation and position", "type": "text", "pdf": "topmostSubform[0].Page2[0].T5[3]", "maxLength": 51, "default": "-" },
+        { "key": "inviterNationality", "label": "Nationality and immigration status", "type": "text", "pdf": "topmostSubform[0].Page2[0].T5[2]", "maxLength": 57, "default": "-" },
+        { "key": "remarks", "label": "Remarks / special circumstances, if any", "type": "text", "pdf": "topmostSubform[0].Page2[0].T28[0]", "default": "-" }
+      ]
+    },
+    {
+      "title": "Have you ever…",
+      "kind": "declaration",
+      "help": "Ask the applicant every question. Nothing is ticked until staff choose an answer.",
+      "fields": [
+        { "key": "q1Crime", "label": "been convicted of a crime or offence in any country?", "type": "yesno", "pdf": "topmostSubform[0].Page2[0].#area[7].#area[8].RB5[3]", "required": true, "options": [ { "value": "yes", "label": "Yes", "state": "/0" }, { "value": "no", "label": "No", "state": "/1" } ] },
+        { "key": "q2Prison", "label": "been sentenced to imprisonment for 1 year or more in any country?", "type": "yesno", "pdf": "topmostSubform[0].Page2[0].#area[4].RB5[0]", "required": true, "options": [ { "value": "yes", "label": "Yes", "state": "/0" }, { "value": "no", "label": "No", "state": "/1" } ] },
+        { "key": "q3Deported", "label": "been deported or removed from Japan or any country for overstaying your visa or violating any law or regulation?", "type": "yesno", "pdf": "topmostSubform[0].Page2[0].#area[5].RB5[1]", "required": true, "options": [ { "value": "yes", "label": "Yes", "state": "/0" }, { "value": "no", "label": "No", "state": "/1" } ] },
+        { "key": "q4Drugs", "label": "been convicted and sentenced for a drug offence in any country?", "type": "yesno", "pdf": "topmostSubform[0].Page2[0].RB5[5]", "required": true, "options": [ { "value": "yes", "label": "Yes", "state": "/0" }, { "value": "no", "label": "No", "state": "/1" } ] },
+        { "key": "q5Prostitution", "label": "engaged in prostitution, or in the intermediation or solicitation of a prostitute, or any related activity?", "type": "yesno", "pdf": "topmostSubform[0].Page2[0].#area[9].RB5[4]", "required": true, "options": [ { "value": "yes", "label": "Yes", "state": "/0" }, { "value": "no", "label": "No", "state": "/1" } ] },
+        { "key": "q6Trafficking", "label": "committed trafficking in persons or incited or aided another to commit such an offence?", "type": "yesno", "pdf": "topmostSubform[0].Page2[0].#area[6].RB5[2]", "required": true, "options": [ { "value": "yes", "label": "Yes", "state": "/0" }, { "value": "no", "label": "No", "state": "/1" } ] },
+        { "key": "yesDetails", "label": "If you answered \"Yes\" to any question, details", "type": "textarea", "pdf": "topmostSubform[0].Page2[0].T28[1]", "default": "NOT APPLICABLE", "align": "center" }
+      ]
+    },
+    {
+      "title": "Date of application",
+      "fields": [
+        { "key": "applicationDate", "label": "Date of application (leave blank if the applicant will date it by hand)", "type": "date", "dateFormat": "DD/MM/YYYY", "pdf": "topmostSubform[0].Page2[0].T150[0]" }
+      ]
+    }
+  ]
+}

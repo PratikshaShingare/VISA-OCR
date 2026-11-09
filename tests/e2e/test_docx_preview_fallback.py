@@ -76,6 +76,13 @@ async def main():
         checks.check("the voucher content is on the Word page (hotel name)", "The Grand Meridian" in text or "THE GRAND MERIDIAN" in text.upper(), text[:200])
         checks.check("the confirmation number is on the Word page", "CONF-GM01" in text)
         checks.check("tables are rendered (voucher uses tables)", await page.locator(f"{v} .doc-viewer__docx table").count() >= 1)
+        broken = await page.evaluate("""() => [...document.querySelectorAll('[data-voucher-preview] .doc-viewer__docx img')].filter(i => !(i.complete && i.naturalWidth > 0)).length""")
+        total_imgs = await page.locator(f"{v} .doc-viewer__docx img").count()
+        checks.check("every picture on the Word page loads (EMF header text is swapped for PNG, no broken-image boxes)", total_imgs >= 5 and broken == 0, f"{broken} broken of {total_imgs}")
+        canvas_visible = await page.evaluate("""() => { var p = document.querySelector('[data-voucher-preview] [data-dv="page"]'); return !!p && !p.hidden && getComputedStyle(p).display !== 'none'; }""")
+        checks.check("the empty PDF canvas is not left beside the Word page", not canvas_visible)
+        geo = await page.evaluate("""() => { var b = document.querySelector('[data-voucher-preview] .doc-viewer__body'); var s = document.querySelector('[data-voucher-preview] .doc-viewer__docx section.docx').getBoundingClientRect(); var br = b.getBoundingClientRect(); return { scrollW: b.scrollWidth, clientW: b.clientWidth, left: s.left - br.left, right: br.right - s.right, bottom: br.bottom - s.bottom }; }""")
+        checks.check("the Word page fits the preview box (no sideways scroll, centred, whole page in view)", geo["scrollW"] <= geo["clientW"] + 1 and geo["left"] >= 0 and geo["right"] >= 0 and abs(geo["left"] - geo["right"]) < 6, str(geo))
         dims = await page.evaluate("""() => { var s = document.querySelector('[data-voucher-preview] .doc-viewer__docx section.docx');
             var cs = getComputedStyle(s); return { w: parseFloat(cs.width), h: parseFloat(cs.minHeight || cs.height) } }""")
         ratio = dims["w"] / dims["h"]

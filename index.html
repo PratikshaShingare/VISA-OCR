@@ -42,6 +42,7 @@
   <link rel="stylesheet" href="css/dashboard.css" />
   <link rel="stylesheet" href="css/upload-documents.css" />
   <link rel="stylesheet" href="css/document-preview.css" />
+  <link rel="stylesheet" href="css/visa-forms.css" />
   <link rel="stylesheet" href="css/responsive.css" />
 </head>
 <body>
@@ -76,6 +77,9 @@
             <a class="profile-menu__item" href="#/passport-authorization" data-nav-link="passport-authorization">Passport Authorization Letter</a>
             <a class="profile-menu__item" href="#/checklist-letter" data-nav-link="checklist-letter">Checklist Letter</a>
             <a class="profile-menu__item" href="#/invitation-letter" data-nav-link="invitation-letter">Invitation Letter</a>
+            <hr style="border:none;border-top:1px solid var(--color-border);margin:var(--space-2) 0;" />
+            <a class="profile-menu__item" href="#/fill-forms" data-nav-link="fill-forms">Fill Visa Form</a>
+            <a class="profile-menu__item" href="#/form-check" data-nav-link="form-check">Check Forms</a>
           </div>
         </div>
 
@@ -162,6 +166,10 @@
         <a class="primary-nav__link" href="#/passport-authorization" data-nav-link="passport-authorization">Passport Authorization Letter</a>
         <a class="primary-nav__link" href="#/checklist-letter" data-nav-link="checklist-letter">Checklist Letter</a>
         <a class="primary-nav__link" href="#/invitation-letter" data-nav-link="invitation-letter">Invitation Letter</a>
+
+        <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--color-text-faint);padding:var(--space-3) var(--space-2) var(--space-1);">Visa Forms</div>
+        <a class="primary-nav__link" href="#/fill-forms" data-nav-link="fill-forms">Fill Forms</a>
+        <a class="primary-nav__link" href="#/form-check" data-nav-link="form-check">Check Forms</a>
 
         <a class="primary-nav__link" href="#/admin" data-nav-link="admin" data-admin-only hidden>Admin</a>
 
@@ -330,6 +338,29 @@
             </div>
           </div>
           <div data-upload-documents-root></div>
+        </div>
+      </section>
+
+      <!-- ---------- Visa forms: fill an embassy form / check filled forms ---------- -->
+      <section class="view" data-view="fill-forms">
+        <div class="container">
+          <div class="view-header">
+            <div class="view-header__text">
+              <h1>Fill Forms</h1>
+            </div>
+          </div>
+          <div data-fill-forms-root></div>
+        </div>
+      </section>
+
+      <section class="view" data-view="form-check">
+        <div class="container">
+          <div class="view-header">
+            <div class="view-header__text">
+              <h1>Check Forms</h1>
+            </div>
+          </div>
+          <div data-form-check-root></div>
         </div>
       </section>
 
@@ -695,6 +726,9 @@
   <script src="js/applicant-picker.js"></script>
   <script src="js/traveller-picker.js"></script>
   <script src="js/upload-documents.js"></script>
+  <script src="js/forms/visa-form-people.js"></script>
+  <script src="js/fill-forms.js"></script>
+  <script src="js/form-check.js"></script>
   <script src="js/document-workspace.js"></script>
   <script src="js/document-queue.js"></script>
   <script src="js/dashboard.js"></script>

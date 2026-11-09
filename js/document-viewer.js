@@ -115,6 +115,75 @@
     return DOCX_READY;
   }
 
+
+  // Browsers cannot draw EMF / WMF pictures, and the hotel voucher's header keeps
+  // its company name, e-mail and phone line as EMF pictures — they would show as
+  // broken-image boxes. Those few pictures were rendered once to PNG
+  // (assets/emf-png/, matched by the SHA-1 of the original file) and are swapped
+  // in here, in the browser's own copy only: the real .docx and its PDF are not
+  // touched. A picture with no ready PNG is left alone.
+  var EMF_PNG_DIR = "assets/emf-png/";
+  var EMF_INDEX = null;
+
+  function sha1Hex(buffer) {
+    if (!global.crypto || !global.crypto.subtle) return Promise.reject(new Error("no crypto"));
+    return global.crypto.subtle.digest("SHA-1", buffer).then(function (digest) {
+      return Array.prototype.map.call(new Uint8Array(digest), function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+    });
+  }
+
+  function loadEmfIndex() {
+    if (!EMF_INDEX) {
+      EMF_INDEX = fetch(EMF_PNG_DIR + "index.json")
+        .then(function (r) { return r.ok ? r.json() : {}; })
+        .catch(function () { return {}; });
+    }
+    return EMF_INDEX;
+  }
+
+  function swapVectorPictures(blob) {
+    if (!global.JSZip) return Promise.resolve(blob);
+    return Promise.all([global.JSZip.loadAsync(blob), loadEmfIndex()]).then(function (res) {
+      var zip = res[0];
+      var index = res[1] || {};
+      var names = Object.keys(zip.files).filter(function (n) { return /^word\/media\/[^/]+\.(emf|wmf)$/i.test(n); });
+      if (!names.length || !Object.keys(index).length) return blob;
+      var renames = [];
+      return Promise.all(names.map(function (name) {
+        return zip.file(name).async("arraybuffer").then(function (buf) {
+          return sha1Hex(buf).then(function (hash) {
+            var entry = index[hash];
+            if (!entry) return;
+            return fetch(EMF_PNG_DIR + entry.file).then(function (r) { return r.ok ? r.arrayBuffer() : null; }).then(function (png) {
+              if (!png) return;
+              var newName = name.replace(/\.(emf|wmf)$/i, ".png");
+              zip.remove(name);
+              zip.file(newName, png);
+              renames.push([name.replace(/^word\//, ""), newName.replace(/^word\//, "")]);
+            });
+          });
+        }).catch(function () { /* leave this picture as it is */ });
+      })).then(function () {
+        if (!renames.length) return blob;
+        var rels = Object.keys(zip.files).filter(function (n) { return /^word\/(_rels\/)?.*\.rels$/i.test(n); });
+        return Promise.all(rels.map(function (relName) {
+          return zip.file(relName).async("string").then(function (xml) {
+            var changed = xml;
+            renames.forEach(function (pair) { changed = changed.split(pair[0]).join(pair[1]); });
+            if (changed !== xml) zip.file(relName, changed);
+          });
+        })).then(function () {
+          return zip.file("[Content_Types].xml").async("string").then(function (xml) {
+            if (!/Extension="png"/i.test(xml)) {
+              zip.file("[Content_Types].xml", xml.replace("<Default ", '<Default Extension="png" ContentType="image/png"/><Default '));
+            }
+            return zip.generateAsync({ type: "blob", mimeType: blob.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+          });
+        });
+      });
+    }).catch(function () { return blob; });
+  }
+
   var ZOOM_STEPS = [0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
   // Must match css/document-viewer.css's own `.doc-viewer__body { max-height: 72vh }`
@@ -501,8 +570,8 @@
       self.docxBlob = file.blob;
       self.docxFilename = file.filename || "document.docx";
       self.docxHostEl.innerHTML = "";
-      return docxLib
-        .renderAsync(self.docxBlob, self.docxHostEl, null, {
+      return swapVectorPictures(self.docxBlob).then(function (showable) {
+        return docxLib.renderAsync(showable, self.docxHostEl, null, {
           className: "docx",
           inWrapper: true,
           breakPages: true,
@@ -512,7 +581,8 @@
           renderEndnotes: true,
           ignoreLastRenderedPageBreak: true,
           useBase64URL: true, // images inline: nothing to revoke, nothing fetched
-        })
+        });
+      })
         .then(function () {
           if (token !== self._renderToken || self.destroyed) return;
           var pages = self.docxHostEl.querySelectorAll("section.docx");
@@ -522,6 +592,9 @@
           self.currentPage = 1;
           self.fitMode = true;
           self._setStatus("", false);
+          // The PDF canvas is empty in Word mode: hide it (after _setStatus, which
+          // re-shows it), or it takes a column beside the Word pages.
+          self.pageEl.hidden = true;
           self.docxHostEl.hidden = false;
           self.noteEl.hidden = false;
           self.noteEl.textContent =
@@ -543,9 +616,14 @@
     var wrapper = host.querySelector(".docx-wrapper") || host;
     wrapper.style.zoom = "1";
     if (this.fitMode) {
-      var pageWidth = pages[0].getBoundingClientRect().width || 794;
+      var pageRect = pages[0].getBoundingClientRect();
+      var pageWidth = pageRect.width || 794;
+      var pageHeight = pageRect.height || 1123;
       var avail = Math.max(200, this.bodyEl.clientWidth - 32);
-      this.scale = Math.max(0.25, Math.min(3, avail / pageWidth));
+      // Same rule as the PDF view: fit the WHOLE page (width and height) so the
+      // footer is in view without scrolling; zoom still lets staff read closer.
+      var heightBudget = Math.max(320, global.innerHeight * BODY_MAX_HEIGHT_VH) - 32;
+      this.scale = Math.max(0.25, Math.min(3, Math.min(avail / pageWidth, heightBudget / pageHeight)));
     }
     wrapper.style.zoom = String(this.scale);
     this.numPages = pages.length;

@@ -387,3 +387,31 @@ def test_a_timeout_kills_the_launcher_and_its_child_process(monkeypatch, tmp_pat
     assert not alive, "the LibreOffice helper process was left running after the timeout"
     assert sem.acquire(timeout=1)  # slot freed after the timeout
     sem.release()
+
+
+# --- convert_via_word's own body (it was once broken by an undefined name; the
+# tests above replace the whole function, so none of them would have noticed) ---
+
+
+class _Done:
+    def __init__(self, code, out="", err=""):
+        self.returncode, self.stdout, self.stderr = code, out, err
+
+
+def test_convert_via_word_returns_the_pdf_word_made(monkeypatch):
+    monkeypatch.setattr(pdf_conversion.sys, "platform", "win32")
+
+    def fake_run(cmd, **kw):
+        open(cmd[-1], "wb").write(b"%PDF-from-word")  # last argument is the .pdf path
+        return _Done(0)
+
+    monkeypatch.setattr(pdf_conversion.subprocess, "run", fake_run)
+    assert pdf_conversion.convert_via_word(b"docx", base_name="x") == b"%PDF-from-word"
+
+
+def test_convert_via_word_reports_a_word_failure_clearly(monkeypatch):
+    monkeypatch.setattr(pdf_conversion.sys, "platform", "win32")
+    monkeypatch.setattr(pdf_conversion.subprocess, "run", lambda cmd, **kw: _Done(1, "", "Word is busy"))
+    with pytest.raises(pdf_conversion.PdfConversionError) as e:
+        pdf_conversion.convert_via_word(b"docx", base_name="x")
+    assert "Word is busy" in str(e.value)

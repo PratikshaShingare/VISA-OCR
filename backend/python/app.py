@@ -19,6 +19,7 @@ including installing the Tesseract OCR binary itself.
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
 import tempfile
@@ -54,6 +55,8 @@ import singapore_letter_engine
 import cover_letter_engine
 import data_model
 import docx_utils
+import flight_itinerary
+import form_check
 import hotel_voucher_engine
 import hotel_voucher_ocr
 import invitation_letter_engine
@@ -65,6 +68,7 @@ import openrouter_ocr
 import pdf_conversion
 import required_document_letter_engine
 import visa_requirements_data
+import visa_forms
 
 app = FastAPI(title="Khanna Travels & Holidays — Local Backend", version="0.1.0")
 
@@ -84,7 +88,7 @@ app.add_middleware(
     # to a generic name) — needed as soon as any endpoint streams a file
     # download rather than JSON (Phase 7's hotel voucher, and later
     # cover/authorization/invitation letters).
-    expose_headers=["Content-Disposition"],
+    expose_headers=["Content-Disposition", "X-Form-Overflow"],
 )
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25MB
@@ -114,6 +118,10 @@ def health():
         # configured and how many paid calls THIS run has made — never the
         # token itself, and never a live call (that would spend credits).
         "azapi": ocr_azapi.get_status(),
+        # Which reader handles passports right now: azapi alone whenever a
+        # token is configured (Tesseract / Google Vision are then used for
+        # hotel vouchers only), otherwise the local pipeline.
+        "passportReader": "azapi" if ocr_azapi.is_enabled() else "local",
         # Same honesty rule applied to PDF conversion: confirms whether
         # CLOUDCONVERT_API_KEY is actually visible to THIS running
         # deployment (never the key's value — project rule 12), so a
@@ -256,6 +264,10 @@ async def process_passport(
         )
     except IndexError as e:
         raise HTTPException(400, str(e))
+    except ocr_azapi.AzapiError as e:
+        # azapi is the only passport reader while a token is set, so its
+        # failure is reported as it is (config / credits / network / unreadable).
+        raise HTTPException(503, f"azapi passport OCR could not read this file: {e}")
     except pytesseract.pytesseract.TesseractNotFoundError:
         status = ocr_runner.get_ocr_engine_status()
         raise HTTPException(
@@ -1620,3 +1632,145 @@ def admin_export_excel(payload: AdminExportRequest):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# Fill Forms + Check Forms pages (visa_forms.py, form_check.py)
+# ---------------------------------------------------------------------------
+
+
+def _missing_package_message(e: ModuleNotFoundError) -> str:
+    return (
+        f"The backend is missing the Python package '{e.name}'. Close the Start Backend window, run "
+        "'pip install -r requirements.txt' in backend/python, then start the backend again."
+    )
+
+
+@app.get("/api/forms")
+def list_visa_forms():
+    """Every official form the Fill Forms page can fill, with its fields."""
+    return {"forms": visa_forms.list_forms()}
+
+
+class FillFormRequest(BaseModel):
+    formId: str
+    values: dict[str, Any] = {}
+    applicantName: Optional[str] = None
+
+
+@app.post("/api/forms/fill")
+def fill_visa_form(payload: FillFormRequest):
+    """The embassy's own PDF form, filled. Fields stay editable in Adobe."""
+    try:
+        definition = visa_forms.get_definition(payload.formId)
+        content, _missing, overflow = visa_forms.fill_form(payload.formId, payload.values)
+    except visa_forms.FormError as e:
+        raise HTTPException(400, str(e))
+    except ModuleNotFoundError as e:
+        raise HTTPException(503, _missing_package_message(e))
+    except Exception as e:  # noqa: BLE001 — clean message, never a stack trace
+        raise HTTPException(500, f"The form could not be filled: {e}")
+    name = re.sub(r"[^A-Za-z0-9]+", "_", payload.applicantName or "").strip("_")
+    filename = definition.get("outputName", "Visa_Form") + (f"_{name}" if name else "") + ".pdf"
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # Fields still too long for their box at the smallest font size.
+            "X-Form-Overflow": json.dumps(overflow),
+        },
+    )
+
+
+@app.post("/api/form-check/extract")
+async def form_check_extract(file: UploadFile = File(...)):
+    """What one uploaded form / supporting document says: its form fields
+    (fillable PDF), its text layer, or OCR text (scans and photos)."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, f"Unsupported file type '{ext}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}")
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "File too large (max 25MB).")
+    if not contents:
+        raise HTTPException(400, "Uploaded file is empty.")
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+    try:
+        result = await _run_ocr_job(form_check.extract_document, tmp_path)
+    except pytesseract.pytesseract.TesseractNotFoundError:
+        status = ocr_runner.get_ocr_engine_status()
+        raise HTTPException(
+            503,
+            "This file needs OCR, but the Tesseract OCR engine isn't available on this machine "
+            f"(looked for it at '{status.get('path')}'). {status.get('hint', '')}",
+        )
+    except ocr_providers.OCRProviderError as e:
+        raise HTTPException(503, f"OCR is currently unavailable: {e}")
+    except ModuleNotFoundError as e:
+        raise HTTPException(503, _missing_package_message(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"The file could not be read: {e}")
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    result["fileName"] = file.filename or ""
+    return result
+
+
+@app.post("/api/flight-itinerary/read")
+async def read_flight_itinerary(file: UploadFile = File(...), destination: str = Form("Japan")):
+    """Fill Forms: the flight booking -> date of arrival in the destination
+    country (the LANDING date of the first flight into it, connections
+    inside the country ignored), port of entry, airline, length of stay."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, f"Unsupported file type '{ext}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}")
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "File too large (max 25MB).")
+    if not contents:
+        raise HTTPException(400, "Uploaded file is empty.")
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+    try:
+        extract = await _run_ocr_job(form_check.extract_document, tmp_path)
+    except pytesseract.pytesseract.TesseractNotFoundError:
+        raise HTTPException(503, "This booking is a scan and needs OCR, but the Tesseract OCR engine isn't available on this machine.")
+    except ocr_providers.OCRProviderError as e:
+        raise HTTPException(503, f"OCR is currently unavailable: {e}")
+    except ModuleNotFoundError as e:
+        raise HTTPException(503, _missing_package_message(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"The flight booking could not be read: {e}")
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    text = extract.get("text") or "\n".join(str(f.get("value") or "") for f in extract.get("fields") or [])
+    result = flight_itinerary.read_itinerary(text, destination)
+    result["method"] = extract.get("method")
+    result["fileName"] = file.filename or ""
+    return result
+
+
+class FormCheckRequest(BaseModel):
+    form: dict[str, Any]
+    passports: list[dict[str, Any]] = []
+    supporting: list[dict[str, Any]] = []
+
+
+@app.post("/api/form-check/compare")
+def form_check_compare(payload: FormCheckRequest):
+    """Compares one read form with the passport details staff confirmed and
+    with the supporting documents. Suggestions only — staff decide."""
+    try:
+        return form_check.check_form(payload.form, payload.passports, payload.supporting)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"The form could not be checked: {e}")

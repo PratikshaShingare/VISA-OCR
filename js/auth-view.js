@@ -253,6 +253,8 @@
     "invitation-letter",
     "upload-passport",
     "upload-documents",
+    "fill-forms",
+    "form-check",
   ];
 
   function initRouteGuards() {

@@ -1472,6 +1472,92 @@ def _process_back_page(bgr: np.ndarray, back_read: Dict[str, Any], region_detect
     }
 
 
+def _azapi_only_page(pages: List[Image.Image], page_index: int, forced_rotation: Optional[int]) -> Dict[str, Any]:
+    """Passport result built from azapi alone (the only passport reader while
+    an azapi token is configured). Honest about what it cannot do: no MRZ reading or
+    cross-check, no automatic orientation / skew correction (a manual rotation
+    is applied when requested). The first page is sent as the data page, with
+    the next page as the back page; later pages of the same file are not
+    sent again (they were already covered, so no extra credits are spent).
+    Raises AzapiError when azapi cannot read it."""
+    base_notice = (
+        "This passport was read by azapi OCR only. "
+        "The machine-readable zone was not read or cross-checked and the page was not auto-straightened — "
+        "please check every field against the passport."
+    )
+    if page_index > 0:
+        return {
+            "isBlank": False,
+            "orientationApplied": 0,
+            "orientationNeedsReview": False,
+            "orientationScores": {},
+            "skewAngleCorrectedDegrees": 0.0,
+            "processedImageBase64": bgr_to_base64_png(pil_to_bgr(pages[page_index])),
+            "documentRegionDetected": False,
+            "pageKind": "other",
+            "mrz": None,
+            "fields": {},
+            "warnings": [],
+            "notices": ["Not read separately: page 1 and the page after it are read together by azapi OCR."],
+        }
+    rotation = int(forced_rotation or 0) % 360
+    page = pages[0]
+    if rotation:
+        page = page.rotate(-rotation, expand=True)  # PIL rotates counter-clockwise; ours is clockwise
+    bgr = pil_to_bgr(page)
+    try:
+        front = ocr_azapi.to_jpeg_bytes(page)
+        back, back_index = ocr_azapi._back_page_bytes(pages, 0)
+        output, from_cache = ocr_azapi.fetch_output(front, back)
+        az = ocr_azapi.normalize(output)
+        fields, warnings = ocr_azapi.build_fields({}, None, az)
+    except ocr_azapi.AzapiError:
+        raise
+    except Exception as e:  # noqa: BLE001 — never a raw stack trace
+        raise ocr_azapi.AzapiError("unexpected", "azapi's answer could not be processed.") from e
+    try:
+        sal = passport_layout_salutation(fields, az)
+        if sal:
+            fields["salutation"] = sal
+    except Exception:  # noqa: BLE001 — the salutation is a convenience
+        pass
+    return {
+        "isBlank": False,
+        "orientationApplied": rotation,
+        "orientationNeedsReview": True,
+        "orientationScores": {},
+        "skewAngleCorrectedDegrees": 0.0,
+        "processedImageBase64": bgr_to_base64_png(bgr),
+        "documentRegionDetected": False,
+        "croppedToPage": False,
+        "pageKind": "bio",
+        "ocrText": "",
+        "mrz": None,
+        "mrzEngine": None,
+        "mrzConfidence": None,
+        "mrzRepairs": [],
+        "fields": fields,
+        "verificationStatus": "OCR Extracted — Please Verify",
+        "warnings": warnings + ["No machine-readable zone was read, so the passport number, dates and sex could not be cross-checked."],
+        "notices": [base_notice],
+        "ocrProvider": "azapi",
+        "azapi": {"used": True, "fromCache": from_cache, "backPageIndex": back_index, "standalone": True},
+    }
+
+
+def passport_layout_salutation(fields: Dict[str, Any], az: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    import passport_layout
+
+    sal = passport_layout.derive_salutation(
+        (fields.get("sex") or {}).get("value"), (fields.get("dateOfBirth") or {}).get("value"), az.get("spouse")
+    )
+    if not sal:
+        return None
+    field = ocr_azapi.confidence_field(sal["value"], 0.6, "derived", True, "Worked out from sex and date of birth: " + sal["reason"])
+    field["canBeMrs"] = bool(sal.get("canBeMrs"))
+    return field
+
+
 def process_passport_file(
     path: str, page_index: int = 0, forced_rotation: Optional[int] = None, use_mrz_v2: bool = True
 ) -> Dict[str, Any]:
@@ -1479,6 +1565,17 @@ def process_passport_file(
     total_pages = len(pages)
     if page_index < 0 or page_index >= total_pages:
         raise IndexError(f"page_index {page_index} out of range (file has {total_pages} page(s))")
+
+    if ocr_azapi.is_enabled():
+        # azapi is the ONLY passport reader whenever a token is configured: the
+        # local Tesseract / Google Vision pipeline is not used for passports at
+        # all. (AZAPI_ENABLED=off brings the local pipeline back.) If azapi
+        # cannot read the file, the AzapiError is raised and shown to staff —
+        # there is deliberately no silent fallback.
+        result = _azapi_only_page(pages, page_index, forced_rotation)
+        result["pageIndex"] = page_index
+        result["totalPages"] = total_pages
+        return result
 
     result = process_passport_page(pages[page_index], forced_rotation=forced_rotation, use_mrz_v2=use_mrz_v2)
     result["pageIndex"] = page_index

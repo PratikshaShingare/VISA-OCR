@@ -134,8 +134,8 @@ def convert_via_word(docx_bytes: bytes, base_name: str = "document") -> bytes:
             raise PdfConversionError("PowerShell was not found, so Microsoft Word cannot be used for PDF export.")
         except subprocess.TimeoutExpired:
             raise PdfConversionError("PDF conversion with Microsoft Word timed out.")
-        if returncode != 0 or not os.path.isfile(pdf_path):
-            detail = (stderr or stdout or "unknown error").strip()[:400]
+        if result.returncode != 0 or not os.path.isfile(pdf_path):
+            detail = (result.stderr or result.stdout or "unknown error").strip()[:400]
             raise PdfConversionError(f"PDF conversion with Microsoft Word failed: {detail}")
         with open(pdf_path, "rb") as f:
             return f.read()

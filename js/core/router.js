@@ -40,6 +40,10 @@
     // Document sorter: passports + hotel vouchers of one traveller or a group,
     // sorted around the main applicant and turned into documents.
     "upload-documents",
+    // Visa forms: fill an embassy's own PDF form / check filled forms
+    // against the passport (js/fill-forms.js, js/form-check.js).
+    "fill-forms",
+    "form-check",
     // "Recent Passports" list (reached from the Upload Passport page).
     "passport-applications",
   ];

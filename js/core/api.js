@@ -778,6 +778,69 @@
     });
   }
 
+  // ---- Fill Forms / Check Forms pages (backend: visa_forms.py, form_check.py) ----
+
+  /** Every official visa form the Fill Forms page can fill, with its fields. */
+  function listVisaForms() {
+    return request(API_BASE_URL + "/api/forms", { method: "GET", timeoutMs: 30000 });
+  }
+
+  /** The embassy's own PDF form, filled with `values` (keys from the form's definition). */
+  function fillVisaForm(formId, values, applicantName) {
+    return fetch(API_BASE_URL + "/api/forms/fill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ formId: formId, values: values, applicantName: applicantName || null }),
+    }).then(
+      function (res) {
+        if (!res.ok) {
+          return parseErrorResponse(res).then(function (err) {
+            throw err;
+          });
+        }
+        var match = /filename="?([^"]+)"?/.exec(res.headers.get("Content-Disposition") || "");
+        // Fields whose text was too long for their box even at the smallest size.
+        var overflow = [];
+        try {
+          overflow = JSON.parse(res.headers.get("X-Form-Overflow") || "[]") || [];
+        } catch (e) {
+          overflow = [];
+        }
+        return res.blob().then(function (blob) {
+          return { blob: blob, filename: match ? match[1] : "Visa_Form.pdf", overflow: overflow };
+        });
+      },
+      function () {
+        throw unreachableError();
+      }
+    );
+  }
+
+  /** Flight booking -> arrival date in `destination`, port of entry, airline, length of stay. */
+  function readFlightBooking(file, destination) {
+    var form = new FormData();
+    form.append("file", file, file.name);
+    form.append("destination", destination || "Japan");
+    return request(API_BASE_URL + "/api/flight-itinerary/read", { method: "POST", body: form });
+  }
+
+  /** What one uploaded form / supporting document says (form fields, text or OCR). */
+  function extractFormDocument(file) {
+    var form = new FormData();
+    form.append("file", file, file.name);
+    return request(API_BASE_URL + "/api/form-check/extract", { method: "POST", body: form });
+  }
+
+  /** Compares one read form with the confirmed passport details and the supporting documents. */
+  function compareFormDocument(formExtract, passports, supporting) {
+    return request(API_BASE_URL + "/api/form-check/compare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ form: formExtract, passports: passports || [], supporting: supporting || [] }),
+      timeoutMs: 60000,
+    });
+  }
+
   global.KhannaApi = {
     API_BASE_URL: API_BASE_URL,
     previewWithLayout: previewWithLayout,
@@ -815,5 +878,10 @@
     lookupVisaRequirement: lookupVisaRequirement,
     downloadRequiredDocumentLetter: downloadRequiredDocumentLetter,
     composeRequiredDocumentLetterFields: composeRequiredDocumentLetterFields,
+    listVisaForms: listVisaForms,
+    fillVisaForm: fillVisaForm,
+    extractFormDocument: extractFormDocument,
+    readFlightBooking: readFlightBooking,
+    compareFormDocument: compareFormDocument,
   };
 })(window);

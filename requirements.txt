@@ -24,3 +24,6 @@ python-dotenv>=1.0
 # third-party hotel voucher can print (DD/MM/YYYY, "12 Jan 2026", ...) into
 # the ISO shape the Hotel Blocking form's date inputs expect.
 python-dateutil>=2.8
+# Fill Forms / Check Forms pages (visa_forms.py, form_check.py): fills the
+# embassy's own fillable PDF form and reads form fields back out of a filled one.
+pypdf>=5.0
