@@ -911,7 +911,7 @@
       '<p class="initors-person-section__subtitle">' + voiceNote + "</p>" +
       sexNote +
       '<div class="field-grid">' +
-      personFieldRowHtml(person.id, "occupation", "Occupation / business details", entry.occupation, true, {
+      personFieldRowHtml(person.id, "occupation", "Occupation / business details" + (global.KhannaApplicantDetails && global.KhannaApplicantDetails.ofPersonId(app, person.id).occupation ? " (from the saved profile — edit if needed)" : ""), entry.occupation, true, {
         placeholder: "e.g. Business Owner",
       }) +
       personFieldRowHtml(
@@ -933,12 +933,29 @@
     );
   }
 
+  // "Occupation / business details" is filled from the person's saved profile
+  // (Applicant Profiles page) when the box is still empty — never over what
+  // staff already typed.
+  function seedOccupationFromProfile(app, people) {
+    if (!global.KhannaApplicantDetails) return app;
+    var perPerson = {};
+    people.forEach(function (p) {
+      var typed = perPersonEntry(app, p.id).occupation;
+      var saved = global.KhannaApplicantDetails.ofPersonId(app, p.id).occupation;
+      if (!(typed && String(typed).trim()) && saved) perPerson[p.id] = { occupation: saved };
+    });
+    if (!Object.keys(perPerson).length) return app;
+    global.KhannaState.updateApplication(app.id, { initorsLetters: { perPerson: perPerson } }, null);
+    return getApp();
+  }
+
   function renderInitorsCard() {
     var app = getApp();
     var box = utils.qs("[data-initors-card]", root());
     if (!app || !box) return;
-    var state = initorsState(app);
     var selected = selectedInitorsPeople(app);
+    if (selected.length === 2) app = seedOccupationFromProfile(app, selected);
+    var state = initorsState(app);
     box.innerHTML =
       "<h3>Inviter Covering Letter</h3>" +
       useExistingHtml("initors") +

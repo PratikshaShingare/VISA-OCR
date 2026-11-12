@@ -137,7 +137,10 @@
     right: 0;
     bottom: 0;
     width: auto;
-    height: auto;
+    /* Exactly the space under the header, so a long menu scrolls inside the
+       drawer instead of running off the bottom of the screen. */
+    height: calc(100vh - var(--header-h));
+    height: calc(100dvh - var(--header-h));
     z-index: 45;
     overflow: hidden;
     background: transparent;

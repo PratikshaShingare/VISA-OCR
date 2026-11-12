@@ -43,6 +43,7 @@
   <link rel="stylesheet" href="css/upload-documents.css" />
   <link rel="stylesheet" href="css/document-preview.css" />
   <link rel="stylesheet" href="css/visa-forms.css" />
+  <link rel="stylesheet" href="css/applicant-profiles.css" />
   <link rel="stylesheet" href="css/responsive.css" />
 </head>
 <body>
@@ -80,6 +81,8 @@
             <hr style="border:none;border-top:1px solid var(--color-border);margin:var(--space-2) 0;" />
             <a class="profile-menu__item" href="#/fill-forms" data-nav-link="fill-forms">Fill Visa Form</a>
             <a class="profile-menu__item" href="#/form-check" data-nav-link="form-check">Check Forms</a>
+            <hr style="border:none;border-top:1px solid var(--color-border);margin:var(--space-2) 0;" />
+            <a class="profile-menu__item" href="#/applicant-profiles" data-nav-link="applicant-profiles">Applicant Profiles</a>
           </div>
         </div>
 
@@ -170,6 +173,9 @@
         <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--color-text-faint);padding:var(--space-3) var(--space-2) var(--space-1);">Visa Forms</div>
         <a class="primary-nav__link" href="#/fill-forms" data-nav-link="fill-forms">Fill Forms</a>
         <a class="primary-nav__link" href="#/form-check" data-nav-link="form-check">Check Forms</a>
+
+        <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--color-text-faint);padding:var(--space-3) var(--space-2) var(--space-1);">People</div>
+        <a class="primary-nav__link" href="#/applicant-profiles" data-nav-link="applicant-profiles">Applicant Profiles</a>
 
         <a class="primary-nav__link" href="#/admin" data-nav-link="admin" data-admin-only hidden>Admin</a>
 
@@ -350,6 +356,18 @@
             </div>
           </div>
           <div data-fill-forms-root></div>
+        </div>
+      </section>
+
+      <!-- ---------- Applicant Profiles: basic details saved once per person ---------- -->
+      <section class="view" data-view="applicant-profiles">
+        <div class="container">
+          <div class="view-header">
+            <div class="view-header__text">
+              <h1>Applicant Profiles</h1>
+            </div>
+          </div>
+          <div data-applicant-profiles-root></div>
         </div>
       </section>
 
@@ -695,6 +713,7 @@
   <script src="js/passport/passport-image-store.js"></script>
   <script src="js/passport/passport-preview.js"></script>
   <script src="js/passport/passport-review-form.js"></script>
+  <script src="js/passport/passport-expiry-alert.js"></script>
   <script src="js/passport/passport-processing.js"></script>
   <script src="js/travellers.js"></script>
   <script src="js/documents/checklist-rules.js"></script>
@@ -726,6 +745,8 @@
   <script src="js/applicant-picker.js"></script>
   <script src="js/traveller-picker.js"></script>
   <script src="js/upload-documents.js"></script>
+  <script src="js/applicant-details.js"></script>
+  <script src="js/applicant-profiles.js"></script>
   <script src="js/forms/visa-form-people.js"></script>
   <script src="js/fill-forms.js"></script>
   <script src="js/form-check.js"></script>

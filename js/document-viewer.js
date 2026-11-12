@@ -370,12 +370,19 @@
       var action = btn.getAttribute("data-dv");
       switch (action) {
         case "zoom-in":
-          self._setScale(self._nextZoom(1));
+          if (self.editing) self._zoomEditor(1);
+          else self._setScale(self._nextZoom(1));
           break;
         case "zoom-out":
-          self._setScale(self._nextZoom(-1));
+          if (self.editing) self._zoomEditor(-1);
+          else self._setScale(self._nextZoom(-1));
           break;
         case "fit":
+          if (self.editing) {
+            self.editor.setZoom(null);
+            self._syncEditZoomLabel();
+            break;
+          }
           self.fitMode = true;
           self._renderCurrentPage();
           break;
@@ -426,6 +433,20 @@
     var idx = nearestZoomIndex(this.scale);
     idx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, idx + dir));
     return ZOOM_STEPS[idx];
+  };
+
+  // Zoom of the page while it is being edited (the editor owns that page).
+  DocumentViewerInstance.prototype._zoomEditor = function (dir) {
+    var now = this.editor.getZoom() || this.scale;
+    var idx = nearestZoomIndex(now);
+    idx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, idx + dir));
+    this.editor.setZoom(ZOOM_STEPS[idx]);
+    this._syncEditZoomLabel();
+  };
+
+  DocumentViewerInstance.prototype._syncEditZoomLabel = function () {
+    var z = this.editor && this.editor.getZoom ? this.editor.getZoom() : null;
+    if (z) this.zoomLabelEl.textContent = Math.round(z * 100) + "%";
   };
 
   DocumentViewerInstance.prototype._setScale = function (scale) {
@@ -690,8 +711,14 @@
     if (wasEditing) this.editor.commit();
     this.editing = on;
     this._syncEditUi();
-    if (on) this.editor.openLetter(this.letterEl);
-    else this.editor.closeLetter();
+    var self = this;
+    if (on) {
+      var opened = this.editor.openLetter(this.letterEl);
+      if (opened && opened.then) opened.then(function () { self._syncEditZoomLabel(); });
+    } else {
+      this.editor.closeLetter();
+      this._renderCurrentPage(); // the zoom label shows the PDF page again
+    }
     this._updateMeta();
     if (wasEditing && !on && this.editor.isDirty()) return this.refresh();
     return Promise.resolve();

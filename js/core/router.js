@@ -44,6 +44,8 @@
     // against the passport (js/fill-forms.js, js/form-check.js).
     "fill-forms",
     "form-check",
+    // Saved basic details (phone, occupation, …) of each applicant.
+    "applicant-profiles",
     // "Recent Passports" list (reached from the Upload Passport page).
     "passport-applications",
   ];

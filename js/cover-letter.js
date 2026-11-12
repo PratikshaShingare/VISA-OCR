@@ -1128,6 +1128,51 @@
     return getApp();
   }
 
+  // The applicant's saved profile (Applicant Profiles page) fills the job /
+  // employer / occupation boxes of this letter the first time they are shown
+  // empty. Same rules as the residence seeding above: only an EMPTY box is
+  // filled, never one staff already typed or edited, and never for a letter
+  // written for a manually typed name (no real profile to read from).
+  function autoSeedFromProfile(app) {
+    var state = coverState(app);
+    var region = state.region;
+    if (!region || (state.manualApplicantName || "").trim() || !global.KhannaApplicantDetails) return app;
+    var d = global.KhannaApplicantDetails.of(app.applicant);
+    var patch = null;
+    function empty(v) { return !(v && String(v).trim()); }
+    if (region === "Europe") {
+      var e = state.europe || {};
+      var eu = {};
+      if (empty(e.applicantJobTitle) && d.occupation) eu.applicantJobTitle = sentenceCase(d.occupation, false);
+      if (empty(e.applicantEmployerName) && d.employerName) eu.applicantEmployerName = sentenceCase(d.employerName, false);
+      if (Object.keys(eu).length) patch = { europe: eu };
+    } else if (region === "Japan") {
+      var j = state.japan || {};
+      var line = global.KhannaApplicantDetails.occupationLine(d);
+      if (empty(j.applicantEmployerOccupation) && line) patch = { japan: { applicantEmployerOccupation: sentenceCase(line, false) } };
+    } else if (region === "Singapore") {
+      var applicantRow = selectedPeople(app).filter(function (p) { return p.isApplicant && !p.imported; })[0];
+      var occ = (state.singapore || {}).occupations || {};
+      if (applicantRow && empty(occ[applicantRow.id]) && d.occupation) {
+        var map = {};
+        map[applicantRow.id] = sentenceCase(d.occupation, false);
+        patch = { singapore: { occupations: map } };
+      }
+    }
+    if (!patch) return app;
+    global.KhannaState.updateApplication(app.id, { coverLetter: patch }, null);
+    return getApp();
+  }
+
+  // One line under the occupation / employer boxes saying where the values
+  // come from, shown only when the profile really holds something.
+  function profileHintHtml(app) {
+    if (!app || !global.KhannaApplicantDetails) return "";
+    var d = global.KhannaApplicantDetails.of(app.applicant);
+    if (!d.occupation && !d.employerName) return "";
+    return '<p class="field-hint">Occupation and employer are filled from the applicant\'s profile. Change them here for this letter only, or for good on the <a href="#/applicant-profiles" data-nav-link="applicant-profiles">Applicant Profiles</a> page.</p>';
+  }
+
   // Joins the two separate City/Country fields into the single "City,
   // Country" combined string the reference template's fixed wording (and
   // the backend's `cityCountryOfResidence` field key) expects — the one
@@ -1173,6 +1218,7 @@
           fieldRowHtml("europe", "companionEmploymentStartYear", "Companion employed since (year)", e.companionEmploymentStartYear, true)
         : "") +
       "</div>" +
+      profileHintHtml(getApp()) +
       "<p class=\"field-hint\">Optional — only if the trip continues to a second country.</p>" +
       '<div class="field-grid">' +
       fieldRowHtml("europe", "nextCountry", "Next country (optional)", e.nextCountry, false) +
@@ -1217,6 +1263,7 @@
       }) +
       (withCompanion ? fieldRowHtml("japan", "companionOccupation", "Companion occupation", j.companionOccupation, true) : "") +
       "</div>" +
+      profileHintHtml(getApp()) +
       '<h4 class="cover-subheading">Hotels in Japan (optional)</h4>' +
       '<div class="cover-hotel-list">' +
       (hotels.length ? hotels.map(japanHotelRowHtml).join("") : '<p class="field-hint">No hotels added yet.</p>') +
@@ -1261,7 +1308,8 @@
       "</div>" +
       '<h4 class="cover-subheading">' + (single ? "Occupation" : "Occupations (shown in the passenger table)") + "</h4>" +
       (single ? '<p class="field-hint" style="margin-bottom:var(--space-3);">Completes the sentence \u201CI am currently \u2026\u201D.</p>' : "") +
-      '<div class="field-grid">' + occupationRows + "</div>"
+      '<div class="field-grid">' + occupationRows + "</div>" +
+      profileHintHtml(app)
     );
   }
 
@@ -1544,6 +1592,7 @@
     // with that field still empty (section 10) — re-fetch app/state after,
     // since this may have just written to it.
     app = autoSeedEuropeResidence(app);
+    app = autoSeedFromProfile(app);
     app = syncFunding(app);
     var state = coverState(app);
     var region = state.region || "";

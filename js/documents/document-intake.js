@@ -124,6 +124,10 @@
           .filter(function (p) { return p && p.trim(); })
           .join(" ");
         var bio = form.bioResultOf(resultsByPage);
+        // Popup when the passport has expired or expires within a year.
+        if (global.KhannaPassportExpiry) {
+          global.KhannaPassportExpiry.check(values.current.expiryDate, values.applicant.fullName || file.name, values.current.number);
+        }
         return {
           kind: "passport",
           fileName: file.name,

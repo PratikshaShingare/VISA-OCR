@@ -5,9 +5,11 @@
    (backend/python/visa_forms/*.json), so a new country's form is a new
    definition file, not new page code.
 
-   Staff can start from a saved application (any person in it) or from a
-   passport uploaded here (read with the same passport OCR as everywhere
-   else). Every pre-filled value is marked and stays editable (rule 10).
+   Staff can start from an Applicant Profile, a saved application (any person
+   in it) or a passport uploaded here (read with the same passport OCR as
+   everywhere else). Every pre-filled value is marked and stays editable
+   (rule 10). The residential address is taken from the passport only: that
+   box is locked unless staff choose to type it by hand.
    The six "Have you ever…" questions are never answered automatically:
    staff must ask the applicant (rule 19).
 
@@ -40,6 +42,11 @@
     flightStatus: "",
     flight: null, // last flight-booking reading (legs + warnings)
     hotelListOpen: false,
+    optionalOpen: {}, // section title -> true when an optional part (travelling companion) is being filled
+    profileListOpen: false,
+    person: null, // the saved person the form is being filled for (profile / application person / passport)
+    personKind: "", // "profile" | "application" | "passport" | ""
+    unlocked: {}, // field key -> true once staff chose to type a locked field by hand
     generating: false,
     generated: null, // { url, filename, blob }
     error: "",
@@ -116,11 +123,23 @@
     var end = travel.endDate || cover.travelEndDate || hotels.reduce(function (m, h) { return h.checkOut && h.checkOut > m ? h.checkOut : m; }, "");
     var p = person || {};
     var addr = p.address || {};
+    var Details = global.KhannaApplicantDetails;
     return {
       applicant: Object.assign({}, p, {
-        fullAddress: joinParts([addr.line1, addr.line2, addr.city, addr.state, addr.pincode]),
+        // The residential address is read from the passport's address page only.
+        fullAddress: Details ? Details.passportAddressLine(p) : joinParts([addr.line1, addr.line2, addr.city, addr.state, addr.pincode]),
+        // What staff saved on the profile, else what the passport suggests (a printed spouse name -> married).
+        maritalStatusValue: Details ? Details.maritalStatus(p).toLowerCase() : "",
+        // Full name as printed on the passport: surname, then given names.
+        passportName: [p.lastName, p.firstName, p.middleName].filter(function (x) { return x && String(x).trim(); }).join(" "),
       }),
-      travel: { purpose: travel.purpose || "", startDate: start, endDate: end, lengthOfStay: lengthOfStay(start, end) },
+      travel: {
+        purpose: travel.purpose || "",
+        startDate: start,
+        endDate: end,
+        lengthOfStay: lengthOfStay(start, end),
+        stay30: (function () { var d = parseInt(lengthOfStay(start, end), 10); return isNaN(d) ? "" : d <= 30 ? "less30" : "more30"; })(),
+      },
       hotel: Object.assign({}, hotel, { fullAddress: joinParts([hotel.address, hotel.city, hotel.country]) }),
     };
   }
@@ -137,6 +156,22 @@
       if (c === "S" || c === "O") return "official";
       return "";
     }
+    var isIndian = /^(IND|INDIA|INDIAN)$/i.test(String((ctx.applicant && ctx.applicant.nationality) || ""));
+    // Singapore form: "Country/Place" boxes read "INDIA MUMBAI".
+    if (format === "countryAndPlace") {
+      var place = v.split(",")[0].trim();
+      return place ? (isIndian && !/\bINDIA\b/i.test(place) ? "INDIA " + place : place) : "";
+    }
+    if (format === "race") return isIndian ? "INDIAN" : "";
+    // The applicant's own mobile number, without the country code: "+91 98200 00000" -> "9820000000".
+    if (format === "localPhone") {
+      var digits = v.replace(/[^\d+]/g, "");
+      digits = digits.replace(/^\+91|^0091/, "");
+      if (/^91\d{10}$/.test(digits)) digits = digits.slice(2);
+      if (/^0\d{10}$/.test(digits)) digits = digits.slice(1);
+      return digits.replace(/^\+/, "");
+    }
+    if (format === "sgDocumentType") return /^P/i.test(v) ? "international" : /^D/i.test(v) ? "diplomatic" : /^[SO]/i.test(v) ? "official" : "";
     if (format === "issuingAuthority") {
       if (v) return v;
       var nat = String((ctx.applicant && ctx.applicant.nationality) || "").toUpperCase();
@@ -162,10 +197,30 @@
       if (field.type === "date") raw = displayDate(raw);
       if ((field.type === "radio" || field.type === "yesno") && !(field.options || []).some(function (o) { return o.value.toLowerCase() === raw.toLowerCase(); })) return;
       st.values[field.key] = raw;
-      st.filledFrom[field.key] = origin;
+      st.filledFrom[field.key] = /^applicant\.details\./.test(field.source) ? "profile" : origin;
       count += 1;
     });
     return count;
+  }
+
+  /** The passport's own hint was used for marital status (nothing saved on the profile): flag it for checking. */
+  function flagMaritalHint(person) {
+    var Details = global.KhannaApplicantDetails;
+    if (!Details || !st.values.maritalStatus || !st.filledFrom.maritalStatus) return;
+    if (!Details.of(person).maritalStatus && Details.maritalFromPassport(person)) st.filledFrom.maritalStatus = "passport";
+  }
+
+  /** Forgets everything that belongs to the previous person (their passport, address, job…), keeping trip and hotel values. */
+  function clearPersonFields() {
+    var form = currentForm();
+    if (!form) return;
+    eachField(form, function (field) {
+      if (field.source && /^applicant\./.test(field.source)) {
+        delete st.values[field.key];
+        delete st.filledFrom[field.key];
+      }
+    });
+    st.unlocked = {};
   }
 
   function applyDefaults() {
@@ -191,14 +246,38 @@
     var saved = app.visaForms && app.visaForms[st.formId];
     st.values = {};
     st.filledFrom = {};
+    st.unlocked = {};
+    st.person = personOf(app, st.personId);
+    st.personKind = "application";
+    st.profileListOpen = false;
     if (saved && saved.personId === st.personId && saved.values) {
       st.values = Object.assign({}, saved.values);
       st.sourceLabel = "Saved form values reopened";
     } else {
-      var ctx = contextFor(app, personOf(app, st.personId));
+      var ctx = contextFor(app, st.person);
       var n = prefill(ctx, "application");
+      flagMaritalHint(st.person);
       st.sourceLabel = n + " field" + (n === 1 ? "" : "s") + " filled from the saved application";
     }
+    applyDefaults();
+    clearGenerated();
+    render();
+  }
+
+  /** Fills the person's own fields from an Applicant Profile (passport details + saved basic details). */
+  function useProfile(profile) {
+    st.profileListOpen = false;
+    st.person = profile;
+    st.personKind = "profile";
+    st.personId = "applicant";
+    clearPersonFields();
+    // The profile is not tied to one application: keep the hotel / flight values, drop the old application link.
+    st.appId = null;
+    var ctx = contextFor(null, profile);
+    var n = prefill({ applicant: ctx.applicant, travel: {}, hotel: {} }, "application");
+    flagMaritalHint(profile);
+    st.sourceLabel = n + " field" + (n === 1 ? "" : "s") + " filled from the applicant profile";
+    st.passportStatus = "";
     applyDefaults();
     clearGenerated();
     render();
@@ -218,6 +297,9 @@
     }).then(
       function (record) {
         var person = Intake.personPatchFromPassport(record);
+        st.person = person;
+        st.personKind = "passport";
+        st.unlocked = {};
         var ctx = contextFor(st.appId ? S.getApplication(st.appId) : null, person);
         // Only the passport's own fields: keep trip / hotel values already here.
         var before = Object.assign({}, st.values);
@@ -226,6 +308,7 @@
           if (st.filledFrom[k] !== "passport") st.values[k] = before[k];
         });
         st.passportStatus = n + " field" + (n === 1 ? "" : "s") + " filled from " + file.name + (record.flags.length ? " — " + record.flags.join(" · ") : "");
+        flagMaritalHint(person);
         applyDefaults();
         clearGenerated();
         render();
@@ -243,7 +326,71 @@
 
   /** Fills the form's hotel lines from one hotel record; the guarantor (the
    * hotel, in the Khanna sample) follows when it is empty or was the old hotel. */
+  // Words that mark the street part of an address ("Belilios Rd", "Orchard Road", "Jalan Besar").
+  var STREET_WORDS = /\b(road|rd|street|st|avenue|ave|drive|dr|lane|ln|boulevard|blvd|crescent|cres|way|walk|place|pl|link|rise|hill|terrace|close|quay|park|circle|circus|central|square|sq|green|grove|view|gardens?|heights|vale|highway|hwy|expressway|jalan|jln|lorong|lor|bukit|tanjong|tg|marina|harbourfront|sentosa)\b/i;
+
+  /**
+   * Splits a hotel address the way the Singapore form asks for it:
+   * "#05-12, 3 Belilios Rd, Singapore 219924" ->
+   * { block: "3", floor: "05", unit: "12", street: "Belilios Rd", postalCode: "219924" }.
+   * Only the street NAME goes in "Street Name"; the house number goes in Block / House No.
+   */
+  function splitAddress(address) {
+    var text = String(address || "");
+    var out = { block: "", floor: "", unit: "", street: "", postalCode: "" };
+    var postal = text.match(/\b(\d{6})\b/);
+    if (postal) out.postalCode = postal[1];
+    var unit = text.match(/#\s*(\d{1,3})\s*-\s*(\d{1,5}[A-Z]?)/i);
+    if (unit) {
+      out.floor = unit[1];
+      out.unit = unit[2];
+    }
+    var parts = text.split(/[,\n]/).map(function (x) {
+      return x.replace(/#\s*\d{1,3}\s*-\s*\d{1,5}[A-Z]?/i, "").replace(/\bsingapore\b\s*\d{0,6}/ig, "").replace(/\b\d{6}\b/g, "").trim();
+    }).filter(Boolean);
+    var streetPart = parts.filter(function (x) { return STREET_WORDS.test(x); })[0] || parts.filter(function (x) { return /[a-z]{3,}/i.test(x); })[0] || "";
+    var m = streetPart.match(/^(?:blk|block)?\.?\s*(\d+[A-Z]?)\s+(.+)$/i);
+    if (m) {
+      out.block = m[1];
+      out.street = m[2];
+    } else {
+      out.street = streetPart;
+      // A house / block number written on its own before the street ("3, Belilios Rd").
+      var lone = parts.filter(function (x) { return /^(?:blk|block)?\.?\s*\d+[A-Z]?$/i.test(x); })[0];
+      if (lone) out.block = lone.replace(/^(?:blk|block)\.?\s*/i, "");
+    }
+    out.street = out.street.replace(/\s+/g, " ").replace(/[,.\s]+$/, "");
+    return out;
+  }
+
+  /** One value of a hotel for a form's own "hotel" map (Singapore). */
+  function hotelValue(hotel, expr) {
+    if (expr.indexOf("const:") === 0) return expr.slice(6);
+    if (expr === "name") return (hotel.hotelName || "").trim();
+    if (expr === "phone") return (hotel.phone || "").trim();
+    if (expr === "fullAddress") return joinParts([hotel.address, hotel.city, hotel.country]);
+    var parts = splitAddress(hotel.address);
+    if (expr === "street") return parts.street;
+    if (expr === "block") return parts.block;
+    if (expr === "floor") return parts.floor;
+    if (expr === "unit") return parts.unit;
+    if (expr === "postalCode") return parts.postalCode;
+    return "";
+  }
+
   function applyHotel(hotel, origin) {
+    var form = currentForm();
+    if (form && form.hotel && form.hotel.fill) {
+      var n = 0;
+      Object.keys(form.hotel.fill).forEach(function (key) {
+        var value = hotelValue(hotel, form.hotel.fill[key]);
+        if (!value) return;
+        st.values[key] = value;
+        st.filledFrom[key] = form.hotel.fill[key].indexOf("const:") === 0 ? "" : origin;
+        n += 1;
+      });
+      return n;
+    }
     var next = {
       hotelName: (hotel.hotelName || "").trim(),
       hotelTel: (hotel.phone || "").trim(),
@@ -344,10 +491,18 @@
             st.filledFrom[key] = "flight";
             filled.push(key);
           }
-          put("arrivalDate", displayDate(res.arrivalDate));
-          put("lengthOfStay", res.lengthOfStay);
-          put("portOfEntry", res.portOfEntry);
-          put("airline", res.airline);
+          var days = parseInt(res.lengthOfStay, 10);
+          var found = {
+            arrivalDate: displayDate(res.arrivalDate),
+            lengthOfStay: res.lengthOfStay,
+            portOfEntry: res.portOfEntry,
+            airline: res.airline,
+            stay30: isNaN(days) ? "" : days <= 30 ? "less30" : "more30",
+          };
+          // A form names which of these it uses (Singapore: arrival date and
+          // the "less / more than 30 days" tick); the Japan form uses the first four.
+          var map = (form && form.flight) || { arrivalDate: "arrivalDate", lengthOfStay: "lengthOfStay", portOfEntry: "portOfEntry", airline: "airline" };
+          Object.keys(map).forEach(function (key) { put(key, found[map[key]]); });
           st.flightStatus = filled.length + " field" + (filled.length === 1 ? "" : "s") + " filled from " + file.name + ".";
         }
         clearGenerated();
@@ -416,7 +571,8 @@
   function originTag(key) {
     var o = st.filledFrom[key];
     if (o === "passport") return '<span class="vf-tag vf-tag--verify">' + VERIFY + "</span>";
-    if (o === "application") return '<span class="vf-tag">From application — please verify</span>';
+    if (o === "application") return '<span class="vf-tag">From the saved details — please verify</span>';
+    if (o === "profile") return '<span class="vf-tag">From the applicant profile — please verify</span>';
     if (o === "voucher") return '<span class="vf-tag vf-tag--verify">From hotel voucher — ' + VERIFY + "</span>";
     if (o === "hotel-blocking") return '<span class="vf-tag">From Hotel Blocking — please verify</span>';
     if (o === "flight") return '<span class="vf-tag vf-tag--verify">From flight booking — please verify</span>';
@@ -441,62 +597,182 @@
         (value ? '<button type="button" class="btn btn-ghost btn-sm" data-ff-clear="' + field.key + '">Clear</button>' : "") +
         "</div>";
       label = '<span class="vf-label" id="' + id + '-l">' + esc(field.label) + (field.required ? ' <span class="vf-req" aria-hidden="true">*</span>' : "") + "</span>";
+    } else if (field.type === "textarea" && field.lockedTo && !st.unlocked[field.key]) {
+      // Locked: filled from the passport only. Staff can unlock it on purpose.
+      control =
+        '<textarea id="' + id + '" rows="2" readonly class="vf-locked" data-ff-key="' + field.key + '"' + max + ">" + esc(value) + "</textarea>" +
+        '<div class="vf-row-actions">' +
+        '<span class="vf-lock-note">' + (value
+          ? "Locked — taken from the passport. OCR Extracted — Please Verify."
+          : "No address found yet. Upload the passport's last (address) page in step 1, or type it by hand.") + "</span>" +
+        '<button type="button" class="btn btn-ghost btn-sm" data-ff-unlock="' + field.key + '">Type it by hand</button>' +
+        "</div>";
+      return '<div class="field vf-field vf-field--wide">' + label + control + "</div>";
     } else if (field.type === "textarea") {
-      control = '<textarea id="' + id + '" rows="2" data-ff-key="' + field.key + '"' + max + ">" + esc(value) + "</textarea>";
+      control = '<textarea id="' + id + '" rows="2" data-ff-key="' + field.key + '"' + max + ">" + esc(value) + "</textarea>" +
+        (field.lockedTo ? '<div class="vf-row-actions"><span class="vf-lock-note">Typed by hand — not from the passport.</span><button type="button" class="btn btn-ghost btn-sm" data-ff-lock="' + field.key + '">Use the passport address</button></div>' : "");
     } else if (field.type === "date") {
       var bad = value && !reviewForm.parseDate(value);
       control = '<input id="' + id + '" type="text" inputmode="numeric" placeholder="DD-MM-YYYY" maxlength="10" data-ff-key="' + field.key + '" data-date="1" value="' + esc(value) + '" aria-invalid="' + (bad ? "true" : "false") + '" />';
     } else {
       control = '<input id="' + id + '" type="text" data-ff-key="' + field.key + '" value="' + esc(value) + '"' + max + " />";
     }
-    return '<div class="field vf-field ' + (extraClass || "") + (field.type === "yesno" ? " vf-field--yesno" : "") + '">' + label + control + originTag(field.key) + help + "</div>";
+    var empty = formStarted() && field.required && !String(value).trim() ? " vf-field--empty" : "";
+    var width = field.width === "quarter" ? " vf-field--quarter" : "";
+    // Letter-box answers: how many of the printed boxes are used.
+    var count = field.boxes && field.maxLength ? countHtml(field, value) : "";
+    return '<div class="field vf-field ' + (extraClass || "") + width + (field.type === "yesno" ? " vf-field--yesno" : "") + empty + '">' + label + control + count + originTag(field.key) + help + "</div>";
+  }
+
+  /** "22 / 25 boxes" under a letter-box answer — shown only once it is nearly full. */
+  function countHtml(field, value) {
+    var used = String(value || "").length;
+    var near = used >= Math.ceil(field.maxLength * 0.7);
+    return '<span class="vf-count" data-ff-count="' + field.key + '"' + (near ? "" : " hidden") + ">" + used + " / " + field.maxLength + " boxes</span>";
+  }
+
+  /** What is sent to the PDF: an answer whose question is hidden (spouse
+   * details after "Single" was chosen…) is not printed, unless it is the
+   * form's own default such as "NA". */
+  function valuesToPrint() {
+    var out = Object.assign({}, st.values);
+    var form = currentForm();
+    if (form) {
+      eachField(form, function (field) {
+        if (!isShown(field) && !field.default) delete out[field.key];
+      });
+    }
+    return out;
+  }
+
+  /** A field shown only when another answer has a given value (spouse details only for "Married"…). */
+  function isShown(field) {
+    var cond = field.showIf;
+    if (!cond) return true;
+    var v = String(st.values[cond.key] || "").toLowerCase();
+    return (cond.in || []).some(function (x) { return String(x).toLowerCase() === v; });
   }
 
   function sectionHtml(section) {
-    var fields = section.fields.map(function (field) {
+    var optional = section.optional;
+    var open = !optional || !!st.optionalOpen[section.title];
+    var toggle = optional
+      ? '<label class="vf-optional-toggle"><input type="checkbox" data-ff-optional="' + esc(section.title) + '"' + (open ? " checked" : "") + " /> " + esc(optional.label) + "</label>" +
+        (open ? "" : '<p class="field-hint">' + esc(optional.note || "") + "</p>")
+      : "";
+    if (!open) {
+      return '<section class="vf-section" data-ff-section="' + esc(section.title) + '"><h3>' + esc(section.title) + "</h3>" + toggle + "</section>";
+    }
+    var fields = section.fields.filter(isShown).map(function (field) {
       if (field.type === "columns") {
         return (
           '<fieldset class="vf-columns"><legend>' + esc(field.label) + "</legend>" +
           '<div class="vf-grid">' + field.parts.map(function (p) { return inputHtml(p); }).join("") + "</div></fieldset>"
         );
       }
-      return inputHtml(field, field.type === "textarea" || field.type === "yesno" ? "vf-field--wide" : "");
+      // Long answers, yes/no questions and tick lists with many choices get the whole row.
+      var wide = field.type === "textarea" || field.type === "yesno" || (field.type === "radio" && (field.options || []).length > 3);
+      return inputHtml(field, wide ? "vf-field--wide" : "");
     }).join("");
     var tools = "";
     if (section.copyFrom) tools += '<button type="button" class="btn btn-secondary btn-sm" data-ff-copy="' + esc(section.title) + '">' + esc(section.copyFrom.label) + "</button>";
     if (section.kind === "declaration") tools += '<button type="button" class="btn btn-secondary btn-sm" data-ff-all-no>Applicant answered No to all</button>';
     return (
-      '<section class="vf-section"><h3>' + esc(section.title) + "</h3>" +
+      '<section class="vf-section" data-ff-section="' + esc(section.title) + '"><h3>' + esc(section.title) + "</h3>" + toggle +
       (section.help ? '<p class="field-hint">' + esc(section.help) + "</p>" : "") +
       (tools ? '<div class="vf-row-actions">' + tools + "</div>" : "") +
       '<div class="vf-grid">' + fields + "</div></section>"
     );
   }
 
-  function sourceHtml() {
+  var ACCEPT = 'accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"';
+
+  function profileListHtml() {
+    if (!st.profileListOpen) return "";
+    var P = global.KhannaApplicantProfiles;
+    var list = P ? P.people() : [];
+    if (!list.length) {
+      return '<p class="field-hint">No applicant profiles yet. A profile is created when a passport is saved on Upload Passport.</p>';
+    }
+    var Details = global.KhannaApplicantDetails;
+    var selectedId = st.personKind === "profile" && st.person ? st.person.id : null;
+    return (
+      '<div class="vf-pick-block">' +
+      '<p class="vf-pick-title">Applicant profiles — choose one</p>' +
+      '<div class="vf-pick-list" role="list">' +
+      list.map(function (x) {
+        var d = Details.of(x.profile);
+        var cur = (x.profile.passport && x.profile.passport.current) || {};
+        var isSel = selectedId && x.profile.id === selectedId;
+        return (
+          '<button type="button" class="vf-pick' + (isSel ? " is-selected" : "") + '" role="listitem" data-ff-profile="' + esc(x.profile.id) + '"' + (isSel ? ' aria-current="true"' : "") + ">" +
+          "<strong>" + esc(x.profile.fullName || "Unnamed") + (isSel ? ' <span class="vf-pick__tag">Selected</span>' : "") + "</strong>" +
+          '<span class="vf-source">' + esc([cur.number ? "Passport " + cur.number : "", Details.occupationLine(d), d.phone].filter(Boolean).join(" · ")) + "</span>" +
+          "</button>"
+        );
+      }).join("") +
+      "</div></div>"
+    );
+  }
+
+  /** Who the form is being filled for, and what is still missing from their saved details. */
+  function personSummaryHtml() {
+    if (!st.person) {
+      return '<p class="field-hint">Pick where the applicant\'s details come from. Name, passport details, date of birth and the residential address are read from the <strong>passport</strong>; ' +
+        "occupation, employer, phone and marital status come from the <strong>Applicant Profile</strong>.</p>";
+    }
+    var Details = global.KhannaApplicantDetails;
+    var passport = People.fromPerson(st.person);
+    var d = Details.of(st.person);
+    var from = { profile: "applicant profile", application: "saved application", passport: "uploaded passport" }[st.personKind] || "";
+    var missing = [];
+    if (!d.occupation) missing.push("occupation");
+    if (!d.phone) missing.push("phone number");
+    if (!d.maritalStatus && !Details.maritalFromPassport(st.person)) missing.push("marital status");
+    var nudge = st.personKind !== "passport" && missing.length
+      ? '<p class="field-hint">Not saved for this person yet: ' + esc(missing.join(", ")) + '. Add them once on <a href="#/applicant-profiles" data-nav-link="applicant-profiles">Applicant Profiles</a> and they fill in here by themselves.</p>'
+      : "";
+    return (
+      '<div class="vf-person-card" data-ff-person-card>' +
+      '<span class="vf-person-card__label">Selected applicant</span>' +
+      "<strong>" + esc(People.displayName(passport)) + "</strong>" +
+      '<span class="vf-source">' + esc([passport.passportNumber ? "Passport " + passport.passportNumber : "", from ? "from the " + from : ""].filter(Boolean).join(" · ")) +
+      (st.sourceLabel ? " — " + esc(st.sourceLabel) : "") + "</span></div>" +
+      nudge
+    );
+  }
+
+  function applicantHtml() {
     var app = st.appId ? S.getApplication(st.appId) : null;
     var people = app ? People.peopleOfApplication(app) : [];
-    var personSelect = people.length > 1
-      ? '<div class="field vf-person"><label for="ffPerson">Person</label><select id="ffPerson" data-ff-person>' +
+    var personSelect = people.length > 1 && st.personKind === "application"
+      ? '<div class="field vf-person"><label for="ffPerson">Person in this application</label><select id="ffPerson" data-ff-person>' +
         people.map(function (p) { return '<option value="' + esc(p.id) + '"' + (p.id === st.personId ? " selected" : "") + ">" + esc(People.displayName(p.details) + " — " + p.role) + "</option>"; }).join("") +
         "</select></div>"
       : "";
-    var accept = 'accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"';
     return (
-      '<div class="vf-source-group"><h3>Applicant</h3>' +
+      '<div class="vf-applicant">' +
       '<div class="vf-row-actions">' +
-      '<button type="button" class="btn btn-secondary btn-sm" data-ff-use-app>Use Existing Application</button>' +
-      '<label class="btn btn-secondary btn-sm vf-file-btn">Upload Passport<input type="file" ' + accept + " data-ff-passport /></label>" +
+      '<button type="button" class="btn btn-primary btn-sm" data-ff-profile-list aria-expanded="' + (st.profileListOpen ? "true" : "false") + '">Use Applicant Profile</button>' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-ff-use-app>Use Saved Application</button>' +
+      '<label class="btn btn-secondary btn-sm vf-file-btn">Upload Passport<input type="file" ' + ACCEPT + " data-ff-passport /></label>" +
       '<button type="button" class="btn btn-ghost btn-sm" data-ff-reset>Start empty</button>' +
       "</div>" +
-      (app ? '<p class="field-hint">Application: <strong>' + esc(People.displayName(People.fromPerson(app.applicant))) + "</strong>" + (st.sourceLabel ? " · " + esc(st.sourceLabel) : "") + "</p>" : "") +
+      profileListHtml() +
+      personSummaryHtml() +
       personSelect +
       (st.passportStatus ? '<p class="field-hint" role="status">' + esc(st.passportStatus) + "</p>" : "") +
-      "</div>" +
-      '<div class="vf-source-group"><h3>Hotel</h3>' +
+      "</div>"
+    );
+  }
+
+  /** Hotel and flights: both optional, each fills only its own lines of the form. */
+  function sourceHtml() {
+    return (
+      '<div class="vf-source-group"><h3>Hotel in ' + esc((currentForm() || {}).country || "the country") + "</h3>" +
       '<div class="vf-row-actions">' +
       '<button type="button" class="btn btn-secondary btn-sm" data-ff-hotel-list aria-expanded="' + (st.hotelListOpen ? "true" : "false") + '">Use Hotel Blocking</button>' +
-      '<label class="btn btn-secondary btn-sm vf-file-btn">Upload Hotel Voucher<input type="file" ' + accept + " data-ff-voucher /></label>" +
+      '<label class="btn btn-secondary btn-sm vf-file-btn">Upload Hotel Voucher<input type="file" ' + ACCEPT + " data-ff-voucher /></label>" +
       "</div>" + hotelListHtml() +
       (st.hotelStatus ? '<p class="field-hint" role="status">' + esc(st.hotelStatus) + "</p>" : "") +
       "</div>" +
@@ -504,7 +780,7 @@
       '<p class="field-hint">The arrival date is the day the flight lands in ' + esc((currentForm() || {}).country || "the country") +
       " — connections inside the country are skipped. Length of stay counts the arrival and departure days.</p>" +
       '<div class="vf-row-actions">' +
-      '<label class="btn btn-secondary btn-sm vf-file-btn">Upload Flight Booking<input type="file" ' + accept + " data-ff-flight /></label>" +
+      '<label class="btn btn-secondary btn-sm vf-file-btn">Upload Flight Booking<input type="file" ' + ACCEPT + " data-ff-flight /></label>" +
       "</div>" +
       (st.flightStatus ? '<p class="field-hint" role="status">' + esc(st.flightStatus) + "</p>" : "") +
       flightHtml() +
@@ -518,7 +794,7 @@
     if (!form) return out;
     eachField(form, function (field, section, parent) {
       if (parent) return;
-      if (field.required && !String(st.values[field.key] || "").trim()) out.push(field.label);
+      if (field.required && isShown(field) && !String(st.values[field.key] || "").trim()) out.push(field.label);
     });
     return out;
   }
@@ -539,7 +815,7 @@
     var bad = invalidDates();
     var parts = [];
     if (bad.length) parts.push('<p class="ud-warn">Not a valid DD-MM-YYYY date: ' + bad.map(esc).join(", ") + ".</p>");
-    if (missing.length) parts.push('<p class="field-hint">Still empty (they will be blank on the form): ' + missing.map(esc).join("; ") + ".</p>");
+    if (missing.length) parts.push('<p class="field-hint">Still empty (will be blank on the printed form): ' + missing.map(esc).join("; ") + ".</p>");
     if (st.error) parts.push('<p class="ud-warn">' + esc(st.error) + "</p>");
     var actions =
       '<div class="vf-row-actions"><button type="button" class="btn btn-primary" data-ff-generate' + (bad.length || st.generating ? " disabled" : "") + ">" +
@@ -560,6 +836,36 @@
   function renderSource() {
     var el = utils.qs("[data-ff-source]", root());
     if (el) el.innerHTML = sourceHtml();
+    var who = utils.qs("[data-ff-applicant]", root());
+    if (who) who.innerHTML = applicantHtml();
+  }
+
+  /** Empty needed boxes are outlined only once the form has an applicant —
+   * a brand-new, empty form is not shown all in red. */
+  function formStarted() {
+    return !!(String(st.values.surname || st.values.fullName || "").trim() || String(st.values.passportNumber || "").trim());
+  }
+
+  /** After a value changes (no full redraw while typing): outline needed boxes that are still empty. */
+  function refreshProgress() {
+    var form = currentForm();
+    var r = root();
+    if (!form || !r) return;
+    var started = formStarted();
+    eachField(form, function (field) {
+      var c = field.boxes && utils.qs('[data-ff-count="' + field.key + '"]', r);
+      if (c) {
+        var tmp = document.createElement("div");
+        tmp.innerHTML = countHtml(field, st.values[field.key]);
+        c.replaceWith(tmp.firstChild);
+      }
+    });
+    eachField(form, function (field) {
+      if (!field.required) return;
+      var input = document.getElementById("ff-" + field.key) || utils.qs('[name="ffr-' + field.key + '"]', r);
+      var box = input && input.closest(".vf-field");
+      if (box) box.classList.toggle("vf-field--empty", started && !String(st.values[field.key] || "").trim());
+    });
   }
 
   function renderGenerate() {
@@ -585,21 +891,26 @@
     r.innerHTML =
       '<div class="ud-layout vf-layout">' +
       '<section class="card ud-card">' +
-      '<h2 class="ud-card__title"><span class="ud-step">1</span> Form</h2>' +
-      '<div class="field"><label for="ffForm">Form to fill</label><select id="ffForm" data-ff-form>' + options + "</select></div>" +
-      (form && form.notes ? '<ul class="vf-notes">' + form.notes.map(function (n) { return "<li>" + esc(n) + "</li>"; }).join("") + "</ul>" : "") +
+      '<h2 class="ud-card__title"><span class="ud-step">1</span> Who is the applicant?</h2>' +
+      (st.forms.length > 1
+        ? '<div class="field"><label for="ffForm">Form to fill</label><select id="ffForm" data-ff-form>' + options + "</select></div>"
+        : '<select id="ffForm" data-ff-form hidden>' + options + "</select><p class=\"field-hint\">Form: <strong>" + esc(form ? form.name : "") + "</strong></p>") +
+      '<div data-ff-applicant>' + applicantHtml() + "</div>" +
+      (form && form.notes && form.notes.length
+        ? '<details class="vf-about"><summary>About this form</summary><ul class="vf-notes">' + form.notes.map(function (n) { return "<li>" + esc(n) + "</li>"; }).join("") + "</ul></details>"
+        : "") +
       "</section>" +
       '<section class="card ud-card">' +
-      '<h2 class="ud-card__title"><span class="ud-step">2</span> Fill from</h2>' +
+      '<h2 class="ud-card__title"><span class="ud-step">2</span> Hotel and flight <span class="vf-optional">(optional)</span></h2>' +
       '<div data-ff-source>' + sourceHtml() + "</div>" +
       "</section>" +
       '<section class="card ud-card vf-form-card">' +
-      '<h2 class="ud-card__title"><span class="ud-step">3</span> Form details</h2>' +
-      '<p class="field-hint">Printed on the form in CAPITAL letters. <span class="vf-req">*</span> = needed on the form.</p>' +
+      '<h2 class="ud-card__title"><span class="ud-step">3</span> Check the details</h2>' +
+      '<p class="field-hint">Everything below is printed on the form in CAPITAL letters. A tag under a box shows where the value came from — <strong>check it against the documents</strong>. <span class="vf-req">*</span> = needed on the form.</p>' +
       (form ? form.sections.map(sectionHtml).join("") : "") +
       "</section>" +
       '<section class="card ud-card">' +
-      '<h2 class="ud-card__title"><span class="ud-step">4</span> Generate</h2>' +
+      '<h2 class="ud-card__title"><span class="ud-step">4</span> Make the PDF</h2>' +
       '<div data-ff-generate-area>' + generateHtml() + "</div>" +
       "</section>" +
       "</div>";
@@ -616,7 +927,7 @@
   }
 
   function applicantNameForFile() {
-    return [st.values.givenNames, st.values.surname].filter(Boolean).join(" ");
+    return [st.values.givenNames, st.values.surname].filter(Boolean).join(" ") || st.values.fullName || "";
   }
 
   function generate() {
@@ -625,7 +936,7 @@
     st.error = "";
     renderGenerate();
     saveToApplication();
-    api.fillVisaForm(st.formId, Object.assign({}, st.values), applicantNameForFile()).then(
+    api.fillVisaForm(st.formId, valuesToPrint(), applicantNameForFile()).then(
       function (res) {
         clearGenerated();
         st.generated = { blob: res.blob, filename: res.filename, url: URL.createObjectURL(res.blob), overflow: res.overflow || [] };
@@ -666,6 +977,7 @@
       st.values = {};
       st.filledFrom = {};
       if (st.appId && S.getApplication(st.appId)) useApplication(S.getApplication(st.appId), st.personId);
+      else if (st.personKind === "profile" && st.person) useProfile(st.person);
       else {
         applyDefaults();
         clearGenerated();
@@ -684,6 +996,10 @@
       var file = input.files && input.files[0];
       input.value = "";
       if (file) useUploadedPassport(file);
+    });
+    utils.on(r, "change", "[data-ff-optional]", function (e, box) {
+      st.optionalOpen[box.getAttribute("data-ff-optional")] = box.checked;
+      render();
     });
     utils.on(r, "click", "[data-ff-hotel-list]", function () {
       st.hotelListOpen = !st.hotelListOpen;
@@ -705,6 +1021,10 @@
     utils.on(r, "click", "[data-ff-reset]", function () {
       st.appId = null;
       st.personId = "applicant";
+      st.person = null;
+      st.personKind = "";
+      st.profileListOpen = false;
+      st.unlocked = {};
       st.values = {};
       st.filledFrom = {};
       st.sourceLabel = "";
@@ -727,6 +1047,7 @@
       if (input.hasAttribute("data-date")) input.setAttribute("aria-invalid", input.value && !reviewForm.parseDate(input.value) ? "true" : "false");
       if (st.generated) clearGenerated();
       renderGenerate();
+      refreshProgress();
     }
     utils.on(r, "input", "[data-ff-key]", onValue);
     utils.on(r, "change", "[data-ff-key]", function (e, input) {
@@ -758,6 +1079,42 @@
       Object.keys(section.copyFrom.set || {}).forEach(function (to) {
         st.values[to] = section.copyFrom.set[to];
       });
+      clearGenerated();
+      render();
+    });
+    utils.on(r, "click", "[data-ff-profile-list]", function () {
+      st.profileListOpen = !st.profileListOpen;
+      renderSource();
+    });
+    utils.on(r, "click", "[data-ff-profile]", function (e, btn) {
+      var P = global.KhannaApplicantProfiles;
+      var id = btn.getAttribute("data-ff-profile");
+      var hit = P && P.people().filter(function (x) { return x.profile.id === id; })[0];
+      if (hit) useProfile(hit.profile);
+    });
+    utils.on(r, "click", "[data-ff-unlock]", function (e, btn) {
+      st.unlocked[btn.getAttribute("data-ff-unlock")] = true;
+      render();
+    });
+    utils.on(r, "click", "[data-ff-lock]", function (e, btn) {
+      var key = btn.getAttribute("data-ff-lock");
+      delete st.unlocked[key];
+      // Back to the passport's address: refill it from the person the form is for.
+      if (st.person) {
+        var ctx = contextFor(st.appId ? S.getApplication(st.appId) : null, st.person);
+        var form = currentForm();
+        eachField(form, function (field) {
+          if (field.key !== key || !field.source) return;
+          var raw = transform(getPath({ applicant: ctx.applicant, travel: {}, hotel: {} }, field.source), field.sourceFormat, ctx);
+          if (raw) {
+            st.values[key] = raw;
+            st.filledFrom[key] = "passport";
+          } else {
+            delete st.values[key];
+            delete st.filledFrom[key];
+          }
+        });
+      }
       clearGenerated();
       render();
     });

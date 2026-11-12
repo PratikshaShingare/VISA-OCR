@@ -467,6 +467,10 @@
       address[f.path.split(".")[2]] = getFieldValue(container, f.path);
     });
     applicant.address = address;
+    // The spouse name printed on the passport's last page (kept, not shown as
+    // a field): the Applicant Profile and the visa forms use it as a hint for
+    // marital status / spouse name — staff still confirm it there.
+    applicant.passportSpouseName = container.dataset.passportSpouse || "";
     var current = {};
     CURRENT_PASSPORT_FIELDS.forEach(function (f) {
       current[f.path.split(".")[1]] = getFieldValue(container, f.path);
@@ -499,6 +503,8 @@
       var key = f.path.split(".")[2];
       setFieldValue(container, f.path, address[key]);
     });
+    if (applicant.passportSpouseName) container.dataset.passportSpouse = applicant.passportSpouseName;
+    else delete container.dataset.passportSpouse;
     CURRENT_PASSPORT_FIELDS.forEach(function (f) {
       var key = f.path.split(".")[1];
       setFieldValue(container, f.path, current[key]);
@@ -641,6 +647,8 @@
       return;
     }
 
+    if (hasValue(fields.spouseName)) container.dataset.passportSpouse = String(fields.spouseName.value).trim();
+
     if (kind === "back") {
       applyAddress(container, fields);
       applyOldPassport(container, fields);
@@ -732,6 +740,7 @@
     delete container.dataset.azapiRead;
     delete container.dataset.bioPage;
     delete container.dataset.pagesApplied;
+    delete container.dataset.passportSpouse;
   }
 
   /** Wires the "downgrade to manual once edited" + old-passport toggle behaviour. Call once per mount. */

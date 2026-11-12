@@ -570,6 +570,16 @@
         if (textBox && !numbered && printedLines) {
           width = Math.min(width, (textBox[2] - textBox[0]) * PX_PER_PT + 0.4 * fsPx);
           width = Math.max(width, 30);
+        } else if (textBox && !printedLines) {
+          // A value printed on ONE line must stay on one line: the printed font is
+          // often not installed here and its stand-in (plus the "1)" number) is a
+          // little wider, which would wrap a name or date onto a second line.
+          // A little room is added to the right (left-aligned text keeps its
+          // printed position); the centred, numbered guest names get it on both
+          // sides so they stay centred.
+          var slack = 0.9 * fsPx;
+          if (numbered) left -= slack / 2;
+          width += slack;
         }
         // The first printed line's tallest glyph starts at origTop; the line box
         // starts that far above the glyph (so the baseline lands where it was).
@@ -638,16 +648,33 @@
       return off;
     }
 
+    // The page in Edit mode is sized to the editor's WIDTH (so it stays readable on
+    // a short window), and can be zoomed with the viewer's own + / - / Fit buttons.
+    // Scales here are in the viewer's unit: 1 = one PDF point per CSS pixel.
+    function fitWidthScale() {
+      if (!letter || !letter.stageWidth) return 1;
+      var avail = letter.pane.clientWidth || letter.stageWidth;
+      var pageWidthPt = letter.stageWidth / PX_PER_PT;
+      return Math.max(0.3, Math.min(2, (avail - 4) / pageWidthPt));
+    }
+
+    function currentScale() {
+      return letter && letter.zoom ? letter.zoom : fitWidthScale();
+    }
+
     function applyStageScale() {
       if (!letter || !letter.stage) return;
-      var avail = letter.pane.clientWidth || letter.stageWidth;
-      // The page keeps the size it has in the viewer (so switching to Edit does
-      // not resize the letter), unless the pane is too narrow to hold it.
-      var wanted = viewer && viewer.scale ? viewer.scale / PX_PER_PT : 1.1;
-      var s = Math.max(0.25, Math.min(wanted, (avail - 4) / letter.stageWidth));
+      var s = currentScale() / PX_PER_PT;
       letter.stage.style.transform = "scale(" + s + ")";
       letter.scaler.style.width = Math.round(letter.stageWidth * s) + "px";
       letter.scaler.style.height = Math.round(letter.stageHeight * s) + "px";
+    }
+
+    // null = fit the editor's width again.
+    function setZoom(scale) {
+      if (!letter) return;
+      letter.zoom = scale ? Math.max(0.3, Math.min(3, scale)) : null;
+      applyStageScale();
     }
 
     function buildLetter(Quill) {
@@ -1031,6 +1058,8 @@
       onResult: onResult,
       openLetter: openLetter,
       closeLetter: closeLetter,
+      setZoom: setZoom,
+      getZoom: function () { return letter ? currentScale() : null; },
       commit: commit,
       isDirty: isDirty,
       hasLayout: function () { return !!layout; },

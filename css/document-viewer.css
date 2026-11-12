@@ -175,10 +175,6 @@
 /* While Edit is on the editable letter replaces the PDF page, so the page and
    its page / zoom controls are out of the way. */
 .doc-viewer.is-editing .doc-viewer__page,
-.doc-viewer.is-editing [data-dv='zoom-out'],
-.doc-viewer.is-editing [data-dv='zoom-in'],
-.doc-viewer.is-editing [data-dv='zoom-label'],
-.doc-viewer.is-editing [data-dv='fit'],
 .doc-viewer.is-editing [data-dv='prev-page'],
 .doc-viewer.is-editing [data-dv='next-page'],
 .doc-viewer.is-editing [data-dv='page-label'] {

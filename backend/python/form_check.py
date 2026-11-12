@@ -358,6 +358,7 @@ def norm_nationality(value: str) -> str:
 # ---------------------------------------------------------------------------
 
 FIELD_LABELS = {
+    "fullName": "Full name",
     "surname": "Surname",
     "givenNames": "Given names",
     "dob": "Date of birth",
@@ -484,6 +485,9 @@ def compare_place(field: str, form_value: str, passport_value: str, source: str,
         return _finding(OK, field, form_value, passport_value, source, "Contains the passport's wording.", label)
     if p in f or f in p:
         return _finding(OK, field, form_value, passport_value, source, "Matches the passport's wording in part.", label)
+    if pw and pw[0] in fw:
+        # e.g. passport "MUMBAI, MAHARASHTRA", form "INDIA MUMBAI": the city is there.
+        return _finding(OK, field, form_value, passport_value, source, "The city matches the passport.", label)
     best = max((SequenceMatcher(None, w, x).ratio() for w in fw for x in pw), default=0)
     if best >= 0.8:
         return _finding(CORRECT, field, form_value, passport_value, source, "Spelling differs from the passport.", label)
@@ -577,6 +581,17 @@ def choose_passport(form_fields: List[Dict[str, Any]], text: str, passports: Lis
 
 
 def _compare_field(key: str, value: str, passport: Dict[str, str], source: str, label: str) -> Optional[Dict[str, Any]]:
+    if key == "fullName":
+        # One box for the whole name (Singapore Form 14A): surname first as on
+        # the passport; given names first is also accepted.
+        surname_first = f"{passport.get('surname', '')} {passport.get('givenNames', '')}".strip()
+        given_first = f"{passport.get('givenNames', '')} {passport.get('surname', '')}".strip()
+        if norm_words(value) == norm_words(given_first) and norm_words(value) != norm_words(surname_first):
+            return _finding(OK, "fullName", value, given_first, source, "Matches the passport (given names first).", label)
+        result = compare_name("fullName", value, surname_first, source, label)
+        if result["status"] == CHECK and "different order" in result["message"]:
+            result["message"] = "Same names in a different order — the passport order is surname, then given names."
+        return result
     if key == "surname":
         return compare_name("surname", value, passport.get("surname"), source, label)
     if key == "givenNames":
@@ -628,7 +643,7 @@ def _date_rules(fields: List[Dict[str, Any]], passport: Optional[Dict[str, str]]
 def _required_blanks(definition: Optional[Dict[str, Any]], fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not definition:
         return []
-    required = {f["key"]: f for f in visa_forms.iter_fields(definition) if f.get("required") and f.get("pdf")}
+    required = {f["key"]: f for f in visa_forms.iter_fields(definition) if f.get("required") and (f.get("pdf") or f.get("pdfParts"))}
     out = []
     for f in fields:
         spec = required.get(f["key"])

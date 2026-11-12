@@ -91,6 +91,28 @@
     };
   }
 
+  // The applicant's "basic details" kept on their profile (Applicant
+  // Profiles page) and printed by letters / visa forms: occupation,
+  // education, employer, marital status, income and an emergency contact.
+  // Phone number and email stay in `contact` (they already lived there).
+  // The residential address is NOT here: it comes from the passport only.
+  function emptyDetails() {
+    return {
+      occupation: "",
+      education: "",
+      employerName: "",
+      employerAddress: "",
+      employerPhone: "",
+      maritalStatus: "",
+      spouseName: "",
+      monthlyIncome: "",
+      annualIncome: "",
+      emergencyName: "",
+      emergencyRelation: "",
+      emergencyPhone: "",
+    };
+  }
+
   function emptyPerson() {
     return {
       salutation: "",
@@ -105,6 +127,7 @@
       passport: emptyPassport(),
       address: { line1: "", line2: "", city: "", state: "", pincode: "", country: "" },
       contact: { phone: "", email: "" },
+      details: emptyDetails(),
     };
   }
 
@@ -537,6 +560,21 @@
       var ts = nowIso();
       if (existing) {
         var merged = deepMerge(existing, personData);
+        // Saving a person from an application (passport review, a letter)
+        // must never wipe the basic details staff typed on the profile: a
+        // blank value coming in keeps what the profile already holds. Clearing
+        // a value is done on purpose from the Applicant Profiles page
+        // (saveApplicantBasics below), not as a side effect of a sync.
+        ["details", "contact"].forEach(function (group) {
+          var kept = (existing && existing[group]) || {};
+          var incoming = (personData && personData[group]) || {};
+          merged[group] = Object.assign({}, merged[group]);
+          Object.keys(kept).forEach(function (k) {
+            if (!String(incoming[k] == null ? "" : incoming[k]).trim() && String(kept[k] == null ? "" : kept[k]).trim()) {
+              merged[group][k] = kept[k];
+            }
+          });
+        });
         merged.updatedAt = ts;
         list = list.map(function (p) {
           return p.id === existing.id ? merged : p;
@@ -557,6 +595,21 @@
       return created;
     }
 
+    // A plain overwrite of the given fields (blank values included) — used
+    // for an edit made on purpose, unlike upsert's keep-what-is-there sync.
+    function patch(id, partial) {
+      var existing = get(id);
+      if (!existing) return null;
+      var merged = deepMerge(existing, partial);
+      merged.updatedAt = nowIso();
+      list = list.map(function (p) {
+        return p.id === id ? merged : p;
+      });
+      persistStore();
+      notify();
+      return merged;
+    }
+
     function remove(id) {
       var before = list.length;
       list = list.filter(function (p) {
@@ -567,7 +620,7 @@
       return list.length !== before;
     }
 
-    return { getAll: getAll, get: get, findByPerson: findByPerson, search: search, upsert: upsert, remove: remove };
+    return { getAll: getAll, get: get, findByPerson: findByPerson, search: search, upsert: upsert, patch: patch, remove: remove };
   }
 
   var applicantProfiles = makeProfileStore("applicant", APPLICANT_PROFILES_KEY);
@@ -611,7 +664,70 @@
     if (app.applicantId !== profile.id) {
       updateApplication(appId, { applicantId: profile.id });
     }
+    // The other direction: basic details already on the profile (occupation,
+    // phone, …) reach an application whose own copy is still blank, so the
+    // letters of this application can use them straight away.
+    var fill = basicsFillPatch(app.applicant, profile);
+    if (fill) updateApplication(appId, { applicant: fill });
     return profile;
+  }
+
+  // The basic details (and phone / email) a profile holds that a person
+  // record still has blank, as a patch — or null when there is nothing to add.
+  function basicsFillPatch(person, profile) {
+    var fill = {};
+    var any = false;
+    ["details", "contact"].forEach(function (group) {
+      var have = (person && person[group]) || {};
+      var from = (profile && profile[group]) || {};
+      Object.keys(from).forEach(function (k) {
+        if (String(from[k] == null ? "" : from[k]).trim() && !String(have[k] == null ? "" : have[k]).trim()) {
+          fill[group] = fill[group] || {};
+          fill[group][k] = from[k];
+          any = true;
+        }
+      });
+    });
+    return any ? fill : null;
+  }
+
+  // The Applicant Profiles page's Save. Sets the basic details + phone/email
+  // of one saved person (blank values included, so a value can be cleared on
+  // purpose) and copies them to EVERY copy of that same person — the profile
+  // in the applicant pool, the one in the traveller pool, and the person
+  // inside every application — so any letter or form built from any of them
+  // shows the same values. "Same person" is profileDedupeKey(): passport
+  // number, or name + date of birth.
+  function savePersonBasics(profileId, basics) {
+    var source = applicantProfiles.get(profileId) || travellerProfiles.get(profileId);
+    if (!source) return null;
+    var key = profileDedupeKey(source);
+    var details = Object.assign(emptyDetails(), source.details || {}, (basics && basics.details) || {});
+    var contact = Object.assign({ phone: "", email: "" }, source.contact || {}, (basics && basics.contact) || {});
+    function same(person) {
+      return !!key && profileDedupeKey(person) === key;
+    }
+    function copyOf() {
+      return { details: Object.assign({}, details), contact: Object.assign({}, contact) };
+    }
+    [applicantProfiles, travellerProfiles].forEach(function (store) {
+      store.getAll().forEach(function (p) {
+        if (p.id === profileId || same(p)) store.patch(p.id, copyOf());
+      });
+    });
+    applications.slice().forEach(function (a) {
+      var patch = {};
+      if (a.applicantId === profileId || same(a.applicant)) patch.applicant = copyOf();
+      var changed = false;
+      var travellers = (a.travellers || []).map(function (t) {
+        if (t.profileId !== profileId && !same(t)) return t;
+        changed = true;
+        return deepMerge(t, copyOf());
+      });
+      if (changed) patch.travellers = travellers;
+      if (Object.keys(patch).length) updateApplication(a.id, patch);
+    });
+    return applicantProfiles.get(profileId) || travellerProfiles.get(profileId);
   }
 
   // Same idea, for one traveller entry within an application's own
@@ -623,6 +739,8 @@
     if (traveller.profileId !== profile.id) {
       updateTraveller(appId, travellerId, { profileId: profile.id });
     }
+    var fill = basicsFillPatch(traveller, profile);
+    if (fill) updateTraveller(appId, travellerId, fill);
     return profile;
   }
 
@@ -1080,6 +1198,8 @@
     // exposed for other modules that need to build a fresh person record
     // (e.g. adding a traveller) without duplicating this shape elsewhere.
     createEmptyPerson: emptyPerson,
+    createEmptyDetails: emptyDetails,
+    savePersonBasics: savePersonBasics,
     // a pristine Application record — js/applications.js compares real ones
     // against it to tell "only hotel blocking was ever filled in" apart.
     createEmptyApplication: createEmptyApplication,

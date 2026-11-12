@@ -328,3 +328,26 @@
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+
+
+/* ---------------- Passport expiry popup (js/passport/passport-expiry-alert.js) ---------------- */
+.passport-expiry {
+  max-width: 460px;
+}
+
+.passport-expiry__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.passport-expiry__item {
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--color-danger);
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}

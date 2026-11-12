@@ -67,35 +67,33 @@
     built = true;
     r.innerHTML =
       '<div class="ud-layout vf-layout">' +
-      '<p class="field-hint">Upload the passport, any supporting documents and the filled forms separately. ' +
-      "Each form is compared with the passport details and the supporting documents. The results are suggestions — staff check and decide. " +
-      "Nothing on this page is saved.</p>" +
+      '<p class="field-hint vf-intro">Check a filled visa form against the passport. Only the <strong>mistakes</strong> are listed at the end. ' +
+      "These are suggestions — staff check and decide. Nothing on this page is saved.</p>" +
 
       '<section class="card ud-card">' +
       '<h2 class="ud-card__title"><span class="ud-step">1</span> Passport</h2>' +
-      dropHtml("passport", "Upload passport", "One file per passport — PDF, JPG, JPEG or PNG") +
-      '<div class="vf-row-actions"><button type="button" class="btn btn-secondary btn-sm" data-fc-use-app>Use a saved application instead</button></div>' +
+      dropHtml("passport", "Upload the passport", "PDF, JPG, JPEG or PNG") +
+      '<div class="vf-row-actions"><button type="button" class="btn btn-secondary btn-sm" data-fc-use-app>Or use a saved application</button></div>' +
       '<div data-fc-passports></div>' +
       "</section>" +
 
       '<section class="card ud-card">' +
-      '<h2 class="ud-card__title"><span class="ud-step">2</span> Supporting documents <span class="vf-optional">optional</span></h2>' +
-      '<p class="field-hint">Tickets, hotel bookings, ID cards, letters… Used to check details a passport does not have (address, phone, hotel) and to spot a name or passport number written differently.</p>' +
-      dropHtml("supporting", "Upload supporting documents", "PDF, JPG, JPEG or PNG — several allowed") +
-      '<div data-fc-supporting></div>' +
-      "</section>" +
-
-      '<section class="card ud-card">' +
-      '<h2 class="ud-card__title"><span class="ud-step">3</span> Forms to check</h2>' +
-      '<p class="field-hint">Filled visa forms. A fillable PDF is read field by field (most reliable); a scanned form is read by OCR.</p>' +
-      dropHtml("form", "Upload filled forms", "PDF, JPG, JPEG or PNG — several allowed") +
+      '<h2 class="ud-card__title"><span class="ud-step">2</span> Filled form</h2>' +
+      '<p class="field-hint">A fillable PDF is read field by field (most reliable); a scanned form is read by OCR.</p>' +
+      dropHtml("form", "Upload the filled form", "PDF, JPG, JPEG or PNG — several allowed") +
       '<div data-fc-forms></div>' +
       "</section>" +
 
       '<section class="card ud-card">' +
-      '<h2 class="ud-card__title"><span class="ud-step">4</span> Corrections</h2>' +
+      '<h2 class="ud-card__title"><span class="ud-step">3</span> Other documents <span class="vf-optional">optional</span></h2>' +
+      '<p class="field-hint">Tickets, hotel bookings, ID cards, letters… used to check the address, phone and hotel, which a passport does not have.</p>' +
+      dropHtml("supporting", "Upload other documents", "PDF, JPG, JPEG or PNG — several allowed") +
+      '<div data-fc-supporting></div>' +
+      "</section>" +
+
+      '<section class="card ud-card vf-check-card">' +
       '<p class="field-hint" data-fc-ready role="status"></p>' +
-      '<div class="vf-row-actions"><button type="button" class="btn btn-primary" data-fc-check>Check forms</button></div>' +
+      '<div class="vf-row-actions"><button type="button" class="btn btn-primary" data-fc-check>Check the form</button></div>' +
       '<div data-fc-results aria-live="polite"></div>' +
       "</section>" +
       "</div>";
@@ -338,9 +336,9 @@
       });
     });
     if (busy) return { ok: false, text: "Still reading the uploaded files…" };
-    if (!forms.length) return { ok: false, text: "Upload at least one filled form." };
+    if (!forms.length) return { ok: false, text: "Step 2: upload the filled form to check." };
     if (!passports.length && !st.supporting.some(function (d) { return d.status === "done"; })) {
-      return { ok: false, text: "Upload a passport (or choose a saved application) to compare the forms with." };
+      return { ok: false, text: "Step 1: upload the passport (or choose a saved application) to compare the form with." };
     }
     if (badDates.length) return { ok: false, text: "A passport date is not a valid DD-MM-YYYY date — correct it first." };
     if (!passports.length) return { ok: true, text: "No passport given: forms are only checked against the supporting documents." };
@@ -353,7 +351,7 @@
     var ready = readyState();
     var btn = utils.qs("[data-fc-check]", r);
     btn.disabled = !ready.ok || st.checking;
-    btn.textContent = st.checking ? "Checking…" : st.forms.some(function (f) { return f.result; }) ? "Check again" : "Check forms";
+    btn.textContent = st.checking ? "Checking…" : st.forms.some(function (f) { return f.result; }) ? "Check again" : "Check the form";
     utils.qs("[data-fc-ready]", r).textContent = ready.text;
   }
 
@@ -361,26 +359,29 @@
    * Results
    * -------------------------------------------------------------------- */
 
-  var STATUS_LABEL = { correct: "Correct this", missing: "Missing", check: "Please check", info: "Note", ok: "Matches" };
+  // Only mistakes are shown: what is wrong, what the form says, what it should say.
+  var STATUS_LABEL = { correct: "Correct this", missing: "Fill this in", check: "Please check" };
+  var ORDER = { correct: 0, missing: 1, check: 2 };
 
-  function findingRow(f) {
+  function mistakeHtml(f) {
+    var vals = "";
+    if (f.formValue || f.expected) {
+      vals =
+        '<dl class="vf-mistake__vals">' +
+        '<div><dt>The form says</dt><dd class="vf-v--wrong">' + (f.formValue ? esc(f.formValue) : '<span class="vf-muted">nothing written</span>') + "</dd></div>" +
+        (f.expected
+          ? '<div><dt>It should say</dt><dd class="vf-v--right">' + esc(f.expected) +
+            (f.source ? '<span class="vf-source">from ' + esc(f.source) + "</span>" : "") + "</dd></div>"
+          : "") +
+        "</dl>";
+    }
     return (
-      '<tr class="vf-finding vf-finding--' + f.status + '">' +
-      '<td data-th="Result"><span class="vf-pill vf-pill--' + f.status + '">' + STATUS_LABEL[f.status] + "</span></td>" +
-      '<td data-th="Field">' + esc(f.label) + "</td>" +
-      '<td data-th="In the form">' + (f.formValue ? esc(f.formValue) : '<span class="vf-muted">—</span>') + "</td>" +
-      '<td data-th="Should be">' + (f.expected ? esc(f.expected) : '<span class="vf-muted">—</span>') +
-      (f.source ? '<span class="vf-source">' + esc(f.source) + "</span>" : "") + "</td>" +
-      '<td data-th="Advice">' + esc(f.message) + "</td>" +
-      "</tr>"
-    );
-  }
-
-  function tableHtml(rows) {
-    return (
-      '<div class="vf-table-wrap"><table class="vf-table"><thead><tr>' +
-      "<th>Result</th><th>Field</th><th>In the form</th><th>Should be</th><th>Advice</th>" +
-      "</tr></thead><tbody>" + rows.map(findingRow).join("") + "</tbody></table></div>"
+      '<li class="vf-mistake vf-mistake--' + f.status + '">' +
+      '<div class="vf-mistake__top"><span class="vf-pill vf-pill--' + f.status + '">' + STATUS_LABEL[f.status] + "</span>" +
+      "<strong>" + esc(f.label) + "</strong></div>" +
+      vals +
+      (f.message ? '<p class="vf-mistake__tip">' + esc(f.message) + "</p>" : "") +
+      "</li>"
     );
   }
 
@@ -390,28 +391,17 @@
     }
     var r = item.result;
     if (!r) return "";
-    var problems = r.findings.filter(function (f) { return f.status === "correct" || f.status === "missing" || f.status === "check"; });
-    var fine = r.findings.filter(function (f) { return f.status === "ok" || f.status === "info"; });
-    var sum = r.summary || {};
-    var chips =
-      '<div class="vf-chips">' +
-      '<span class="vf-pill vf-pill--correct">' + (sum.correct || 0) + " to correct</span>" +
-      '<span class="vf-pill vf-pill--missing">' + (sum.missing || 0) + " missing</span>" +
-      '<span class="vf-pill vf-pill--check">' + (sum.check || 0) + " to check</span>" +
-      '<span class="vf-pill vf-pill--ok">' + (sum.ok || 0) + " matching</span>" +
-      "</div>";
-    var used = r.passportUsed ? '<p class="field-hint">Compared with passport: <strong>' + esc(r.passportUsed) + "</strong></p>" : "";
+    var problems = r.findings
+      .filter(function (f) { return f.status === "correct" || f.status === "missing" || f.status === "check"; })
+      .sort(function (a, b) { return ORDER[a.status] - ORDER[b.status]; });
+    var head = '<h3>' + esc(item.fileName) + (r.formName ? ' <span class="vf-item__meta">' + esc(r.formName) + "</span>" : "") + "</h3>";
+    var used = r.passportUsed ? '<p class="field-hint">Compared with the passport of <strong>' + esc(r.passportUsed) + "</strong></p>" : "";
     var notes = (r.notes || []).length ? '<p class="vf-flags">' + r.notes.map(esc).join(" ") + "</p>" : "";
     var body = problems.length
-      ? tableHtml(problems)
-      : '<p class="notice notice-success"><span>No corrections found. Staff must still check the form before it is submitted.</span></p>';
-    var fineHtml = fine.length
-      ? '<details class="vf-details"><summary>Matching details and notes (' + fine.length + ")</summary>" + tableHtml(fine) + "</details>"
-      : "";
-    return (
-      '<div class="vf-result"><h3>' + esc(item.fileName) + (r.formName ? ' <span class="vf-item__meta">' + esc(r.formName) + "</span>" : "") + "</h3>" +
-      chips + used + notes + body + fineHtml + "</div>"
-    );
+      ? '<p class="vf-headline vf-headline--bad">' + problems.length + (problems.length === 1 ? " mistake to look at" : " mistakes to look at") + "</p>" +
+        '<ol class="vf-mistakes">' + problems.map(mistakeHtml).join("") + "</ol>"
+      : '<p class="notice notice-success"><span>No mistakes found. Staff must still check the form before it is submitted.</span></p>';
+    return '<div class="vf-result">' + head + used + notes + body + "</div>";
   }
 
   function renderResults() {

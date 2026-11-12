@@ -137,7 +137,7 @@ async def main():
 
         # ------------------------------------------------------------ Fill Forms
         await page.evaluate("location.hash = '#/fill-forms'")
-        await page.wait_for_selector("[data-ff-form]", timeout=15000)
+        await page.wait_for_selector("[data-ff-form]", state="attached", timeout=15000)
         C.check("Fill Forms: Japan form listed", await page.locator("[data-ff-form] option[value='japan-visa']").count() == 1)
         C.check("Fill Forms: defaults applied before any source", await page.input_value("#ff-previousStays") == "NOT APPLICABLE")
         C.check("Fill Forms: nav link present in menu", await page.locator(".mobile-nav [data-nav-link='fill-forms']").count() == 1)
@@ -159,9 +159,13 @@ async def main():
         C.check("prefill: tagged 'please verify'", await page.locator(".vf-tag").count() > 5)
         C.check("declaration questions NOT answered automatically", await page.locator("input[name='ffr-q1Crime']:checked").count() == 0)
         ready_text = await page.inner_text("[data-ff-generate-area]")
-        C.check("generate area lists unanswered questions", "convicted of a crime" in ready_text, ready_text[:200])
+        C.check("generate area names what is still empty, as text", "Still empty" in ready_text and "convicted of a crime" in ready_text, ready_text[:300])
+        C.check("no progress block / jump buttons / open-close buttons", await page.locator("[data-ff-progress], [data-ff-jump], [data-ff-expand]").count() == 0)
+        C.check("all sections are shown open (no folding)", await page.locator("details[data-ff-section]").count() == 0 and await page.locator("section[data-ff-section]").count() >= 6)
+        C.check("empty needed answers are outlined", await page.locator(".vf-field--empty input[name='ffr-q1Crime']").count() == 2)
 
         await page.click("[data-ff-all-no]")
+        C.check("answered questions are no longer outlined", await page.locator(".vf-field--empty input[name='ffr-q1Crime']").count() == 0)
         C.check("'answered No to all' ticks No", await page.is_checked("input[name='ffr-q6Trafficking'][value='no']"))
         await page.fill("#ff-portOfEntry", "Tokyo")
         await page.fill("#ff-airline", "Sample Air")
@@ -249,8 +253,13 @@ async def main():
         C.check("result: surname typo found", "SHRAMA" in result and "should be 'SHARMA'" in result, result[:600])
         C.check("result: passport number swap found", "Z1234576" in result)
         C.check("result: wrong sex tick found", "The wrong box is ticked" in result)
-        problems = await page.inner_text(".vf-result > .vf-table-wrap")
+        problems = await page.inner_text(".vf-result .vf-mistakes")
         C.check("result: correct DOB not listed as a problem", "Date of birth" not in problems)
+        C.check("result: only mistakes are shown (no 'matching' list, chip or table)",
+                "matching" not in result.lower() and await page.locator(".vf-result table").count() == 0
+                and await page.locator(".vf-mistake").count() >= 3, result[:300])
+        first = await page.inner_text(".vf-mistake >> nth=0")
+        C.check("result: each mistake says what the form says and what it should say", "the form says" in first.lower() and "it should say" in first.lower(), first)
         hotel = await page.evaluate("KhannaFormCheck._state.forms[0].result.findings.filter(f => f.field === 'hotelName').map(f => f.status + ':' + f.source)")
         C.check("result: hotel found in supporting document (OCR)", hotel == ["ok:hotel_booking.png"], str(hotel))
 

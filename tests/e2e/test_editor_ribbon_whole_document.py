@@ -61,8 +61,9 @@ async def main():
             scope,
         )
         checks.check("Edit / Done editing sits right beside the title", 0 <= pos["gap"] < 40 and pos["beforeTools"], str(pos))
-        checks.check("The PDF page and its zoom / page controls are out of the way while editing",
-                     not await page.locator(f"{scope} [data-dv='zoom-in']").is_visible()
+        checks.check("The PDF page and its page-turn controls are out of the way while editing; zoom stays available for the edit page",
+                     await page.locator(f"{scope} [data-dv='zoom-in']").is_visible()
+                     and not await page.locator(f"{scope} [data-dv='next-page']").is_visible()
                      and not await page.locator(f"{scope} [data-dv='canvas']").is_visible())
         checks.check("The ribbon is shown", await page.locator(f"{scope} [data-pe='bold']").is_visible())
 

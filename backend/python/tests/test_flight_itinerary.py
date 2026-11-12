@@ -127,3 +127,19 @@ def test_endpoint(tmp_path):
     client = TestClient(app_module.app)
     res = client.post("/api/flight-itinerary/read", files={"file": ("x.txt", b"x", "text/plain")})
     assert res.status_code == 400
+
+
+def test_singapore_arrival():
+    text = """Friday 04 December 2026
+Singapore Airlines SQ 423
+Departure 03 December 23:35 Mumbai, (Chhatrapati S Maharaj)
+Arrival 04 December 07:45 Singapore, (Changi)
+Thursday 10 December 2026
+Singapore Airlines SQ 422
+Departure 10 December 20:40 Singapore, (Changi)
+Arrival 10 December 22:30 Mumbai, (Chhatrapati S Maharaj)
+"""
+    r = fi.read_itinerary(text, "Singapore")
+    assert r["arrivalDate"] == "2026-12-04"
+    assert r["lengthOfStay"] == "7 DAYS"
+    assert r["portOfEntry"] == "SINGAPORE"

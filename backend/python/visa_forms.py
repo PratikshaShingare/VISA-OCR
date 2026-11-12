@@ -76,6 +76,7 @@ def list_forms() -> List[Dict[str, Any]]:
         for section in public.get("sections", []):
             for field in section.get("fields", []):
                 field.pop("pdf", None)
+                field.pop("pdfParts", None)
                 for opt in field.get("options", []) or []:
                     opt.pop("state", None)
         out.append(public)
@@ -97,6 +98,42 @@ def iter_fields(definition: Dict[str, Any]):
     for section in definition.get("sections", []):
         for field in section.get("fields", []):
             yield field
+
+
+def pdf_names(field: Dict[str, Any]) -> List[str]:
+    """Every PDF field one definition field writes to: one name, a list of
+    rows (a long name over two rows of letter boxes) or the three
+    DD / MM / YYYY box groups of a date."""
+    names: List[str] = []
+    pdf = field.get("pdf")
+    if isinstance(pdf, list):
+        names.extend(pdf)
+    elif pdf:
+        names.append(pdf)
+    names.extend(field.get("pdfParts") or [])
+    return names
+
+
+def split_rows(text: str, row_lengths: List[int]) -> Tuple[List[str], str]:
+    """Spreads text over rows of letter boxes, breaking between words when
+    possible. Returns (rows, what did not fit)."""
+    words = (text or "").split()
+    rows: List[str] = []
+    for length in row_lengths:
+        row = ""
+        while words:
+            word = words[0]
+            candidate = (row + " " + word) if row else word
+            if len(candidate) <= length:
+                row = candidate
+                words.pop(0)
+            elif not row and len(word) > length:
+                row, words[0] = word[:length], word[length:]
+                break
+            else:
+                break
+        rows.append(row)
+    return rows, " ".join(words)
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +165,21 @@ def format_date(value: str, pattern: str) -> str:
     return f"{parsed.day:02d}{sep}{parsed.month:02d}{sep}{parsed.year:04d}"
 
 
+_NOT_APPLICABLE = {"NA", "N/A", "-", "NOT APPLICABLE"}
+
+
+def _to_form_letters(text: str) -> str:
+    """Letters the form's font can print: accents are dropped ("CHŪŌ" -> "CHUO"),
+    curly quotes / dashes become plain ones."""
+    import unicodedata
+
+    text = text.replace("\u2019", "'").replace("\u2018", "'").replace("\u201c", '"').replace("\u201d", '"')
+    text = text.replace("\u2013", "-").replace("\u2014", "-")
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
+
 def _clean_text(value: Any, upper: bool) -> str:
-    text = "" if value is None else str(value)
+    text = _to_form_letters("" if value is None else str(value))
     text = re.sub(r"[ \t]+", " ", text.replace("\r\n", "\n").replace("\r", "\n")).strip()
     return text.upper() if upper else text
 
@@ -241,6 +291,14 @@ TEXT_LIFT = 2.0  # points between written text and the printed line below it
 DEFAULT_FONT_SIZE = 11.0
 _MULTILINE_FLAG = 1 << 12
 
+# Line answers that start on the LOWEST printed line when they are short (an
+# address whose printed line is at the bottom, with free space above it).
+# Line answers that use the printed (lowest) line when they are short: a
+# short address sits on the "Address:" line; a longer one starts on the free
+# line above and continues on the printed line, both left-aligned.
+LINE_ROWS_FROM_BOTTOM = {"originAddress"}
+_COMB_FLAG = 1 << 24
+
 
 class FontMetrics:
     """Advance widths (per 1000 em) and line spacing of the form's own font,
@@ -348,17 +406,53 @@ def _da_parts(da: str) -> Tuple[str, float, str]:
 # ---------------------------------------------------------------------------
 
 
-def build_field_values(definition: Dict[str, Any], values: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, str], List[str]]:
+def build_field_values(definition: Dict[str, Any], values: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, str], List[str], List[str]]:
     """Staff values -> (text values by PDF name, radio states by PDF name,
-    list of required fields still empty)."""
+    list of required fields still empty, fields cut short because they are
+    longer than their letter boxes)."""
     upper = definition.get("uppercase", True)
     texts: Dict[str, str] = {}
     radios: Dict[str, str] = {}
     missing: List[str] = []
+    cut: List[str] = []
+    line_rows: Dict[str, Tuple[List[str], str, str]] = {}
     for field in iter_fields(definition):
         key = field["key"]
         kind = field.get("type", "text")
         pdf_name = field.get("pdf")
+        if kind == "date" and field.get("pdfParts"):
+            # DD / MM / YYYY written in three groups of boxes.
+            parsed = parse_any_date(str(values.get(key) or ""))
+            day, month, year = field["pdfParts"]
+            if parsed:
+                texts[day], texts[month], texts[year] = f"{parsed.day:02d}", f"{parsed.month:02d}", f"{parsed.year:04d}"
+            else:
+                texts[day] = texts[month] = texts[year] = ""
+                if field.get("required"):
+                    missing.append(field["label"])
+            continue
+        if isinstance(pdf_name, list) and field.get("rows") == "lines":
+            # One answer written over several printed lines: split by width
+            # in fill_form (it needs the real width of each line).
+            text = _clean_text(values.get(key), upper)
+            line_rows[key] = (list(pdf_name), text, field["label"])
+            for name in pdf_name:
+                texts[name] = ""
+            if not text and field.get("required"):
+                missing.append(field["label"])
+            continue
+        if isinstance(pdf_name, list):
+            # One answer over several rows of letter boxes (a long name).
+            text = _clean_text(values.get(key), upper)
+            rows, rest = split_rows(text, [int(n) for n in field.get("rowLength", [25] * len(pdf_name))]
+                                    if isinstance(field.get("rowLength"), list) else [int(field.get("rowLength", 25))] * len(pdf_name))
+            for name, row in zip(pdf_name, rows):
+                texts[name] = row
+            if rest:
+                cut.append(field["label"])
+            if not text and field.get("required"):
+                missing.append(field["label"])
+            continue
         if not pdf_name:
             continue
         if kind in ("radio", "yesno"):
@@ -386,10 +480,12 @@ def build_field_values(definition: Dict[str, Any], values: Dict[str, Any]) -> Tu
         max_len = field.get("maxLength")
         if max_len and len(text) > max_len:
             text = text[: int(max_len)]
+            if field.get("boxes"):
+                cut.append(field["label"])
         if not text and field.get("required"):
             missing.append(field["label"])
         texts[pdf_name] = text
-    return texts, radios, missing
+    return texts, radios, missing, cut, line_rows
 
 
 def fill_form(form_id: str, values: Dict[str, Any]) -> Tuple[bytes, List[str], List[str]]:
@@ -408,7 +504,7 @@ def fill_form(form_id: str, values: Dict[str, Any]) -> Tuple[bytes, List[str], L
     if not os.path.isfile(path):
         raise FormError(f"The blank form file '{definition['file']}' is missing from backend/python/visa_forms.")
 
-    texts, radios, missing = build_field_values(definition, values or {})
+    texts, radios, missing, cut, line_rows = build_field_values(definition, values or {})
 
     writer = PdfWriter(clone_from=PdfReader(path))
     acroform = writer._root_object["/AcroForm"]
@@ -417,7 +513,37 @@ def fill_form(form_id: str, values: Dict[str, Any]) -> Tuple[bytes, List[str], L
     acroform[NameObject("/NeedAppearances")] = BooleanObject(True)
 
     widgets = _widgets_by_name(writer.pages)
-    centered = {f["pdf"] for f in iter_fields(definition) if f.get("align") == "center" and f.get("pdf")}
+
+    # Answers written over several printed lines: wrap at the lines' width
+    # (smaller letters only if the text would not fit on the lines).
+    for key, (names, text, label) in line_rows.items():
+        if not text:
+            continue
+        boxes = [w[0] for w in (widgets.get(n) for n in names) if w]
+        if not boxes:
+            continue
+        font_name, base_size, color = _da_parts(str(boxes[0].get("/DA") or acroform.get("/DA") or ""))
+        metrics = font_metrics(acroform, font_name)
+        width = min(abs(float(b["/Rect"][2]) - float(b["/Rect"][0])) for b in boxes) - 4
+        size = base_size
+        while True:
+            lines = wrap_text(text, width, size, metrics)
+            if len(lines) <= len(boxes) or size <= MIN_FONT_SIZE:
+                break
+            size = max(MIN_FONT_SIZE, round(size - 0.5, 1))
+        if len(lines) > len(boxes):
+            lines = lines[: len(boxes) - 1] + [" ".join(lines[len(boxes) - 1:])]
+            cut.append(label)
+        if len(lines) < len(boxes) and key in LINE_ROWS_FROM_BOTTOM:
+            # A short address sits on the printed line; a long one starts on
+            # the free line above and continues on the printed line.
+            lines = [""] * (len(boxes) - len(lines)) + lines
+        for name, line in zip(names, lines + [""] * len(boxes)):
+            texts[name] = line
+        if size != base_size:
+            for b in boxes:
+                b[NameObject("/DA")] = TextStringObject(f"{font_name} {size:.1f} Tf {color}")
+    centered = {n for f in iter_fields(definition) if f.get("align") == "center" for n in pdf_names(f)}
 
     # Radio groups: the group's value plus each button's on/off look.
     for name, state in radios.items():
@@ -443,8 +569,8 @@ def fill_form(form_id: str, values: Dict[str, Any]) -> Tuple[bytes, List[str], L
             if name in names:
                 by_page.setdefault(page_index, {})[name] = text
 
-    labels = {f["pdf"]: f["label"] for f in iter_fields(definition) if f.get("pdf")}
-    overflow: List[str] = []
+    labels = {n: f["label"] for f in iter_fields(definition) for n in pdf_names(f)}
+    overflow: List[str] = list(cut)
     for page_index, mapping in by_page.items():
         page = writer.pages[page_index]
         for name in list(mapping):
@@ -458,6 +584,18 @@ def fill_form(form_id: str, values: Dict[str, Any]) -> Tuple[bytes, List[str], L
                     da = widget.get("/DA") or (parent.get("/DA") if parent is not None else None) or acroform.get("/DA") or ""
                     font_name, base_size, color = _da_parts(str(da))
                     flags = int(widget.get("/Ff", parent.get("/Ff", 0) if parent is not None else 0) or 0)
+                    if flags & _COMB_FLAG:
+                        # One letter per printed box: the size and place are fixed by
+                        # the boxes, so no wrapping, shrinking or lifting.
+                        max_len = int(widget.get("/MaxLen", 0) or 0)
+                        if text.strip() in _NOT_APPLICABLE and max_len > len(text.strip()):
+                            # "Not applicable" written in the middle of the row, as by hand.
+                            mapping[name] = text = " " * ((max_len - len(text.strip())) // 2) + text.strip()
+                        if max_len and len(text) > max_len:
+                            mapping[name] = text[:max_len]
+                            if labels.get(name) not in overflow:
+                                overflow.append(labels.get(name, name))
+                        continue
                     multiline = bool(flags & _MULTILINE_FLAG)
                     rect = [float(x) for x in widget["/Rect"]]
                     lines, size, fits = fit_text(text, abs(rect[2] - rect[0]), abs(rect[3] - rect[1]), multiline,
@@ -504,9 +642,15 @@ def read_known_form(definition: Dict[str, Any], pdf_values: Dict[str, str]) -> L
     rows = []
     for field in iter_fields(definition):
         name = field.get("pdf")
-        if not name:
+        if field.get("pdfParts"):
+            parts = [(pdf_values.get(n) or "").strip() for n in field["pdfParts"]]
+            raw = "/".join(parts) if all(parts) else ""
+        elif isinstance(name, list):
+            raw = " ".join((pdf_values.get(n) or "").strip() for n in name).strip()
+        elif name:
+            raw = (pdf_values.get(name) or "").strip()
+        else:
             continue
-        raw = (pdf_values.get(name) or "").strip()
         kind = field.get("type", "text")
         value = raw
         if kind in ("radio", "yesno"):

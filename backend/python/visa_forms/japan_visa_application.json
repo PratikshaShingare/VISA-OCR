@@ -37,7 +37,7 @@
           "options": [ { "value": "M", "label": "Male", "state": "/0" }, { "value": "F", "label": "Female", "state": "/1" } ]
         },
         {
-          "key": "maritalStatus", "label": "Marital status", "type": "radio", "pdf": "topmostSubform[0].Page1[0].#area[8].RB2[0]", "required": true,
+          "key": "maritalStatus", "label": "Marital status", "type": "radio", "pdf": "topmostSubform[0].Page1[0].#area[8].RB2[0]", "source": "applicant.maritalStatusValue", "required": true,
           "options": [
             { "value": "single", "label": "Single", "state": "/0" },
             { "value": "married", "label": "Married", "state": "/1" },
@@ -86,13 +86,13 @@
     {
       "title": "Residence and occupation",
       "fields": [
-        { "key": "homeAddress", "label": "Current residential address", "type": "textarea", "pdf": "topmostSubform[0].Page1[0].T0[1]", "source": "applicant.fullAddress", "required": true },
+        { "key": "homeAddress", "label": "Current residential address", "type": "textarea", "pdf": "topmostSubform[0].Page1[0].T0[1]", "source": "applicant.fullAddress", "lockedTo": "passport", "help": "Taken from the passport's address page only.", "required": true },
         { "key": "homeTel", "label": "Tel.", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[11].T97[0]", "maxLength": 15, "default": "-" },
-        { "key": "mobile", "label": "Mobile No.", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[11].T3[0]", "maxLength": 15, "source": "applicant.contact.phone", "required": true },
-        { "key": "occupation", "label": "Current profession or occupation and position", "type": "text", "pdf": "topmostSubform[0].Page1[0].T5[0]", "maxLength": 68, "required": true },
-        { "key": "employerName", "label": "Employer — Name", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[3].emp_name[0]", "default": "-" },
-        { "key": "employerTel", "label": "Employer — Tel.", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[3].emp_tel[0]", "maxLength": 15, "default": "-" },
-        { "key": "employerAddress", "label": "Employer — Address", "type": "textarea", "pdf": "topmostSubform[0].Page1[0].emp_adr[0]", "default": "-" },
+        { "key": "mobile", "label": "Mobile No.", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[11].T3[0]", "maxLength": 15, "source": "applicant.contact.phone", "sourceFormat": "localPhone", "required": true },
+        { "key": "occupation", "label": "Current profession or occupation and position", "type": "text", "pdf": "topmostSubform[0].Page1[0].T5[0]", "maxLength": 68, "source": "applicant.details.occupation", "required": true },
+        { "key": "employerName", "label": "Employer — Name", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[3].emp_name[0]", "source": "applicant.details.employerName", "default": "-" },
+        { "key": "employerTel", "label": "Employer — Tel.", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[3].emp_tel[0]", "maxLength": 15, "source": "applicant.details.employerPhone", "default": "-" },
+        { "key": "employerAddress", "label": "Employer — Address", "type": "textarea", "pdf": "topmostSubform[0].Page1[0].emp_adr[0]", "source": "applicant.details.employerAddress", "default": "-" },
         { "key": "partnerOccupation", "label": "Partner's profession/occupation (or that of parents, if applicant is a minor)", "type": "text", "pdf": "topmostSubform[0].Page2[0].T16[2]", "default": "-" }
       ]
     },

@@ -255,6 +255,7 @@
     "upload-documents",
     "fill-forms",
     "form-check",
+    "applicant-profiles",
   ];
 
   function initRouteGuards() {

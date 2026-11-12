@@ -1,0 +1,1073 @@
+{
+  "id": "singapore-visa",
+  "name": "Singapore — Form 14A Application for Entry Visa",
+  "country": "Singapore",
+  "file": "singapore_visa_application.pdf",
+  "outputName": "Singapore_Visa_Form_14A",
+  "pageCount": 4,
+  "notes": [
+    "Official Form 14A (IMM 14A), 4 pages. Every answer is printed in CAPITAL letters, one letter per box, as in the Khanna sample.",
+    "\"NOT APPLICABLE\" is written, centred, where a part does not apply (alias, PRC ID, travelling companion, stay of more than 30 days).",
+    "The signature lines are left blank: the applicant signs every page by hand."
+  ],
+  "identify": [
+    "fullName_1",
+    "dob_day",
+    "qRefused"
+  ],
+  "hotel": {
+    "fill": {
+      "stayPlace": "const:hotel",
+      "sgBuildingName": "name",
+      "sgStreet": "street",
+      "sgPostalCode": "postalCode",
+      "sgContactNo": "phone",
+      "localContactName": "name",
+      "localContactRelationship": "const:HOTEL",
+      "localContactNo": "phone",
+      "sgBlock": "block",
+      "sgFloor": "floor",
+      "sgUnit": "unit"
+    }
+  },
+  "flight": {
+    "arrivalDate": "arrivalDate",
+    "stayLength": "stay30"
+  },
+  "sections": [
+    {
+      "title": "Part I — Applicant (as in passport)",
+      "fields": [
+        {
+          "key": "fullName",
+          "label": "Name (full name as shown in passport)",
+          "type": "text",
+          "pdf": [
+            "fullName_1",
+            "fullName_2"
+          ],
+          "rowLength": 25,
+          "maxLength": 50,
+          "boxes": true,
+          "source": "applicant.passportName",
+          "compare": "fullName",
+          "required": true,
+          "help": "Two rows of 25 boxes — a long name continues on the second row."
+        },
+        {
+          "key": "alias",
+          "label": "Alias",
+          "type": "text",
+          "pdf": [
+            "alias_1",
+            "alias_2"
+          ],
+          "rowLength": 25,
+          "maxLength": 50,
+          "boxes": true,
+          "default": "NOT APPLICABLE"
+        },
+        {
+          "key": "dob",
+          "label": "Date of birth",
+          "type": "date",
+          "pdfParts": [
+            "dob_day",
+            "dob_month",
+            "dob_year"
+          ],
+          "source": "applicant.dob",
+          "compare": "dob",
+          "required": true,
+          "width": "half"
+        },
+        {
+          "key": "sex",
+          "label": "Sex",
+          "type": "radio",
+          "pdf": "sex",
+          "source": "applicant.sex",
+          "compare": "sex",
+          "required": true,
+          "options": [
+            {
+              "value": "M",
+              "label": "Male",
+              "state": "/Male"
+            },
+            {
+              "value": "F",
+              "label": "Female",
+              "state": "/Female"
+            }
+          ],
+          "width": "half"
+        },
+        {
+          "key": "maritalStatus",
+          "label": "Marital status",
+          "type": "radio",
+          "pdf": "maritalStatus",
+          "source": "applicant.maritalStatusValue",
+          "required": true,
+          "options": [
+            {
+              "value": "single",
+              "label": "Single",
+              "state": "/Single"
+            },
+            {
+              "value": "married",
+              "label": "Married",
+              "state": "/Married"
+            },
+            {
+              "value": "separated",
+              "label": "Separated",
+              "state": "/Separated"
+            },
+            {
+              "value": "divorced",
+              "label": "Divorced",
+              "state": "/Divorced"
+            },
+            {
+              "value": "widowed",
+              "label": "Widowed",
+              "state": "/Widowed"
+            },
+            {
+              "value": "cohabited",
+              "label": "Cohabited",
+              "state": "/Cohabited"
+            },
+            {
+              "value": "customary",
+              "label": "Customary",
+              "state": "/Customary"
+            }
+          ]
+        },
+        {
+          "key": "spouseStatus",
+          "label": "Nationality / citizenship of spouse (if married)",
+          "type": "radio",
+          "pdf": "spouseStatus",
+          "options": [
+            {
+              "value": "citizen",
+              "label": "Singapore Citizen",
+              "state": "/Citizen"
+            },
+            {
+              "value": "pr",
+              "label": "Singapore Permanent Resident",
+              "state": "/PR"
+            },
+            {
+              "value": "others",
+              "label": "Others",
+              "state": "/Others"
+            }
+          ],
+          "showIf": {
+            "key": "maritalStatus",
+            "in": [
+              "married"
+            ]
+          }
+        },
+        {
+          "key": "spouseOtherNationality",
+          "label": "Spouse — other nationality (e.g. INDIAN)",
+          "type": "text",
+          "pdf": "spouseOtherNationality",
+          "showIf": {
+            "key": "spouseStatus",
+            "in": [
+              "others"
+            ]
+          }
+        },
+        {
+          "key": "spouseNricCitizen",
+          "label": "Spouse NRIC No. (Singapore Citizen)",
+          "type": "text",
+          "pdf": "spouseNricCitizen",
+          "maxLength": 9,
+          "boxes": true,
+          "showIf": {
+            "key": "spouseStatus",
+            "in": [
+              "citizen"
+            ]
+          }
+        },
+        {
+          "key": "spouseNricPR",
+          "label": "Spouse NRIC No. (Permanent Resident)",
+          "type": "text",
+          "pdf": "spouseNricPR",
+          "maxLength": 9,
+          "boxes": true,
+          "showIf": {
+            "key": "spouseStatus",
+            "in": [
+              "pr"
+            ]
+          }
+        },
+        {
+          "key": "birthCountryPlace",
+          "label": "Country / place of birth (e.g. INDIA MUMBAI)",
+          "type": "text",
+          "pdf": "birthCountryPlace",
+          "maxLength": 25,
+          "boxes": true,
+          "source": "applicant.placeOfBirth",
+          "sourceFormat": "countryAndPlace",
+          "compare": "placeOfBirth",
+          "required": true
+        },
+        {
+          "key": "birthState",
+          "label": "State / province of birth",
+          "type": "text",
+          "pdf": "birthState",
+          "maxLength": 25,
+          "boxes": true,
+          "source": "applicant.placeOfBirth",
+          "sourceFormat": "secondPart",
+          "required": true
+        },
+        {
+          "key": "race",
+          "label": "Race (e.g. Malay, Indian, Chinese, Caucasian)",
+          "type": "text",
+          "pdf": "race",
+          "maxLength": 25,
+          "boxes": true,
+          "source": "applicant.nationality",
+          "sourceFormat": "race",
+          "required": true
+        },
+        {
+          "key": "nationality",
+          "label": "Nationality / citizenship",
+          "type": "text",
+          "pdf": "nationality",
+          "maxLength": 25,
+          "boxes": true,
+          "source": "applicant.nationality",
+          "sourceFormat": "nationality",
+          "compare": "nationality",
+          "required": true
+        }
+      ]
+    },
+    {
+      "title": "Travel document (passport)",
+      "fields": [
+        {
+          "key": "documentType",
+          "label": "Type of travel document held",
+          "type": "radio",
+          "pdf": "documentType",
+          "source": "applicant.passport.current.type",
+          "sourceFormat": "sgDocumentType",
+          "required": true,
+          "options": [
+            {
+              "value": "international",
+              "label": "International Passport",
+              "state": "/International"
+            },
+            {
+              "value": "diplomatic",
+              "label": "Diplomatic Passport",
+              "state": "/Diplomatic"
+            },
+            {
+              "value": "official",
+              "label": "Official Passport",
+              "state": "/Official"
+            },
+            {
+              "value": "service",
+              "label": "Service Passport",
+              "state": "/Service"
+            },
+            {
+              "value": "identity",
+              "label": "Document of Identity",
+              "state": "/Identity"
+            },
+            {
+              "value": "certIdentity",
+              "label": "Certificate of Identity",
+              "state": "/CertIdentity"
+            },
+            {
+              "value": "others",
+              "label": "Others",
+              "state": "/Others"
+            }
+          ]
+        },
+        {
+          "key": "documentTypeOther",
+          "label": "Other travel document (please specify)",
+          "type": "text",
+          "pdf": "documentTypeOther",
+          "showIf": {
+            "key": "documentType",
+            "in": [
+              "others"
+            ]
+          }
+        },
+        {
+          "key": "passportNumber",
+          "label": "Travel document no.",
+          "type": "text",
+          "pdf": "passportNumber",
+          "maxLength": 15,
+          "boxes": true,
+          "source": "applicant.passport.current.number",
+          "compare": "passportNumber",
+          "required": true,
+          "width": "half"
+        },
+        {
+          "key": "issueDate",
+          "label": "Travel document issued date",
+          "type": "date",
+          "pdfParts": [
+            "issueDate_day",
+            "issueDate_month",
+            "issueDate_year"
+          ],
+          "source": "applicant.passport.current.issueDate",
+          "compare": "issueDate",
+          "required": true,
+          "width": "half"
+        },
+        {
+          "key": "expiryDate",
+          "label": "Expiry date",
+          "type": "date",
+          "pdfParts": [
+            "expiryDate_day",
+            "expiryDate_month",
+            "expiryDate_year"
+          ],
+          "source": "applicant.passport.current.expiryDate",
+          "compare": "expiryDate",
+          "required": true,
+          "width": "half"
+        },
+        {
+          "key": "issueCountryPlace",
+          "label": "Country / place of issue (e.g. INDIA MUMBAI)",
+          "type": "text",
+          "pdf": "issueCountryPlace",
+          "maxLength": 25,
+          "boxes": true,
+          "source": "applicant.passport.current.issuePlace",
+          "sourceFormat": "countryAndPlace",
+          "compare": "issuePlace",
+          "required": true
+        },
+        {
+          "key": "prcId",
+          "label": "PRC ID number (Chinese nationals only)",
+          "type": "text",
+          "pdf": "prcId",
+          "maxLength": 18,
+          "boxes": true,
+          "default": "NOT APPLICABLE"
+        }
+      ]
+    },
+    {
+      "title": "Address in country of origin / residence",
+      "fields": [
+        {
+          "key": "originCountry",
+          "label": "Country / place of origin / residence",
+          "type": "text",
+          "pdf": "originCountry",
+          "maxLength": 25,
+          "boxes": true,
+          "default": "INDIA",
+          "required": true
+        },
+        {
+          "key": "originState",
+          "label": "Division / state / province",
+          "type": "text",
+          "pdf": "originState",
+          "maxLength": 25,
+          "boxes": true,
+          "source": "applicant.address.state",
+          "required": true
+        },
+        {
+          "key": "originPrefecture",
+          "label": "Prefecture",
+          "type": "text",
+          "pdf": "originPrefecture",
+          "maxLength": 25,
+          "boxes": true,
+          "default": "INDIA"
+        },
+        {
+          "key": "originCounty",
+          "label": "County / district",
+          "type": "text",
+          "pdf": "originCounty",
+          "maxLength": 25,
+          "boxes": true,
+          "default": "INDIA"
+        },
+        {
+          "key": "originAddress",
+          "label": "Address",
+          "type": "textarea",
+          "pdf": [
+            "originAddress_1",
+            "originAddress_2"
+          ],
+          "source": "applicant.fullAddress",
+          "lockedTo": "passport",
+          "required": true,
+          "rows": "lines"
+        }
+      ]
+    },
+    {
+      "title": "Part II — Other details",
+      "fields": [
+        {
+          "key": "email",
+          "label": "Email address",
+          "type": "text",
+          "pdf": "email",
+          "maxLength": 25,
+          "boxes": true,
+          "source": "applicant.contact.email",
+          "required": true
+        },
+        {
+          "key": "contactNumber",
+          "label": "Contact number",
+          "type": "text",
+          "pdf": "contactNumber",
+          "maxLength": 25,
+          "boxes": true,
+          "source": "applicant.contact.phone",
+          "required": true,
+          "sourceFormat": "localPhone",
+          "help": "Without the country code (+91)."
+        },
+        {
+          "key": "occupation",
+          "label": "Occupation",
+          "type": "text",
+          "pdf": "occupation",
+          "maxLength": 25,
+          "boxes": true,
+          "source": "applicant.details.occupation",
+          "required": true
+        },
+        {
+          "key": "education",
+          "label": "Highest academic / professional qualification",
+          "type": "radio",
+          "pdf": "education",
+          "required": true,
+          "options": [
+            {
+              "value": "none",
+              "label": "No Formal Education",
+              "state": "/None"
+            },
+            {
+              "value": "primary",
+              "label": "Primary",
+              "state": "/Primary"
+            },
+            {
+              "value": "secondary",
+              "label": "Secondary",
+              "state": "/Secondary"
+            },
+            {
+              "value": "preUniversity",
+              "label": "Pre-University",
+              "state": "/PreUniversity"
+            },
+            {
+              "value": "diploma",
+              "label": "Diploma",
+              "state": "/Diploma"
+            },
+            {
+              "value": "university",
+              "label": "University",
+              "state": "/University"
+            },
+            {
+              "value": "postGraduate",
+              "label": "Post-Graduate",
+              "state": "/PostGraduate"
+            }
+          ]
+        },
+        {
+          "key": "annualIncome",
+          "label": "Annual income in Singapore dollars (SGD)",
+          "type": "text",
+          "pdf": "annualIncome",
+          "maxLength": 11,
+          "boxes": true,
+          "required": true,
+          "help": "In Singapore dollars, digits only — e.g. 25000",
+          "width": "half"
+        },
+        {
+          "key": "religion",
+          "label": "Religion",
+          "type": "text",
+          "pdf": "religion",
+          "maxLength": 25,
+          "boxes": true,
+          "required": true
+        },
+        {
+          "key": "arrivalDate",
+          "label": "Expected date of arrival in Singapore",
+          "type": "date",
+          "pdfParts": [
+            "arrivalDate_day",
+            "arrivalDate_month",
+            "arrivalDate_year"
+          ],
+          "source": "travel.startDate",
+          "compare": "arrivalDate",
+          "required": true,
+          "width": "half"
+        },
+        {
+          "key": "visaType",
+          "label": "Type of visa",
+          "type": "radio",
+          "pdf": "visaType",
+          "default": "multiple",
+          "required": true,
+          "options": [
+            {
+              "value": "single",
+              "label": "Single Journey",
+              "state": "/Single"
+            },
+            {
+              "value": "double",
+              "label": "Double Journey",
+              "state": "/Double"
+            },
+            {
+              "value": "triple",
+              "label": "Triple Journey",
+              "state": "/Triple"
+            },
+            {
+              "value": "multiple",
+              "label": "Multiple Journey",
+              "state": "/Multiple"
+            }
+          ]
+        },
+        {
+          "key": "purpose",
+          "label": "Purpose of visit",
+          "type": "radio",
+          "pdf": "purpose",
+          "default": "social",
+          "required": true,
+          "options": [
+            {
+              "value": "social",
+              "label": "Social",
+              "state": "/Social"
+            },
+            {
+              "value": "business",
+              "label": "Business",
+              "state": "/Business"
+            }
+          ]
+        },
+        {
+          "key": "purposeDetails",
+          "label": "Details of purpose",
+          "type": "text",
+          "pdf": "purposeDetails",
+          "source": "travel.purpose",
+          "default": "TOURISM",
+          "required": true
+        },
+        {
+          "key": "stayLength",
+          "label": "How long do you intend to stay in Singapore",
+          "type": "radio",
+          "pdf": "stayLength",
+          "source": "travel.stay30",
+          "required": true,
+          "options": [
+            {
+              "value": "less30",
+              "label": "Less than 30 days",
+              "state": "/Less30"
+            },
+            {
+              "value": "more30",
+              "label": "More than 30 days",
+              "state": "/More30"
+            }
+          ]
+        },
+        {
+          "key": "stayReason",
+          "label": "If more than 30 days: reason and duration",
+          "type": "textarea",
+          "pdf": [
+            "stayReason_1",
+            "stayReason_2"
+          ],
+          "default": "NOT APPLICABLE",
+          "align": "center",
+          "rows": "lines",
+          "showIf": {
+            "key": "stayLength",
+            "in": [
+              "more30"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "Address in Singapore",
+      "fields": [
+        {
+          "key": "stayPlace",
+          "label": "Where will you be staying in Singapore",
+          "type": "radio",
+          "pdf": "stayPlace",
+          "required": true,
+          "options": [
+            {
+              "value": "nextOfKin",
+              "label": "Next of Kin's Place",
+              "state": "/NextOfKin"
+            },
+            {
+              "value": "relative",
+              "label": "Relative's Place",
+              "state": "/Relative"
+            },
+            {
+              "value": "friend",
+              "label": "Friend's Place",
+              "state": "/Friend"
+            },
+            {
+              "value": "hotel",
+              "label": "Hotel",
+              "state": "/Hotel"
+            },
+            {
+              "value": "others",
+              "label": "Others",
+              "state": "/Others"
+            }
+          ]
+        },
+        {
+          "key": "stayPlaceOther",
+          "label": "Other place (please specify)",
+          "type": "text",
+          "pdf": "stayPlaceOther",
+          "showIf": {
+            "key": "stayPlace",
+            "in": [
+              "others"
+            ]
+          }
+        },
+        {
+          "key": "sgBlock",
+          "label": "Block / house no.",
+          "type": "text",
+          "pdf": "sgBlock",
+          "maxLength": 5,
+          "boxes": true,
+          "width": "quarter"
+        },
+        {
+          "key": "sgFloor",
+          "label": "Floor no.",
+          "type": "text",
+          "pdf": "sgFloor",
+          "maxLength": 2,
+          "boxes": true,
+          "width": "quarter"
+        },
+        {
+          "key": "sgUnit",
+          "label": "Unit no.",
+          "type": "text",
+          "pdf": "sgUnit",
+          "maxLength": 4,
+          "boxes": true,
+          "width": "quarter"
+        },
+        {
+          "key": "sgPostalCode",
+          "label": "Postal code",
+          "type": "text",
+          "pdf": "sgPostalCode",
+          "maxLength": 6,
+          "boxes": true,
+          "required": true,
+          "width": "quarter"
+        },
+        {
+          "key": "sgStreet",
+          "label": "Street name",
+          "type": "text",
+          "pdf": "sgStreet",
+          "maxLength": 20,
+          "boxes": true,
+          "required": true
+        },
+        {
+          "key": "sgContactNo",
+          "label": "Contact no.",
+          "type": "text",
+          "pdf": "sgContactNo",
+          "required": true
+        },
+        {
+          "key": "sgBuildingName",
+          "label": "Building name (hotel name)",
+          "type": "text",
+          "pdf": "sgBuildingName",
+          "required": true
+        }
+      ]
+    },
+    {
+      "title": "Residence in other countries (last 5 years)",
+      "fields": [
+        {
+          "key": "residedAbroad",
+          "label": "Did you reside in other countries / places, other than your country of origin, for one year or more during the last 5 years?",
+          "type": "yesno",
+          "pdf": "residedAbroad",
+          "required": true,
+          "options": [
+            {
+              "value": "yes",
+              "label": "Yes",
+              "state": "/Yes"
+            },
+            {
+              "value": "no",
+              "label": "No",
+              "state": "/No"
+            }
+          ]
+        },
+        {
+          "key": "abroadCountry",
+          "label": "If yes — country / place",
+          "type": "textarea",
+          "pdf": "abroadCountry",
+          "showIf": {
+            "key": "residedAbroad",
+            "in": [
+              "yes"
+            ]
+          }
+        },
+        {
+          "key": "abroadAddress",
+          "label": "If yes — address",
+          "type": "textarea",
+          "pdf": "abroadAddress",
+          "default": "NOT APPLICABLE",
+          "showIf": {
+            "key": "residedAbroad",
+            "in": [
+              "yes"
+            ]
+          },
+          "align": "center"
+        },
+        {
+          "key": "abroadFrom",
+          "label": "If yes — period of stay from",
+          "type": "text",
+          "pdf": "abroadFrom",
+          "showIf": {
+            "key": "residedAbroad",
+            "in": [
+              "yes"
+            ]
+          }
+        },
+        {
+          "key": "abroadTo",
+          "label": "If yes — period of stay to",
+          "type": "text",
+          "pdf": "abroadTo",
+          "showIf": {
+            "key": "residedAbroad",
+            "in": [
+              "yes"
+            ]
+          }
+        }
+      ],
+      "help": "Only if the answer is Yes: the country, address and period of stay are asked for."
+    },
+    {
+      "title": "Travelling companion (only for an applicant aged 12 or under)",
+      "fields": [
+        {
+          "key": "companionRelationship",
+          "label": "Relationship of travelling companion to applicant",
+          "type": "text",
+          "pdf": "companionRelationship",
+          "maxLength": 25,
+          "boxes": true,
+          "default": "NOT APPLICABLE"
+        },
+        {
+          "key": "companionName",
+          "label": "Companion name",
+          "type": "text",
+          "pdf": [
+            "companionName_1",
+            "companionName_2"
+          ],
+          "rowLength": 25,
+          "maxLength": 50,
+          "boxes": true,
+          "default": "NOT APPLICABLE"
+        },
+        {
+          "key": "companionDob",
+          "label": "Companion date of birth",
+          "type": "date",
+          "pdfParts": [
+            "companionDob_day",
+            "companionDob_month",
+            "companionDob_year"
+          ]
+        },
+        {
+          "key": "companionSex",
+          "label": "Companion sex",
+          "type": "radio",
+          "pdf": "companionSex",
+          "options": [
+            {
+              "value": "M",
+              "label": "Male",
+              "state": "/Male"
+            },
+            {
+              "value": "F",
+              "label": "Female",
+              "state": "/Female"
+            }
+          ]
+        },
+        {
+          "key": "companionNationality",
+          "label": "Companion nationality / citizenship",
+          "type": "text",
+          "pdf": "companionNationality",
+          "maxLength": 25,
+          "boxes": true,
+          "default": "NOT APPLICABLE"
+        },
+        {
+          "key": "companionDocument",
+          "label": "Companion travel document number",
+          "type": "text",
+          "pdf": "companionDocument",
+          "maxLength": 15,
+          "boxes": true,
+          "default": "NOT APPLICABLE"
+        }
+      ],
+      "optional": {
+        "label": "The applicant is 12 years old or under — fill in the travelling companion",
+        "note": "Not needed for an adult: the companion boxes are printed with \"NOT APPLICABLE\"."
+      }
+    },
+    {
+      "title": "Part III — Local contact / company / hotel in Singapore",
+      "fields": [
+        {
+          "key": "localContactName",
+          "label": "Name of local contact / company / hotel",
+          "type": "text",
+          "pdf": [
+            "localContactName_1",
+            "localContactName_2"
+          ],
+          "rowLength": 25,
+          "maxLength": 50,
+          "boxes": true,
+          "required": true
+        },
+        {
+          "key": "localContactRelationship",
+          "label": "Relationship to applicant",
+          "type": "text",
+          "pdf": "localContactRelationship",
+          "maxLength": 25,
+          "boxes": true,
+          "required": true
+        },
+        {
+          "key": "localContactNo",
+          "label": "Contact no.",
+          "type": "text",
+          "pdf": "localContactNo",
+          "required": true
+        },
+        {
+          "key": "localContactEmail",
+          "label": "Email address",
+          "type": "text",
+          "pdf": "localContactEmail"
+        }
+      ]
+    },
+    {
+      "title": "Part IV — Antecedent of applicant",
+      "kind": "declaration",
+      "help": "Ask the applicant every question. Nothing is ticked until staff choose an answer.",
+      "fields": [
+        {
+          "key": "qRefused",
+          "label": "(a) Has the applicant ever been refused entry into or deported from any country / place, including Singapore?",
+          "type": "yesno",
+          "pdf": "qRefused",
+          "required": true,
+          "options": [
+            {
+              "value": "yes",
+              "label": "Yes",
+              "state": "/Yes"
+            },
+            {
+              "value": "no",
+              "label": "No",
+              "state": "/No"
+            }
+          ]
+        },
+        {
+          "key": "qConvicted",
+          "label": "(b) Has the applicant ever been convicted in a court of law in any country / place, including Singapore?",
+          "type": "yesno",
+          "pdf": "qConvicted",
+          "required": true,
+          "options": [
+            {
+              "value": "yes",
+              "label": "Yes",
+              "state": "/Yes"
+            },
+            {
+              "value": "no",
+              "label": "No",
+              "state": "/No"
+            }
+          ]
+        },
+        {
+          "key": "qProhibited",
+          "label": "(c) Has the applicant ever been prohibited from entering Singapore?",
+          "type": "yesno",
+          "pdf": "qProhibited",
+          "required": true,
+          "options": [
+            {
+              "value": "yes",
+              "label": "Yes",
+              "state": "/Yes"
+            },
+            {
+              "value": "no",
+              "label": "No",
+              "state": "/No"
+            }
+          ]
+        },
+        {
+          "key": "qOtherIdentity",
+          "label": "(d) Has the applicant ever entered Singapore using a different name, sex, nationality / citizenship, or date of birth?",
+          "type": "yesno",
+          "pdf": "qOtherIdentity",
+          "required": true,
+          "options": [
+            {
+              "value": "yes",
+              "label": "Yes",
+              "state": "/Yes"
+            },
+            {
+              "value": "no",
+              "label": "No",
+              "state": "/No"
+            }
+          ]
+        },
+        {
+          "key": "yesDetails",
+          "label": "If any answer is \"Yes\", details",
+          "type": "textarea",
+          "pdf": [
+            "yesDetails_1",
+            "yesDetails_2",
+            "yesDetails_3"
+          ],
+          "default": "NOT APPLICABLE",
+          "align": "center",
+          "rows": "lines"
+        }
+      ]
+    },
+    {
+      "title": "Part V — Declaration",
+      "help": "The applicant signs by hand; the signature lines stay blank.",
+      "fields": [
+        {
+          "key": "declarationDate",
+          "label": "Date (leave blank if the applicant will date it by hand)",
+          "type": "date",
+          "dateFormat": "DD/MM/YYYY",
+          "pdf": "declarationDate"
+        }
+      ]
+    }
+  ]
+}

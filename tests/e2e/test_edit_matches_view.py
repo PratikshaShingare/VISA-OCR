@@ -59,7 +59,19 @@ async def main():
         n_bg = await page.locator(f"{SCOPE} .lw-page__bg").count()
         checks.check("Each page's printed background (letterhead, shading, footer) is drawn behind the text", n_bg == 2, str(n_bg))
         page_w = await page.evaluate("(s) => document.querySelector(s + ' .lw-page').getBoundingClientRect().width", SCOPE)
-        checks.check("The page keeps the size it had in the viewer", abs(page_w - view_w) < 6, f"view {view_w} edit {page_w}")
+        pane_w = await page.evaluate("(s) => document.querySelector(s + ' .lw').parentElement.clientWidth", SCOPE)
+        checks.check("In Edit mode the page is as wide as the editor (readable on a short window), not shrunk to the whole-page view size",
+                     page_w >= view_w - 6 and page_w <= pane_w + 2 and page_w >= 0.85 * min(pane_w, 1.8 * 794 / 1.333 * 1.333), f"view {view_w} edit {page_w} pane {pane_w}")
+        # + / - / Fit keep working while editing
+        z0 = await page.evaluate("(s) => document.querySelector(s + ' .lw-page').getBoundingClientRect().width", SCOPE)
+        await page.click(f"{SCOPE} [data-dv='zoom-out']")
+        await page.wait_for_timeout(200)
+        z1 = await page.evaluate("(s) => document.querySelector(s + ' .lw-page').getBoundingClientRect().width", SCOPE)
+        checks.check("Zoom out works while editing", z1 < z0 - 10, f"{z0} -> {z1}")
+        await page.click(f"{SCOPE} [data-dv='fit']")
+        await page.wait_for_timeout(200)
+        z2 = await page.evaluate("(s) => document.querySelector(s + ' .lw-page').getBoundingClientRect().width", SCOPE)
+        checks.check("Fit brings the page back to the editor's width", abs(z2 - z0) < 6, f"{z0} -> {z2}")
 
         # every value sits on the cell it is printed in
         pos = {}

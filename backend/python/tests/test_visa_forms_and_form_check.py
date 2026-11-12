@@ -291,3 +291,76 @@ def test_single_line_field_gets_smaller_letters_and_reports_what_cannot_fit(tmp_
     assert "Employer — Address" in overflow
     content, _m, overflow = visa_forms.fill_form("japan-visa", VALUES)
     assert overflow == []
+
+
+# --------------------------------------------------------------------------- Singapore Form 14A
+
+SG_VALUES = dict(
+    fullName="Sharma Anita Raj Kumar Prasad Verma", dob="1980-05-14", sex="F", maritalStatus="married",
+    birthCountryPlace="India Pune", birthState="Maharashtra", race="Indian", nationality="Indian", documentType="international",
+    passportNumber="Z1234567", issueDate="10-01-2020", expiryDate="09-01-2035", issueCountryPlace="India Mumbai",
+    originCountry="India", originState="Maharashtra", originAddress="12 Sample Society, Pune 411001",
+    email="anita@example.com", contactNumber="9800000000", occupation="Self employed", education="postGraduate",
+    annualIncome="25000", religion="Hindu", arrivalDate="04-12-2030", visaType="multiple", purpose="social",
+    purposeDetails="Tourism", stayLength="less30", stayPlace="hotel", sgPostalCode="219924", sgStreet="3 Sample Rd",
+    sgContactNo="+65 6000 0000", sgBuildingName="Sample Garden Inn", residedAbroad="no",
+    localContactName="Sample Garden Inn Singapore Serangoon", localContactRelationship="Hotel", localContactNo="+65 6000 0000",
+    qRefused="no", qConvicted="no", qProhibited="no", qOtherIdentity="no",
+)
+
+SG_PASSPORT = dict(PASSPORT, givenNames="ANITA RAJ KUMAR PRASAD", surname="SHARMA VERMA", placeOfBirth="PUNE, MAHARASHTRA")
+
+
+def _fill_sg(tmp_path, **changes):
+    content, missing, overflow = visa_forms.fill_form("singapore-visa", dict(SG_VALUES, **changes))
+    path = tmp_path / "sg.pdf"
+    path.write_bytes(content)
+    return str(path), missing, overflow
+
+
+def test_singapore_form_fields_exist_on_the_blank_pdf():
+    d = visa_forms.get_definition("singapore-visa")
+    names = set(visa_forms._widgets_by_name(pypdf.PdfReader(visa_forms.template_path(d)).pages))
+    for field in visa_forms.iter_fields(d):
+        for name in visa_forms.pdf_names(field):
+            assert name in names, (field["key"], name)
+
+
+def test_singapore_letter_boxes_dates_and_two_row_name(tmp_path):
+    path, missing, overflow = _fill_sg(tmp_path)
+    assert missing == [] and overflow == []
+    fields = {k: str(v.get("/V") or "") for k, v in pypdf.PdfReader(path).get_fields().items()}
+    assert fields["fullName_1"] == "SHARMA ANITA RAJ KUMAR"  # broken between words, 25 boxes
+    assert fields["fullName_2"] == "PRASAD VERMA"
+    assert (fields["dob_day"], fields["dob_month"], fields["dob_year"]) == ("14", "05", "1980")
+    assert (fields["arrivalDate_day"], fields["arrivalDate_month"], fields["arrivalDate_year"]) == ("04", "12", "2030")
+    assert fields["sex"] == "/Female" and fields["qRefused"] == "/No" and fields["stayPlace"] == "/Hotel"
+    assert fields["passportNumber"] == "Z1234567"
+
+
+def test_singapore_too_long_for_the_boxes_is_reported(tmp_path):
+    _path, _missing, overflow = _fill_sg(tmp_path, fullName="A" * 30 + " " + "B" * 30, religion="X" * 40)
+    assert "Name (full name as shown in passport)" in overflow
+    assert "Religion" in overflow
+
+
+def test_singapore_read_back_and_checked(tmp_path):
+    path, _m, _o = _fill_sg(tmp_path)
+    extract = form_check.extract_document(path, allow_ocr=False)
+    assert extract["formId"] == "singapore-visa"
+    got = _by_key(extract)
+    assert got["fullName"] == "SHARMA ANITA RAJ KUMAR PRASAD VERMA"
+    assert got["dob"] == "14/05/1980" and got["sex"] == "Female"
+    result = form_check.check_form(extract, [dict(SG_PASSPORT, surname="SHARMA", givenNames="ANITA RAJ KUMAR PRASAD VERMA")], [])
+    by = {f["field"]: f["status"] for f in result["findings"]}
+    assert by["fullName"] == "ok" and by["dob"] == "ok" and by["passportNumber"] == "ok"
+    assert by["placeOfBirth"] == "ok" and by["issuePlace"] == "ok" and by["nationality"] == "ok"
+    assert result["summary"]["correct"] == 0, result["findings"]
+    wrong = form_check.check_form(extract, [dict(PASSPORT, surname="SHARMA", givenNames="ANITA RAJ KUMAR PRASAD VERNA")], [])
+    assert {f["field"]: f["status"] for f in wrong["findings"]}["fullName"] == "correct"
+
+
+def test_split_rows():
+    assert visa_forms.split_rows("AB CD EF", [5, 5]) == (["AB CD", "EF"], "")
+    assert visa_forms.split_rows("ABCDEFGH", [5, 5]) == (["ABCDE", "FGH"], "")
+    assert visa_forms.split_rows("AAAA BBBB CCCC", [4, 4]) == (["AAAA", "BBBB"], "CCCC")

@@ -363,6 +363,18 @@
       // Every page that will be read automatically has been read.
       reviewForm.finalizeMissing(r);
       setStatus(r, "");
+      alertIfExpiringSoon(r);
+    }
+
+    // Popup when the passport has expired or expires within a year
+    // (js/passport/passport-expiry-alert.js).
+    function alertIfExpiringSoon(r) {
+      if (!global.KhannaPassportExpiry) return;
+      var v = reviewForm.readValues(r);
+      var a = v.applicant || {};
+      var cur = v.current || {};
+      var name = [a.firstName, a.lastName].filter(Boolean).join(" ") || (session && session.file && session.file.name) || "";
+      global.KhannaPassportExpiry.check(cur.expiryDate, name, cur.number);
     }
 
     function runOcr(r, pageIndex, opts) {
