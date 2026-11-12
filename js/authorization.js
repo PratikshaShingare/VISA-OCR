@@ -685,6 +685,7 @@
       '<input type="text" data-manual-applicant-field="fullName" placeholder="Full name" aria-label="New applicant full name" />' +
       '<input type="text" data-manual-applicant-field="passportNumber" placeholder="Passport number" aria-label="New applicant passport number" />' +
       '<button type="button" class="btn btn-secondary btn-sm" data-action="add-manual-applicant">+ Add applicant (name &amp; passport only)</button>' +
+      '<label class="auth-manual-applicant-form__save"><input type="checkbox" data-manual-applicant-save-profile checked /> Also save in Applicant Profiles</label>' +
       "</div>"
     );
   }
@@ -1195,6 +1196,20 @@
       showAuthError("company", "Enter both a full name and a passport number to add an applicant.");
       return;
     }
+    var saveBox = utils.qs("[data-manual-applicant-save-profile]", r);
+    var savedToProfile = false;
+    if (saveBox && saveBox.checked && global.KhannaState.saveApplicantProfile) {
+      // Same passport number = same person: an existing profile is updated
+      // (only its name and number), never duplicated or blanked.
+      try {
+        savedToProfile = !!global.KhannaState.saveApplicantProfile({
+          fullName: fullName,
+          passport: { current: { number: passportNumber.toUpperCase().replace(/\s+/g, "") } },
+        });
+      } catch (err) {
+        savedToProfile = false;
+      }
+    }
     var state = authState(app, "company");
     var manual = (state.manualApplicants || []).concat([
       { id: utils.generateId("MAN"), fullName: fullName, passportNumber: passportNumber },
@@ -1205,6 +1220,7 @@
     if (clearedFields) companyPatch.editedFields = clearedFields;
     global.KhannaState.updateApplication(app.id, { authorization: { company: companyPatch } }, 'Applicant "' + fullName + '" added to the Company Authorization Letter');
     renderCompanyCard(getApp());
+    if (savedToProfile && global.KhannaToast) global.KhannaToast.show('"' + fullName + '" saved to Applicant Profiles.');
   }
 
   function onRemoveManualApplicantClick(e, target) {

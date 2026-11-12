@@ -127,6 +127,16 @@
   margin-bottom: var(--space-3);
 }
 
+/* "Also save in Applicant Profiles" — on by default. */
+.auth-manual-applicant-form__save {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.85rem;
+  color: var(--color-text-muted, inherit);
+  cursor: pointer;
+}
+
 /* The "+ Add applicant (name & passport only)" button is a long nowrap
    label; at 320px (plus a desktop scrollbar) it ran ~13px past the screen.
    Let it wrap inside its own row instead. */

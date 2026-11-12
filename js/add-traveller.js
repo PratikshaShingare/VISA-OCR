@@ -216,6 +216,8 @@
       '<form class="add-traveller__form" data-add-traveller-form novalidate>' +
       '<div data-add-traveller-body></div>' +
       '<p class="field-hint" style="margin:0;">Fields marked * are needed. Typed by staff — check against the physical passport.</p>' +
+      '<label class="add-traveller__save-profile"><input type="checkbox" data-add-traveller-save-profile checked /> ' +
+      '<span>Also save these details in <strong>Applicant Profiles</strong> (so they can be reused on other letters and forms)</span></label>' +
       '<div class="notice notice-danger" data-add-traveller-error role="alert" hidden></div>' +
       '<div class="add-traveller__actions">' +
       '<button type="button" class="btn btn-secondary btn-sm" data-add-traveller-cancel>Cancel</button>' +
@@ -355,12 +357,61 @@
       global.KhannaState.updateTraveller(app.id, traveller.id, patch, 'Traveller "' + fullName + '" added');
       id = traveller.id;
     }
+    var saveBox = utils.qs("[data-add-traveller-save-profile]", overlayEl);
+    var savedToProfile = !!(saveBox && saveBox.checked) && saveToProfile(app.id, id);
     close();
-    if (callback) callback(id, { fullName: fullName, passportNumber: passportNumber, edited: !!session.personId });
+    if (savedToProfile && global.KhannaToast) {
+      global.KhannaToast.show('Details of "' + fullName + '" saved to Applicant Profiles.');
+    }
+    if (callback) callback(id, { fullName: fullName, passportNumber: passportNumber, edited: !!session.personId, savedToProfile: savedToProfile });
+  }
+
+  // A copy of a person with every empty value left out, so saving it to a
+  // profile adds and updates details but never blanks one the profile
+  // already holds (e.g. a date of issue staff did not retype here).
+  function withoutBlanks(obj) {
+    var out = {};
+    Object.keys(obj || {}).forEach(function (k) {
+      var v = obj[k];
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        var inner = withoutBlanks(v);
+        if (Object.keys(inner).length) out[k] = inner;
+      } else if (v != null && String(v).trim() !== "") {
+        out[k] = v;
+      }
+    });
+    return out;
+  }
+
+  // Saves the person just entered to the reusable pool shown on the
+  // Applicant Profiles page — the main applicant to the applicant profiles,
+  // anyone else to the traveller profiles (both are listed there) — and
+  // links the application's copy to that profile. Same person = same
+  // passport number, so an existing profile is updated, not duplicated.
+  function saveToProfile(appId, personId) {
+    var S = global.KhannaState;
+    var app = S.getApplication(appId);
+    if (!app) return false;
+    try {
+      if (personId === "applicant") {
+        var applicantProfile = S.saveApplicantProfile(withoutBlanks(app.applicant), app.applicantId || null);
+        if (applicantProfile && app.applicantId !== applicantProfile.id) S.updateApplication(appId, { applicantId: applicantProfile.id });
+        return !!applicantProfile;
+      }
+      var person = S.getTraveller(appId, personId);
+      if (!person) return false;
+      var data = withoutBlanks(person);
+      delete data.id;
+      var travellerProfile = S.saveTravellerProfile(data, person.profileId || null);
+      if (travellerProfile && person.profileId !== travellerProfile.id) S.updateTraveller(appId, personId, { profileId: travellerProfile.id });
+      return !!travellerProfile;
+    } catch (e) {
+      return false;
+    }
   }
 
   /**
-   * @param callback  runs with (personId, {fullName, passportNumber, edited})
+   * @param callback  runs with (personId, {fullName, passportNumber, edited, savedToProfile})
    * @param opts      { docKey, role, personId } — see the file header
    */
   function open(callback, opts) {

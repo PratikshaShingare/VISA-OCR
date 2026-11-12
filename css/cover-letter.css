@@ -397,6 +397,21 @@
   min-width: 0;
 }
 
+/* "Also save these details in Applicant Profiles" — on by default. */
+.add-traveller__save-profile {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.add-traveller__save-profile input {
+  flex: none;
+  margin-top: 0.2em;
+}
+
 .add-traveller__actions {
   display: flex;
   justify-content: flex-end;
