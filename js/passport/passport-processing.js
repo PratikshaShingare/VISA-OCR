@@ -212,12 +212,24 @@
         placeholderLabel = "This page could not be processed: " + (session.errorMessage || "unknown error");
       } else if (session.file) {
         placeholderLabel = "Processing passport — preview will appear automatically...";
+      } else if (session.imageRef && cached && cached.processedDataUrl) {
+        // Reopened passport: the cropped, straightened data page kept on this
+        // computer when it was read (passport-image-store.js).
+        imageSrc = cached.processedDataUrl;
+      } else if (session.imageRef && session.savedImageState !== "missing") {
+        placeholderLabel = "Loading the saved passport image…";
+        if (session.savedImageState !== "loading") {
+          var thisSession = session;
+          thisSession.savedImageState = "loading";
+          imageStore.load(thisSession.imageRef).then(function (rec) {
+            if (session !== thisSession) return;
+            thisSession.savedImageState = rec ? "loaded" : "missing";
+            renderPreview(r);
+          });
+        }
       } else if (session.imageRef) {
-        // Resuming a draft: the saved fields below are real (they came from
-        // KhannaState), but the raw image itself was only ever kept in this
-        // tab's memory (see passport-image-store.js) and is gone after a
-        // reload — upload the file again to see or reprocess the image.
-        placeholderLabel = "Original image not available in this session — upload the file again to view or reprocess it.";
+        // Read before images were kept on this computer, or on another computer.
+        placeholderLabel = "No saved image of this passport on this computer — upload the file again to view or reprocess it.";
       }
 
       preview.render(
@@ -680,6 +692,7 @@
         person && person.passport && person.passport.verificationStatus && person.passport.verificationStatus !== "Not Started";
       if (hasSavedPassport) {
         session.imageRef = person.passport.imageRef;
+        session.savedImageState = null;
         showWorkspace(r);
       } else {
         // Switching to an application with nothing saved yet (e.g. "Create
