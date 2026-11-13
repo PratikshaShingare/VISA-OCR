@@ -38,6 +38,64 @@
 
 .ap-top {
   display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* ---------------- Delete profile ---------------- */
+.ap-delete {
+  color: var(--color-danger);
+}
+
+.ap-del {
+  max-width: 520px;
+}
+
+.ap-del__lead {
+  margin: 0 0 var(--space-1);
+}
+
+.ap-del__option + .ap-del__option {
+  margin-top: var(--space-2);
+}
+
+.ap-del__option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.ap-del__option .btn {
+  height: auto;
+  min-height: 32px;
+  white-space: normal;
+  text-align: left;
+}
+
+.ap-del__option p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.ap-del__apps {
+  margin: 0;
+  padding-left: var(--space-5);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.ap-del__option .ap-del__bin {
+  color: var(--color-text);
+}
+
+.ap-del__actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .ap-name {
@@ -121,5 +179,248 @@
   .ap-bar > .btn,
   .ap-save > .btn {
     width: 100%;
+  }
+}
+
+/* ---------------- "Get basic details from the client" (js/client-details-panel.js) ---------------- */
+.cdm {
+  padding: 0;
+}
+
+.cdm-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border: none;
+  background: none;
+  color: var(--color-text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cdm-toggle strong {
+  display: block;
+}
+
+.cdm-toggle__sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.cdm-toggle .icon {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.cdm-toggle[aria-expanded="true"] .icon {
+  transform: rotate(180deg);
+}
+
+.cdm-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: 0 var(--space-5) var(--space-5);
+  border-top: 1px solid var(--color-border);
+}
+
+.cdm-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+}
+
+.cdm-step__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.cdm-step__no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex: none;
+}
+
+.cdm-help {
+  margin: 0;
+}
+
+.cdm-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.cdm-row .field {
+  min-width: 0;
+  flex: 0 1 200px;
+}
+
+.cdm-row .cdm-grow,
+.cdm-result__head .cdm-grow {
+  flex: 1 1 240px;
+}
+
+.cdm-text {
+  width: 100%;
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.cdm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cdm-upload {
+  cursor: pointer;
+  height: auto;
+  white-space: normal;
+}
+
+.cdm-status {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.cdm-status--ok {
+  color: var(--color-success);
+}
+
+.cdm-status--warn {
+  color: var(--color-danger);
+}
+
+.cdm-verify {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.cdm-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.cdm-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.cdm-result__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.cdm-result__head strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.cdm-result__label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.cdm-answers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-4);
+}
+
+.cdm-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cdm-answer label {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.cdm-answer input,
+.cdm-answer select {
+  width: 100%;
+  min-width: 0;
+}
+
+.cdm-answer--flag input,
+.cdm-answer--flag select {
+  border-color: var(--color-warning);
+}
+
+.cdm-note {
+  font-size: 0.78rem;
+  color: var(--color-warning);
+}
+
+.cdm-unread {
+  font-size: 0.85rem;
+}
+
+.cdm-unread ul {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-5);
+  overflow-wrap: anywhere;
+}
+
+/* A profile field filled from the client's reply and not saved yet. */
+.ap-from-reply input,
+.ap-from-reply select {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.ap-reply-tag {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+@media (max-width: 575px) {
+  .cdm-toggle {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .cdm-body {
+    padding: 0 var(--space-4) var(--space-4);
+  }
+
+  .cdm-answers {
+    grid-template-columns: 1fr;
   }
 }

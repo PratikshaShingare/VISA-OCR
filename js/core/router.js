@@ -48,6 +48,8 @@
     "applicant-profiles",
     // "Recent Passports" list (reached from the Upload Passport page).
     "passport-applications",
+    // Deleted applications / applicants, kept 30 days (js/recycle-bin.js).
+    "recycle-bin",
   ];
   var WIZARD_STEP_COUNT = 8;
 

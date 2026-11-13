@@ -1,0 +1,102 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — Recycle Bin page (js/recycle-bin.js)
+   Rows reuse the shared list rows (.hb-row, css/hotel-blockings.css).
+   ========================================================================== */
+
+.rb-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 900px;
+}
+
+.rb-intro {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.rb-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.rb-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.rb-toolbar .btn,
+.rb-row .btn {
+  gap: var(--space-1);
+}
+
+.rb-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.rb-check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: none;
+}
+
+.rb-row {
+  align-items: center;
+}
+
+.rb-row > .rb-check {
+  align-self: flex-start;
+  padding-top: 2px;
+}
+
+.rb-row.is-selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.rb-kind {
+  margin-left: var(--space-1);
+  font-size: 0.7rem;
+  vertical-align: middle;
+}
+
+.rb-left--soon {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.rb-danger {
+  color: var(--color-danger);
+}
+
+@media (max-width: 575px) {
+  .rb-toolbar {
+    padding: var(--space-3);
+  }
+
+  .rb-toolbar__actions,
+  .rb-toolbar__actions .btn {
+    width: 100%;
+  }
+
+  .rb-toolbar__actions .btn {
+    justify-content: center;
+    height: auto;
+    min-height: 34px;
+    white-space: normal;
+  }
+}

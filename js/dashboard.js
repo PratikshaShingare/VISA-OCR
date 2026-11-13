@@ -229,7 +229,7 @@
     pendingDeleteId = id;
     utils.qs("[data-dash-delete-text]", deleteModalEl).textContent =
       "Are you sure you want to delete the application for " + applicantLabel(app) +
-      "? This removes it and its saved details from this browser and cannot be undone.";
+      "? It goes to the Recycle Bin, where it can be restored for 30 days.";
     deleteModalEl.removeAttribute("hidden");
     utils.qs("[data-dash-delete-cancel].btn", deleteModalEl).focus();
   }

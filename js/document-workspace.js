@@ -353,7 +353,8 @@
             startFreshApplication();
           },
           function onDiscard() {
-            global.KhannaState.deleteApplication(activeApp.id);
+            // Discarding an unsaved draft: gone for good, not to the Recycle Bin.
+            global.KhannaState.deleteApplication(activeApp.id, { permanent: true });
             startFreshApplication();
           }
         );

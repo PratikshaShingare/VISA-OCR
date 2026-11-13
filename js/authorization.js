@@ -196,7 +196,27 @@
     );
   }
 
+  // Company letter: say exactly what is still missing, not a general rule.
+  function companyMissingHint(app) {
+    var state = authState(app, "company");
+    var selected = selectedPeopleFor(app, "company");
+    var missing = [];
+    if (!selected.length) missing.push("tick at least one person above");
+    selected.forEach(function (p) {
+      if (!personHasCoreFields(p)) {
+        missing.push((p.fullName && p.fullName.trim() ? "the passport number of " + personDisplayName(p) : "the name of the person with passport " + (p.passportNumber || "—")));
+      }
+    });
+    if (!isSingaporeLetter(app, "company") && !(state.recipientText && state.recipientText.trim())) missing.push("choose the consulate country");
+    if (!missing.length) return "";
+    return "To generate this letter: " + missing.join(" · ") + ".";
+  }
+
   function readinessHint(app, group) {
+    if (group === "company") {
+      var hint = companyMissingHint(app);
+      if (hint) return hint;
+    }
     if (isSingaporeLetter(app, group)) {
       return "Select the applicants (each with a name and passport number on file) to generate this Singapore letter.";
     }
@@ -410,6 +430,21 @@
         // would silently re-check/uncheck the row every time "remove"
         // was clicked. Every other row (a real traveller) is untouched,
         // still the same bare <label> as before.
+        // Company Authorization: every row has a × — a manually-added
+        // applicant is deleted, anyone from the application is only taken
+        // off THIS letter's list (they stay on the application; "Show
+        // again" below the list brings them back).
+        if (!p.isManual && group === "company") {
+          return (
+            '<div class="auth-person-row-wrap">' +
+            rowHtml +
+            '<button type="button" class="btn-icon auth-person-remove" data-action="hide-company-person" data-person-id="' +
+            utils.escapeHtml(p.id) +
+            '" aria-label="Remove ' + utils.escapeHtml(personDisplayName(p)) + ' from this letter" title="Remove from this letter">' +
+            '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>' +
+            "</div>"
+          );
+        }
         if (!p.isManual) return rowHtml;
         return (
           '<div class="auth-person-row-wrap">' +
@@ -432,7 +467,32 @@
     if (!app || !box) return;
     var state = authState(app, group);
     var pool = group === "company" ? getCompanyPeople(app) : getSelectablePeople(app);
-    box.innerHTML = checklistHtml(pool, state.selectedPersonIds || [], group, maxCount);
+    if (group !== "company") {
+      box.innerHTML = checklistHtml(pool, state.selectedPersonIds || [], group, maxCount);
+      return;
+    }
+    var sel = state.selectedPersonIds || [];
+    // Someone ticked again (e.g. by applying a saved group) is listed even if removed before.
+    var removed = (state.removedPersonIds || []).filter(function (id) { return sel.indexOf(id) === -1; });
+    var shown = pool.filter(function (p) {
+      return removed.indexOf(p.id) === -1 && (p.isManual || savedDetails().hasNameOrPassport(p));
+    });
+    var hiddenCount = pool.filter(function (p) { return removed.indexOf(p.id) !== -1; }).length;
+    var ticked = shown.filter(function (p) { return (state.selectedPersonIds || []).indexOf(p.id) !== -1; }).length;
+    box.innerHTML =
+      (shown.length
+        ? '<div class="auth-select-bar">' +
+          '<span class="auth-select-bar__count">Ticked people are printed on the letter — <strong>' + ticked + " of " + shown.length + "</strong> ticked</span>" +
+          '<span class="auth-select-bar__actions">' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-action="company-tick-all"' + (ticked === shown.length ? " disabled" : "") + ">Tick all</button>" +
+          '<button type="button" class="btn btn-ghost btn-sm" data-action="company-untick-all"' + (ticked ? "" : " disabled") + ">Untick all</button>" +
+          "</span></div>"
+        : "") +
+      checklistHtml(shown, state.selectedPersonIds || [], group, maxCount) +
+      (hiddenCount
+        ? '<p class="auth-removed-note">' + hiddenCount + (hiddenCount === 1 ? " person" : " people") + " removed from this letter. " +
+          '<button type="button" class="btn btn-ghost btn-sm" data-action="show-company-people">Show again</button></p>'
+        : "");
   }
 
   /* ---------------------------------------------------------------------
@@ -681,6 +741,7 @@
 
   function manualApplicantFormHtml() {
     return (
+      '<p class="auth-subhead">Someone not listed? Add their name and passport number:</p>' +
       '<div class="auth-manual-applicant-form">' +
       '<input type="text" data-manual-applicant-field="fullName" placeholder="Full name" aria-label="New applicant full name" />' +
       '<input type="text" data-manual-applicant-field="passportNumber" placeholder="Passport number" aria-label="New applicant passport number" />' +
@@ -715,16 +776,16 @@
           })
           .join("") +
         "</select>" +
-        '<button type="button" class="btn btn-secondary btn-sm" data-action="apply-applicant-group">Apply</button>' +
-        '<button type="button" class="btn-icon" data-action="delete-applicant-group" aria-label="Delete the selected saved group" title="Delete the selected saved group">' +
-        '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>' +
+        '<button type="button" class="btn btn-secondary btn-sm" data-action="apply-applicant-group" title="Tick the people of this group">Apply</button>' +
+        '<button type="button" class="btn btn-ghost btn-sm auth-danger-link" data-action="delete-applicant-group" title="Delete the selected saved group">Delete group</button>' +
         "</div>";
     return (
+      '<p class="auth-subhead">Saved groups <span class="auth-subhead__hint">(optional) — save the ticked people as a group to tick them again in one click next time.</span></p>' +
       '<div class="auth-group-toolbar" data-auth-group-toolbar="company">' +
       usePart +
       '<div class="auth-group-toolbar__field">' +
-      '<input type="text" data-group-name-input placeholder="Name this selection as a group" aria-label="New group name" />' +
-      '<button type="button" class="btn btn-secondary btn-sm" data-action="save-applicant-group">Save selection as group</button>' +
+      '<input type="text" data-group-name-input placeholder="Group name, e.g. Sharma family" aria-label="New group name" />' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-action="save-applicant-group">Save ticked people as group</button>' +
       "</div>" +
       "</div>"
     );
@@ -1320,7 +1381,47 @@
     renderCompanyCard(getApp());
   }
 
+  // × on a person from the application: off this letter's list (and unticked).
+  function onHideCompanyPersonClick(e, target) {
+    e.preventDefault();
+    var app = getApp();
+    if (!app) return;
+    var personId = target.getAttribute("data-person-id");
+    var state = authState(app, "company");
+    var ids = (state.selectedPersonIds || []).filter(function (id) { return id !== personId; });
+    var removed = (state.removedPersonIds || []).filter(function (id) { return id !== personId; }).concat([personId]);
+    var companyPatch = selectionPatch(state, "company", ids);
+    companyPatch.removedPersonIds = removed;
+    global.KhannaState.updateApplication(app.id, { authorization: { company: companyPatch } }, null);
+    renderCompanyCard(getApp());
+  }
+
+  function onShowCompanyPeopleClick() {
+    var app = getApp();
+    if (!app) return;
+    global.KhannaState.updateApplication(app.id, { authorization: { company: { removedPersonIds: [] } } }, null);
+    renderCompanyCard(getApp());
+  }
+
+  function onTickAllCompany(tick) {
+    var app = getApp();
+    if (!app) return;
+    var state = authState(app, "company");
+    var removed = state.removedPersonIds || [];
+    var ids = tick
+      ? getCompanyPeople(app)
+          .filter(function (p) { return removed.indexOf(p.id) === -1 && (p.isManual || savedDetails().hasNameOrPassport(p)); })
+          .map(function (p) { return p.id; })
+      : [];
+    global.KhannaState.updateApplication(app.id, { authorization: { company: selectionPatch(state, "company", ids) } }, null);
+    renderCompanyCard(getApp());
+  }
+
   function wireCompanyGroupHandlers(r) {
+    utils.on(r, "click", "[data-action='hide-company-person']", onHideCompanyPersonClick);
+    utils.on(r, "click", "[data-action='show-company-people']", onShowCompanyPeopleClick);
+    utils.on(r, "click", "[data-action='company-tick-all']", function () { onTickAllCompany(true); });
+    utils.on(r, "click", "[data-action='company-untick-all']", function () { onTickAllCompany(false); });
     utils.on(r, "click", "[data-action='add-manual-applicant']", onAddManualApplicantClick);
     utils.on(r, "click", "[data-action='remove-manual-applicant']", onRemoveManualApplicantClick);
     utils.on(r, "click", "[data-action='save-applicant-group']", onSaveApplicantGroupClick);
@@ -1414,14 +1515,11 @@
       refreshChecklist("company", null);
       refreshGenerateBar("passport");
       refreshGenerateBar("company");
-      refreshReadinessNotice(
-        "passport",
-        "Select the travellers (each with a name and passport number on file), and fill the centre and collector fields, to generate this letter."
-      );
-      refreshReadinessNotice(
-        "company",
-        "Select at least one applicant (with a name and passport number on file) and choose the consulate country to generate this letter."
-      );
+      var current = getApp();
+      if (current) {
+        refreshReadinessNotice("passport", readinessHint(current, "passport"));
+        refreshReadinessNotice("company", readinessHint(current, "company"));
+      }
       if (global.KhannaRouter) global.KhannaRouter.refreshWizardFooter();
     });
 

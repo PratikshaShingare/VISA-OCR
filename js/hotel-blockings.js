@@ -221,7 +221,7 @@
     utils.qs("[data-hb-delete-text]", modalEl).textContent =
       "Are you sure you want to delete the hotel blocking for " + labelOf(app) + " (" + n + (n === 1 ? " hotel" : " hotels") + ")? " +
       (only
-        ? "This removes it from this browser and cannot be undone."
+        ? "It goes to the Recycle Bin, where it can be restored for 30 days."
         : "This removes its hotels and voucher details from this browser and cannot be undone. The application's other documents are kept.");
     modalEl.hidden = false;
     var cancel = modalEl.querySelector("button[data-hb-delete-cancel].btn-secondary");

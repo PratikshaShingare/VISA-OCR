@@ -136,7 +136,7 @@
     utils.qs("[data-pp-delete-text]", modalEl).textContent =
       "Are you sure you want to delete the passport for " + lists().applicantLabel(app) + "? " +
       (only
-        ? "This removes it from this browser and cannot be undone."
+        ? "It goes to the Recycle Bin, where it can be restored for 30 days."
         : "This removes the applicant and passport details from this browser and cannot be undone. The application's other documents are kept.");
     modalEl.hidden = false;
     var cancel = modalEl.querySelector("button[data-pp-delete-cancel].btn-secondary");

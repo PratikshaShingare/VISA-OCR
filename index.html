@@ -40,10 +40,13 @@
   <link rel="stylesheet" href="css/preview-editor.css" />
   <link rel="stylesheet" href="css/toast.css" />
   <link rel="stylesheet" href="css/dashboard.css" />
+  <link rel="stylesheet" href="css/workflow-guide.css" />
+  <link rel="stylesheet" href="css/form-guide.css" />
   <link rel="stylesheet" href="css/upload-documents.css" />
   <link rel="stylesheet" href="css/document-preview.css" />
   <link rel="stylesheet" href="css/visa-forms.css" />
   <link rel="stylesheet" href="css/applicant-profiles.css" />
+  <link rel="stylesheet" href="css/recycle-bin.css" />
   <link rel="stylesheet" href="css/responsive.css" />
 </head>
 <body>
@@ -103,6 +106,7 @@
             </div>
             <a class="profile-menu__item" href="#/profile" data-nav-link="profile">Profile &amp; Settings</a>
             <a class="profile-menu__item" href="#/applications" data-nav-link="applications" data-admin-only hidden>Applications</a>
+            <a class="profile-menu__item" href="#/recycle-bin" data-nav-link="recycle-bin">Recycle Bin</a>
             <!-- Theme toggle lives here (between Settings and Log Out). The
                  row is an on/off switch for dark mode (on = dark theme); the icon
                  shows the current theme (sun or moon). -->
@@ -176,6 +180,7 @@
 
         <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--color-text-faint);padding:var(--space-3) var(--space-2) var(--space-1);">People</div>
         <a class="primary-nav__link" href="#/applicant-profiles" data-nav-link="applicant-profiles">Applicant Profiles</a>
+        <a class="primary-nav__link" href="#/recycle-bin" data-nav-link="recycle-bin">Recycle Bin</a>
 
         <a class="primary-nav__link" href="#/admin" data-nav-link="admin" data-admin-only hidden>Admin</a>
 
@@ -201,6 +206,9 @@
               <h1>Dashboard</h1>
             </div>
           </div>
+
+          <!-- "How it works": the six workflow steps (js/workflow-guide.js). -->
+          <div class="dashboard-guide" data-workflow-guide></div>
 
           <div class="dashboard-doc-grid" data-dashboard-doc-grid>
             <!-- Total Applications: first cell of the 4 x 2 card grid. Not a
@@ -368,6 +376,18 @@
             </div>
           </div>
           <div data-applicant-profiles-root></div>
+        </div>
+      </section>
+
+      <!-- ---------- Recycle Bin (js/recycle-bin.js) ---------- -->
+      <section class="view" data-view="recycle-bin">
+        <div class="container">
+          <div class="view-header">
+            <div class="view-header__text">
+              <h1>Recycle Bin</h1>
+            </div>
+          </div>
+          <div data-recycle-bin-root></div>
         </div>
       </section>
 
@@ -705,6 +725,7 @@
 
   <script src="js/core/utils.js"></script>
   <script src="js/core/toast.js"></script>
+  <script src="js/core/form-guide.js"></script>
   <script src="js/core/state.js"></script>
   <script src="js/core/auth.js"></script>
   <script src="js/core/theme.js"></script>
@@ -746,13 +767,17 @@
   <script src="js/traveller-picker.js"></script>
   <script src="js/upload-documents.js"></script>
   <script src="js/applicant-details.js"></script>
+  <script src="js/data/client-details-messages.js"></script>
+  <script src="js/client-details-panel.js"></script>
   <script src="js/applicant-profiles.js"></script>
+  <script src="js/recycle-bin.js"></script>
   <script src="js/forms/visa-form-people.js"></script>
   <script src="js/fill-forms.js"></script>
   <script src="js/form-check.js"></script>
   <script src="js/document-workspace.js"></script>
   <script src="js/document-queue.js"></script>
   <script src="js/dashboard.js"></script>
+  <script src="js/workflow-guide.js"></script>
   <script src="js/document-preview.js"></script>
   <script src="js/applications.js"></script>
   <script src="js/admin.js"></script>

@@ -522,7 +522,9 @@
               "label": "Post-Graduate",
               "state": "/PostGraduate"
             }
-          ]
+          ],
+          "source": "applicant.details.education",
+          "sourceFormat": "sgEducation"
         },
         {
           "key": "annualIncome",
@@ -533,7 +535,8 @@
           "boxes": true,
           "required": true,
           "help": "In Singapore dollars, digits only — e.g. 25000",
-          "width": "half"
+          "width": "half",
+          "source": "applicant.details.annualIncomeSgd"
         },
         {
           "key": "religion",
@@ -542,7 +545,8 @@
           "pdf": "religion",
           "maxLength": 25,
           "boxes": true,
-          "required": true
+          "required": true,
+          "source": "applicant.details.religion"
         },
         {
           "key": "arrivalDate",
@@ -788,7 +792,9 @@
               "label": "No",
               "state": "/No"
             }
-          ]
+          ],
+          "source": "applicant.details.residedAbroad",
+          "sourceFormat": "yesNo"
         },
         {
           "key": "abroadCountry",

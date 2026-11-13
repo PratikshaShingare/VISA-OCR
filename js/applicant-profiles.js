@@ -22,13 +22,17 @@
   var utils = global.KhannaUtils;
   var S = global.KhannaState;
   var D = global.KhannaApplicantDetails;
+  var Panel = global.KhannaClientDetailsPanel; // "Get basic details from the client" (js/client-details-panel.js)
 
   var st = {
     query: "",
     selectedId: null, // profile id being edited, or null for the list
     draft: null, // { details: {...}, contact: {...} } typed but not saved yet
     saved: false, // show "Saved" after a save until the next edit
+    fromReply: {}, // "details.religion": true — filled from the client's reply, not saved yet
   };
+
+  var TRASH_ICON = '<svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-1 13a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1L6 7"/></svg>';
 
   function root() {
     return utils.qs("[data-applicant-profiles-root]");
@@ -95,7 +99,9 @@
       '<div class="hb-row__meta ' + (line ? "" : "hb-row__meta--faint") + '">' + (line ? esc(line) : "No basic details saved yet") + "</div>" +
       "</div>" +
       '<div class="hb-row__actions"><button type="button" class="btn btn-secondary btn-sm" data-ap-open="' + esc(p.id) + '">' +
-      (line ? "Open" : "Add details") + "</button></div>" +
+      (line ? "Open" : "Add details") + "</button>" +
+      '<button type="button" class="btn btn-ghost btn-sm ap-delete" data-ap-delete="' + esc(p.id) + '" aria-label="Delete ' + esc(p.fullName || "this profile") + '">' + TRASH_ICON + "Delete</button>" +
+      "</div>" +
       "</div>"
     );
   }
@@ -115,14 +121,14 @@
       "</div>";
     if (!all.length) {
       return (
-        intro +
+        intro + (Panel ? Panel.listHtml() : "") +
         '<div class="empty-state"><h3>No profiles yet</h3>' +
         "<p>A profile is created automatically when a passport is saved.</p>" +
         '<a class="btn btn-primary btn-sm" href="#/upload-passport" data-nav-link="upload-passport">Upload Passport</a></div>'
       );
     }
     return (
-      intro + bar +
+      intro + (Panel ? Panel.listHtml() : "") + bar +
       (shown.length ? '<div class="hb-list">' + shown.map(rowHtml).join("") + "</div>" : '<p class="field-hint">Nobody matches that search.</p>')
     );
   }
@@ -148,8 +154,10 @@
         '<input id="' + id + '" type="' + (f.type || "text") + '" data-ap-field="' + f.group + "." + f.key + '" value="' + esc(value) + '"' +
         (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : "") + " />";
     }
+    var fromReply = !!st.fromReply[f.group + "." + f.key];
     return (
-      '<div class="field' + (f.wide ? " ap-wide" : "") + '"><label for="' + id + '">' + esc(f.label) + "</label>" + control +
+      '<div class="field' + (f.wide ? " ap-wide" : "") + (fromReply ? " ap-from-reply" : "") + '"><label for="' + id + '">' + esc(f.label) + "</label>" + control +
+      (fromReply ? '<span class="field-hint ap-reply-tag">From the client\'s reply — please check</span>' : "") +
       '<span class="field-hint ap-where">Used in: ' + esc(f.where) + "</span></div>"
     );
   }
@@ -201,9 +209,11 @@
     return (
       '<div class="ap-top">' +
       '<button type="button" class="btn btn-ghost btn-sm" data-ap-back>← All profiles</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm ap-delete" data-ap-delete="' + esc(profile.id) + '">' + TRASH_ICON + "Delete profile</button>" +
       "</div>" +
       '<h2 class="ap-name">' + esc(profile.fullName || "Unnamed") + ' <span class="badge ap-kind">' + esc(x.kind) + "</span></h2>" +
       '<p class="ap-intro">Edit the details below, then press <strong>Save profile</strong>. Letters and forms made after saving use the new values.</p>' +
+      (Panel ? Panel.editorHtml(profile) : "") +
       passportBlockHtml(profile) +
       groups +
       '<div class="ap-save">' +
@@ -211,6 +221,125 @@
       '<span class="ap-saved" role="status">' + (st.saved ? "Saved." : st.draft ? "Not saved yet." : "") + "</span>" +
       "</div>"
     );
+  }
+
+  /* ---- delete popup ---- */
+
+  var deleteEl = null;
+  var deleteId = null;
+
+  function closeDelete() {
+    if (!deleteEl) return;
+    deleteEl.setAttribute("hidden", "");
+    deleteId = null;
+  }
+
+  function appLabel(a) {
+    var L = global.KhannaApplicationsList;
+    return L && L.applicantLabel ? L.applicantLabel(a) : a.id;
+  }
+
+  function docCount(a) {
+    var n = 0;
+    if (a.coverLetter && a.coverLetter.generatedAt) n += 1;
+    var auth = a.authorization || {};
+    if (auth.passport && auth.passport.generatedAt) n += 1;
+    if (auth.company && auth.company.generatedAt) n += 1;
+    if (a.invitation && a.invitation.generatedAt) n += 1;
+    (a.hotels || []).forEach(function (h) { if (h.voucherGeneratedAt) n += 1; });
+    return n;
+  }
+
+  function deleteBodyHtml(impact) {
+    var apps = impact.applications;
+    var docs = apps.reduce(function (sum, a) { return sum + docCount(a); }, 0);
+    var name = impact.profile.fullName || "this applicant";
+    var comp = impact.companionApplications.length;
+    var days = S.RECYCLE_BIN_DAYS || 30;
+    return (
+      '<p class="ap-del__lead">What do you want to delete for <strong>' + esc(name) + "</strong>?</p>" +
+      '<div class="ap-del__option">' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-ap-delete-details>Delete basic details</button>' +
+      "<p>Empties the saved phone, email, occupation and other basic details of " + esc(name) + ". " +
+      "The applicant, the passport and the documents stay.</p>" +
+      "</div>" +
+      '<div class="ap-del__option">' +
+      '<button type="button" class="btn btn-danger btn-sm" data-ap-delete-all>Delete all the generated documents for this applicant</button>' +
+      "<p>Deletes " + esc(name) + " from the whole website: Applicant Profiles" +
+      (apps.length
+        ? ", and " + apps.length + " application" + (apps.length === 1 ? "" : "s") + " where they are the main applicant" +
+          (docs ? " (" + docs + " generated document" + (docs === 1 ? "" : "s") + ")" : "") +
+          " — gone from Recent Applications, Recent Passports, Recent Cover Letters and Recent Hotel Blockings"
+        : "") +
+      (comp ? ". They are also taken off " + comp + " other application" + (comp === 1 ? "" : "s") + " where they travel as a companion" : "") +
+      ".</p>" +
+      (apps.length
+        ? '<ul class="ap-del__apps">' + apps.slice(0, 6).map(function (a) { return "<li>" + esc(appLabel(a)) + " · " + esc(utils.formatDate(a.updatedAt || a.createdAt)) + "</li>"; }).join("") +
+          (apps.length > 6 ? "<li>… and " + (apps.length - 6) + " more</li>" : "") + "</ul>"
+        : "") +
+      '<p class="ap-del__bin">Everything goes to the <strong>Recycle Bin</strong> — it can be restored there for ' + days + " days, then it is deleted permanently.</p>" +
+      "</div>"
+    );
+  }
+
+  function ensureDelete() {
+    if (deleteEl) return;
+    var wrap = document.createElement("div");
+    wrap.className = "app-picker-overlay";
+    wrap.setAttribute("hidden", "");
+    wrap.setAttribute("data-ap-delete-dialog", "");
+    wrap.innerHTML =
+      '<div class="app-picker ap-del" role="dialog" aria-modal="true" aria-labelledby="apDeleteTitle">' +
+      '<div class="app-picker__header"><h3 id="apDeleteTitle">Delete applicant profile</h3>' +
+      '<button type="button" class="btn-icon" data-ap-delete-cancel aria-label="Close">' +
+      '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>' +
+      '<div data-ap-delete-body></div>' +
+      '<div class="ap-del__actions"><button type="button" class="btn btn-secondary btn-sm" data-ap-delete-cancel>Cancel</button></div>' +
+      "</div>";
+    document.body.appendChild(wrap);
+    deleteEl = wrap;
+    utils.on(wrap, "click", "[data-ap-delete-cancel]", closeDelete);
+    wrap.addEventListener("click", function (e) {
+      if (e.target === wrap) closeDelete();
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !wrap.hasAttribute("hidden")) closeDelete();
+    });
+    utils.on(wrap, "click", "[data-ap-delete-details]", function () { doDelete(false); });
+    utils.on(wrap, "click", "[data-ap-delete-all]", function () { doDelete(true); });
+  }
+
+  function openDelete(id) {
+    var impact = S.personDeletionImpact ? S.personDeletionImpact(id) : null;
+    if (!impact) return;
+    ensureDelete();
+    deleteId = id;
+    utils.qs("[data-ap-delete-body]", deleteEl).innerHTML = deleteBodyHtml(impact);
+    deleteEl.removeAttribute("hidden");
+    utils.qs("[data-ap-delete-cancel].btn", deleteEl).focus();
+  }
+
+  function doDelete(documents) {
+    var id = deleteId;
+    closeDelete();
+    if (!id) return;
+    var name = (findById(id) || { profile: {} }).profile.fullName || "The applicant";
+    var result = S.deletePersonProfile(id, { documents: documents });
+    if (!result) return;
+    st.draft = null;
+    st.saved = false;
+    st.fromReply = {};
+    if (Panel) Panel.reset();
+    // Basic details only: stay on the (now empty) profile. Everything: back to the list.
+    if (documents) st.selectedId = null;
+    render();
+    if (global.KhannaToast) {
+      global.KhannaToast.show(
+        documents
+          ? name + " moved to the Recycle Bin" + (result.applications ? ", with " + result.applications + " application" + (result.applications === 1 ? "" : "s") : "") + "."
+          : "Basic details of " + name + " deleted."
+      );
+    }
   }
 
   /* ---- render / actions ---- */
@@ -244,6 +373,7 @@
     }
     S.savePersonBasics(x.profile.id, st.draft);
     st.draft = null;
+    st.fromReply = {};
     st.saved = true;
     render();
     if (global.KhannaToast) global.KhannaToast.show("Profile saved.");
@@ -263,6 +393,8 @@
       st.selectedId = btn.getAttribute("data-ap-open");
       st.draft = null;
       st.saved = false;
+      st.fromReply = {};
+      if (Panel) Panel.reset();
       render();
       window.scrollTo(0, 0);
     });
@@ -271,6 +403,8 @@
       st.selectedId = null;
       st.draft = null;
       st.saved = false;
+      st.fromReply = {};
+      if (Panel) Panel.reset();
       render();
     });
     function onValue(e, el) {
@@ -288,6 +422,36 @@
       render();
     });
     utils.on(r, "click", "[data-ap-save]", save);
+    utils.on(r, "click", "[data-ap-delete]", function (e, btn) {
+      if (st.draft && !global.confirm("You have changes that are not saved. Continue?")) return;
+      openDelete(btn.getAttribute("data-ap-delete"));
+    });
+    if (Panel) {
+      Panel.wire(r, {
+        rerender: render,
+        profilePage: function () {
+          var x = st.selectedId ? findById(st.selectedId) : null;
+          return x ? x.profile : null;
+        },
+        openProfile: function (id) {
+          st.selectedId = id;
+          st.draft = null;
+          st.saved = false;
+          st.fromReply = {};
+          Panel.reset();
+          render();
+          window.scrollTo(0, 0);
+        },
+        // The client's answers go into this profile's fields as an unsaved change.
+        applyToProfilePage: function (values) {
+          Object.keys(values).forEach(function (path) {
+            if (!trim(values[path])) return;
+            setField(path, values[path]);
+            st.fromReply[path] = true;
+          });
+        },
+      });
+    }
   }
 
   var wired = false;
@@ -313,6 +477,8 @@
       st.selectedId = null;
       st.draft = null;
       st.saved = false;
+      st.fromReply = {};
+      if (Panel) Panel.reset();
       build();
     });
     if (location.hash.indexOf("applicant-profiles") !== -1) build();

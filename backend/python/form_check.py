@@ -94,6 +94,9 @@ def _pdf_fields(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, str], int, s
     return fields, raw_values, len(reader.pages), text_layer
 
 
+OCR_MIN_SIDE = 2000
+
+
 def _ocr_text(path: str, max_pages: int = MAX_OCR_PAGES) -> Tuple[str, int]:
     import cv2
     import numpy as np
@@ -106,6 +109,14 @@ def _ocr_text(path: str, max_pages: int = MAX_OCR_PAGES) -> Tuple[str, int]:
     texts = []
     for pil in pages[:max_pages]:
         gray = cv2.cvtColor(np.array(pil.convert("RGB")), cv2.COLOR_RGB2GRAY)
+        # Phone screenshots (a WhatsApp reply, an email) have small text that
+        # Tesseract misreads — "gmaicom", "820012345". Enlarging small images
+        # first (to about OCR_MIN_SIDE px on the long side, at most 3x) reads
+        # them much more reliably. Large scans and PDF pages are left as they are.
+        longest = max(gray.shape[:2])
+        if longest < OCR_MIN_SIDE:
+            scale = min(3.0, OCR_MIN_SIDE / float(longest))
+            gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         texts.append(provider.ocr_text(gray, config="--oem 3 --psm 3"))
     return "\n".join(t for t in texts if t), len(pages)
 

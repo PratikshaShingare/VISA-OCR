@@ -199,3 +199,54 @@
   width: 200px;
   max-width: 100%;
 }
+
+/* ---------------- Company Authorization: clearer "Who is authorising" ---------------- */
+.auth-select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.auth-select-bar__actions {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+.auth-person-remove {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.auth-person-remove:hover {
+  color: var(--color-danger);
+}
+
+.auth-removed-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.auth-subhead {
+  margin: var(--space-3) 0 var(--space-2);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.auth-subhead__hint {
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
+.auth-danger-link {
+  color: var(--color-danger);
+}

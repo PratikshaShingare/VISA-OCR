@@ -159,7 +159,7 @@ async def main():
         C.check("prefill: tagged 'please verify'", await page.locator(".vf-tag").count() > 5)
         C.check("declaration questions NOT answered automatically", await page.locator("input[name='ffr-q1Crime']:checked").count() == 0)
         ready_text = await page.inner_text("[data-ff-generate-area]")
-        C.check("generate area names what is still empty, as text", "Still empty" in ready_text and "convicted of a crime" in ready_text, ready_text[:300])
+        C.check("generate area names what is still empty, as text", "Fill these before generating" in ready_text and "convicted of a crime" in ready_text, ready_text[:300])
         C.check("no progress block / jump buttons / open-close buttons", await page.locator("[data-ff-progress], [data-ff-jump], [data-ff-expand]").count() == 0)
         C.check("all sections are shown open (no folding)", await page.locator("details[data-ff-section]").count() == 0 and await page.locator("section[data-ff-section]").count() >= 6)
         C.check("empty needed answers are outlined", await page.locator(".vf-field--empty input[name='ffr-q1Crime']").count() == 2)
@@ -176,6 +176,14 @@ async def main():
         await page.click("[data-section-copy], [data-ff-copy]")
         C.check("'Same as the hotel above' copies guarantor", await page.input_value("#ff-guarantorName") == "Sample Hotel Tokyo")
 
+        # Needed boxes still empty: Generate does not go ahead; those boxes are marked with an ⓘ.
+        await page.click("[data-ff-generate]")
+        await page.wait_for_timeout(400)
+        C.check("Generate blocked while needed boxes are empty", await page.locator("iframe.vf-preview").count() == 0
+                and await page.locator(".fg-missing").count() >= 2 and await page.locator(".fg-missing .fg-info--missing").count() >= 2)
+        await page.check("input[name='ffr-maritalStatus'][value='single']")
+        await page.fill("#ff-lengthOfStay", "7 DAYS")
+        C.check("filling a box removes its red mark", await page.locator(".fg-missing #ff-lengthOfStay").count() == 0)
         await page.click("[data-ff-generate]")
         await page.wait_for_selector("iframe.vf-preview", timeout=60000)
         C.check("PDF preview shown", await page.locator("iframe.vf-preview").count() == 1)

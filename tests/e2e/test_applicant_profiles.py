@@ -165,7 +165,7 @@ async def main():
         await page.wait_for_selector("[data-cover-field='japan:applicantEmployerOccupation']", timeout=10000)
         C.check("Cover Letter (Japan): occupation and employer filled from the profile",
                 await page.input_value("[data-cover-field='japan:applicantEmployerOccupation']") == "Software Engineer at Acme Corp")
-        C.check("Cover Letter: says where it came from", "Applicant Profiles" in await page.inner_text("[data-view='cover-letter']"))
+        C.check("Cover Letter: says where it came from (behind its ⓘ)", "Applicant Profiles" in await page.text_content("[data-view='cover-letter']"))
         await page.fill("[data-cover-field='japan:applicantEmployerOccupation']", "Typed here")
         await page.press("[data-cover-field='japan:applicantEmployerOccupation']", "Tab")
         await page.evaluate("location.hash = '#/dashboard'")

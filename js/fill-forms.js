@@ -171,6 +171,27 @@
       if (/^0\d{10}$/.test(digits)) digits = digits.slice(1);
       return digits.replace(/^\+/, "");
     }
+    // Answers from the client's details message (Applicant Profiles):
+    // "No" / "Yes — Dubai 2020-2022" -> the yes / no tick.
+    if (format === "yesNo") return /^no\b/i.test(v) ? "no" : /^yes\b/i.test(v) ? "yes" : "";
+    // Japan "previous stays": nothing for "No" (the form's NOT APPLICABLE stays), the dates after "Yes —".
+    if (format === "previousStays") {
+      if (!v || /^no\b/i.test(v)) return "";
+      return v.replace(/^yes\b[\s—–\-,:]*/i, "") || "YES";
+    }
+    // Singapore Form 14A: "B.Com", "MBA", "12th" -> the qualification tick.
+    if (format === "sgEducation") {
+      var e = v.toLowerCase();
+      if (!e) return "";
+      if (/ph\.?\s?d|doctorate|post\s?-?\s?grad|master|\bm\.?\s?(a|sc|com|tech|e|ed|phil|s)\b|\bmba\b|\bmca\b|\bpg\b|\bmd\b/.test(e)) return "postGraduate";
+      if (/diploma|polytechnic|\biti\b/.test(e)) return "diploma";
+      if (/grad|bachelor|degree|\bb\.?\s?(a|sc|com|tech|e|ba|ca|arch|pharm|ed|ds)\b|\bbe\b|\bmbbs\b|\bllb\b|universit/.test(e)) return "university";
+      if (/12th|\bhsc\b|higher secondary|pre.?universit|\bpuc\b|intermediate|junior college/.test(e)) return "preUniversity";
+      if (/10th|\bssc\b|secondary|matric|high school/.test(e)) return "secondary";
+      if (/primary/.test(e)) return "primary";
+      if (/no formal|^none$|illiterate/.test(e)) return "none";
+      return "";
+    }
     if (format === "sgDocumentType") return /^P/i.test(v) ? "international" : /^D/i.test(v) ? "diplomatic" : /^[SO]/i.test(v) ? "official" : "";
     if (format === "issuingAuthority") {
       if (v) return v;
@@ -718,7 +739,7 @@
   /** Who the form is being filled for, and what is still missing from their saved details. */
   function personSummaryHtml() {
     if (!st.person) {
-      return '<p class="field-hint">Pick where the applicant\'s details come from. Name, passport details, date of birth and the residential address are read from the <strong>passport</strong>; ' +
+      return '<p class="field-hint fg-explain">Pick where the applicant\'s details come from. Name, passport details, date of birth and the residential address are read from the <strong>passport</strong>; ' +
         "occupation, employer, phone and marital status come from the <strong>Applicant Profile</strong>.</p>";
     }
     var Details = global.KhannaApplicantDetails;
@@ -815,7 +836,7 @@
     var bad = invalidDates();
     var parts = [];
     if (bad.length) parts.push('<p class="ud-warn">Not a valid DD-MM-YYYY date: ' + bad.map(esc).join(", ") + ".</p>");
-    if (missing.length) parts.push('<p class="field-hint">Still empty (will be blank on the printed form): ' + missing.map(esc).join("; ") + ".</p>");
+    if (missing.length) parts.push('<p class="ud-warn">Fill these before generating (marked *): ' + missing.map(esc).join("; ") + ".</p>");
     if (st.error) parts.push('<p class="ud-warn">' + esc(st.error) + "</p>");
     var actions =
       '<div class="vf-row-actions"><button type="button" class="btn btn-primary" data-ff-generate' + (bad.length || st.generating ? " disabled" : "") + ">" +
@@ -827,7 +848,7 @@
         st.generated.overflow.map(esc).join("; ") + ".</p>");
     }
     var preview = st.generated
-      ? '<p class="field-hint">Long text continues on the next line of its box, or is printed in smaller letters so it stays inside the form. The PDF stays fillable — any field can still be corrected in Adobe Reader before printing. Check every page before submitting.</p>' +
+      ? '<p class="field-hint fg-explain">Long text continues on the next line of its box, or is printed in smaller letters so it stays inside the form. The PDF stays fillable — any field can still be corrected in Adobe Reader before printing. Check every page before submitting.</p>' +
         '<iframe class="vf-preview" title="Filled form preview" src="' + st.generated.url + '"></iframe>'
       : "";
     return parts.join("") + actions + preview;

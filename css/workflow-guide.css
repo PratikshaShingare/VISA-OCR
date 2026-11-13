@@ -1,0 +1,281 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — workflow guide (js/workflow-guide.js)
+   Dashboard "How it works" steps + the slim "Step N of 6" line under each
+   page title. Brand tokens only; flat, light borders.
+   ========================================================================== */
+
+/* ---------------- Dashboard: How it works ---------------- */
+.dashboard-guide {
+  margin-top: var(--space-2);
+}
+
+.wf-guide {
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 8px);
+}
+
+.wf-guide--hidden {
+  padding: 0;
+  background: none;
+  border: none;
+}
+
+.wf-show {
+  gap: var(--space-1);
+}
+
+.wf-guide__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.wf-guide__title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.wf-guide__sub {
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.wf-steps {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: none;
+}
+
+.wf-step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+  border-top: 3px solid var(--color-primary);
+  background: var(--color-primary-soft);
+  border-radius: 0 0 var(--radius-sm, 6px) var(--radius-sm, 6px);
+}
+
+.wf-step__top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.wf-step__no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.wf-step__title {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.25;
+}
+
+.wf-step__text {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.wf-step__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-2);
+  margin-top: auto;
+}
+
+.wf-step__link {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.wf-step__link:hover {
+  text-decoration: underline;
+}
+
+.wf-step__link:not(:last-child)::after {
+  content: "·";
+  margin-left: var(--space-2);
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+/* An arrow between steps on the one-row desktop layout. */
+@media (min-width: 1200px) {
+  .wf-step:not(:last-child)::after {
+    content: "›";
+    position: absolute;
+    top: 50%;
+    right: calc(-1 * var(--space-3) + 1px);
+    transform: translateY(-50%);
+    font-size: 1rem;
+    color: var(--color-text-faint, var(--color-text-muted));
+  }
+}
+
+@media (max-width: 1199px) {
+  .wf-steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  .wf-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Phones: the eight document cards stay on the first screen
+   (tests/e2e/test_dashboard.py); Recent Applications next, then the guide. */
+@media (max-width: 575px) {
+  [data-view="dashboard"] .container {
+    display: flex;
+    flex-direction: column;
+  }
+
+  [data-view="dashboard"] .dashboard-recent {
+    order: 2;
+  }
+
+  [data-view="dashboard"] .dashboard-guide {
+    order: 3;
+    margin-top: var(--space-5);
+  }
+
+  .wf-guide {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .wf-steps {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+}
+
+/* ---------------- "Step N of 6" under a page title ---------------- */
+.wf-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  margin: calc(-1 * var(--space-4)) 0 var(--space-5);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.wf-strip__here {
+  display: none;
+}
+
+.wf-strip__steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wf-strip__step a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.wf-strip__step a:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.wf-strip__no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-border);
+  color: var(--color-text);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.wf-strip__step.is-before .wf-strip__no {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.wf-strip__step.is-current a {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.wf-strip__step.is-current .wf-strip__no {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.wf-strip__next {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--color-primary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.wf-strip__next:hover {
+  text-decoration: underline;
+}
+
+/* Tablets and phones: one short line — "Step 3 of 6: Hotel · Next: Letters →". */
+@media (max-width: 1023px) {
+  .wf-strip {
+    margin-top: calc(-1 * var(--space-3));
+  }
+
+  .wf-strip__steps {
+    display: none;
+  }
+
+  .wf-strip__here {
+    display: inline;
+  }
+
+  .wf-strip__here strong {
+    color: var(--color-text);
+  }
+}

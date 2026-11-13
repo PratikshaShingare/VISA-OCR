@@ -208,7 +208,7 @@
     utils.qs("[data-cl-delete-text]", modalEl).textContent =
       "Are you sure you want to delete the cover letter for " + labelOf(app) + "? " +
       (only
-        ? "This removes it from this browser and cannot be undone."
+        ? "It goes to the Recycle Bin, where it can be restored for 30 days."
         : "This removes the cover letter details from this browser and cannot be undone. The application's other documents are kept.");
     modalEl.hidden = false;
     var cancel = modalEl.querySelector("button[data-cl-delete-cancel].btn-secondary");

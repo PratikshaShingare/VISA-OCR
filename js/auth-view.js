@@ -256,6 +256,7 @@
     "fill-forms",
     "form-check",
     "applicant-profiles",
+    "recycle-bin",
   ];
 
   function initRouteGuards() {

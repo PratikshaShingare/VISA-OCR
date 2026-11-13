@@ -80,7 +80,7 @@
         { "key": "hotelName", "label": "Hotel / person you will stay with — Name", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[12].emp_name[1]", "source": "hotel.hotelName", "required": true },
         { "key": "hotelTel", "label": "Hotel / person — Tel.", "type": "text", "pdf": "topmostSubform[0].Page1[0].#area[12].emp_tel[1]", "maxLength": 15, "source": "hotel.phone", "required": true },
         { "key": "hotelAddress", "label": "Hotel / person — Address", "type": "textarea", "pdf": "topmostSubform[0].Page1[0].emp_adr[1]", "source": "hotel.fullAddress", "required": true },
-        { "key": "previousStays", "label": "Dates and duration of previous stays in Japan", "type": "text", "pdf": "topmostSubform[0].Page1[0].T64[0]", "maxLength": 50, "default": "NOT APPLICABLE" }
+        { "key": "previousStays", "label": "Dates and duration of previous stays in Japan", "type": "text", "pdf": "topmostSubform[0].Page1[0].T64[0]", "maxLength": 50, "default": "NOT APPLICABLE", "source": "applicant.details.visitedJapan", "sourceFormat": "previousStays" }
       ]
     },
     {

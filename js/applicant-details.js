@@ -23,8 +23,8 @@
       id: "contact",
       title: "Contact",
       fields: [
-        { group: "contact", key: "phone", label: "Phone number", type: "tel", where: "Cover Letter, Passport Authorization Letter, visa form (mobile no.)" },
-        { group: "contact", key: "email", label: "Email address", type: "email", where: "Cover Letter, Passport Authorization Letter" },
+        { group: "contact", key: "phone", label: "Phone number", type: "tel", where: "Cover Letter, Passport Authorization Letter, Japan and Singapore visa forms" },
+        { group: "contact", key: "email", label: "Email address", type: "email", where: "Cover Letter, Passport Authorization Letter, Singapore visa form" },
       ],
     },
     {
@@ -32,7 +32,7 @@
       title: "Work and education",
       fields: [
         { group: "details", key: "occupation", label: "Occupation / job title", placeholder: "e.g. Software Engineer", where: "Cover Letter, Invitation Letter, visa form" },
-        { group: "details", key: "education", label: "Education", placeholder: "e.g. B.Com, MBA", where: "kept on the profile" },
+        { group: "details", key: "education", label: "Highest qualification", placeholder: "e.g. B.Com, MBA", where: "Singapore visa form" },
         { group: "details", key: "employerName", label: "Employer / business name", where: "Cover Letter, visa form" },
         { group: "details", key: "employerAddress", label: "Employer / business address", wide: true, where: "visa form" },
         { group: "details", key: "employerPhone", label: "Employer / business phone", type: "tel", where: "visa form" },
@@ -52,6 +52,25 @@
       fields: [
         { group: "details", key: "monthlyIncome", label: "Monthly income", placeholder: "e.g. INR 85,000", where: "kept on the profile" },
         { group: "details", key: "annualIncome", label: "Annual income", placeholder: "e.g. INR 10,20,000", where: "kept on the profile" },
+        { group: "details", key: "annualIncomeSgd", label: "Annual income in Singapore dollars", placeholder: "e.g. 25,000", where: "Singapore visa form" },
+      ],
+    },
+    {
+      id: "visa",
+      title: "Visa form questions",
+      fields: [
+        { group: "details", key: "religion", label: "Religion", where: "Singapore visa form" },
+        { group: "details", key: "residedAbroad", label: "Lived 1 year or more in another country (last 5 years)?", placeholder: "No — or Yes, with the country", wide: true, where: "Singapore visa form" },
+        { group: "details", key: "visitedJapan", label: "Visited Japan before?", placeholder: "No — or Yes, with dates and duration", wide: true, where: "Japan visa form (previous stays)" },
+      ],
+    },
+    {
+      id: "sponsor",
+      title: "Sponsor",
+      fields: [
+        { group: "details", key: "sponsorPhone", label: "Sponsor phone number", type: "tel", where: "kept on the profile" },
+        { group: "details", key: "sponsorEmail", label: "Sponsor email address", type: "email", where: "kept on the profile" },
+        { group: "details", key: "sponsorOccupation", label: "Sponsor occupation", wide: true, where: "kept on the profile" },
       ],
     },
     {

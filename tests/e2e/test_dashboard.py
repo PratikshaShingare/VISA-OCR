@@ -256,8 +256,10 @@ async def desktop_pass(browser, w):
         checks.check(f"[{w}] Confirm deletes exactly the chosen application", len(remaining) == 4 and first_id not in remaining, f"{first_id} {remaining}")
         total = await page.inner_text(".stat-card__value")
         checks.check(f"[{w}] Total Applications count updates to 4", total.strip() == "4", total)
-        stored = await page.evaluate("JSON.stringify(Object.keys(localStorage).map(function (k) { return localStorage.getItem(k) }))")
-        checks.check(f"[{w}] deletion is persisted (gone from localStorage)", first_id not in stored)
+        stored = await page.evaluate("localStorage.getItem('khanna_applications_v1') || ''")
+        checks.check(f"[{w}] deletion is persisted (gone from the saved applications)", first_id not in stored)
+        binned = await page.evaluate("localStorage.getItem('khanna_recycle_bin_v1') || ''")
+        checks.check(f"[{w}] deleted application kept in the Recycle Bin for 30 days", first_id in binned)
         names = await page.locator("[data-view='dashboard'] .dashboard-recent-row__name").all_inner_texts()
         checks.check(f"[{w}] deleted applicant no longer listed in Recent Applications", first_name not in names, str(names))
 

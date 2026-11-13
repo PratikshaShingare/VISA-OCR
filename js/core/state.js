@@ -110,6 +110,15 @@
       emergencyName: "",
       emergencyRelation: "",
       emergencyPhone: "",
+      // Asked by the visa-form message sent to the client
+      // (js/data/client-details-messages.js): Singapore Form 14A and Japan.
+      religion: "",
+      annualIncomeSgd: "",
+      residedAbroad: "",
+      visitedJapan: "",
+      sponsorPhone: "",
+      sponsorEmail: "",
+      sponsorOccupation: "",
     };
   }
 
@@ -495,6 +504,12 @@
     return "nd:" + full.toLowerCase() + "|" + ((person && person.dob) || "");
   }
 
+  // The words of a person's name, sorted — "SHARMA ANITA" = "Anita Sharma".
+  function nameOnlyKey(person) {
+    var words = String((person && person.fullName) || "").toUpperCase().split(/[^A-Z]+/).filter(Boolean);
+    return words.length ? words.sort().join(" ") : null;
+  }
+
   function personHasData(person) {
     if (!person) return false;
     var passportNo = person.passport && person.passport.current && person.passport.current.number;
@@ -535,9 +550,19 @@
     function findByPerson(person) {
       var key = profileDedupeKey(person);
       if (!key) return null;
+      var found = list.find(function (p) {
+        return profileDedupeKey(p) === key;
+      });
+      if (found) return found;
+      // A profile made from the client's details message before the passport
+      // came (no passport number, no date of birth): the passport saved later
+      // for the same name joins it instead of making a second profile.
+      var name = nameOnlyKey(person);
+      if (!name || key.indexOf("pp:") !== 0) return null;
       return (
         list.find(function (p) {
-          return profileDedupeKey(p) === key;
+          var cur = p.passport && p.passport.current;
+          return !(cur && String(cur.number || "").trim()) && !String(p.dob || "").trim() && nameOnlyKey(p) === name;
         }) || null
       );
     }
@@ -620,7 +645,16 @@
       return list.length !== before;
     }
 
-    return { getAll: getAll, get: get, findByPerson: findByPerson, search: search, upsert: upsert, patch: patch, remove: remove };
+    // Puts a profile back exactly as it was (Recycle Bin restore).
+    function restore(profile) {
+      if (!profile || !profile.id || get(profile.id)) return null;
+      list.push(profile);
+      persistStore();
+      notify();
+      return profile;
+    }
+
+    return { getAll: getAll, get: get, findByPerson: findByPerson, search: search, upsert: upsert, patch: patch, remove: remove, restore: restore };
   }
 
   var applicantProfiles = makeProfileStore("applicant", APPLICANT_PROFILES_KEY);
@@ -728,6 +762,200 @@
       if (Object.keys(patch).length) updateApplication(a.id, patch);
     });
     return applicantProfiles.get(profileId) || travellerProfiles.get(profileId);
+  }
+
+  /**
+   * What deleting one saved person would touch (Applicant Profiles' Delete
+   * popup): the applications where they are the MAIN applicant (with how
+   * many generated documents) and those that only list them as a companion.
+   * "Same person" = profileDedupeKey(): passport number, or name + DOB.
+   */
+  function personDeletionImpact(profileId) {
+    var source = applicantProfiles.get(profileId) || travellerProfiles.get(profileId);
+    if (!source) return null;
+    var key = profileDedupeKey(source);
+    function same(person) {
+      return !!key && profileDedupeKey(person) === key;
+    }
+    var own = [];
+    var companion = [];
+    applications.forEach(function (a) {
+      if (a.applicantId === profileId || same(a.applicant)) own.push(a);
+      else if ((a.travellers || []).some(function (t) { return t.profileId === profileId || same(t); })) companion.push(a);
+    });
+    return { profile: source, key: key, applications: own, companionApplications: companion };
+  }
+
+  /**
+   * Applicant Profiles' Delete popup.
+   *   opts.documents = false  "Delete basic details": empties the saved basic
+   *                           details (phone, email, occupation, …) of this
+   *                           person everywhere. The person, the passport and
+   *                           the documents stay.
+   *   opts.documents = true   Deletes the applicant from the whole project: every
+   *                           copy of the profile, every application where they
+   *                           are the main applicant (so they leave Recent
+   *                           Applications, Recent Passports, Recent Cover
+   *                           Letters, …), and their entry as a travelling
+   *                           companion on other applications. Everything goes
+   *                           to the Recycle Bin as ONE entry, so it can be
+   *                           restored for 30 days (see the Recycle Bin below).
+   * Returns { profiles, applications, companionApplications } (counts).
+   */
+  function deletePersonProfile(profileId, opts) {
+    var impact = personDeletionImpact(profileId);
+    if (!impact) return null;
+    var key = impact.key;
+    function same(person) {
+      return !!key && profileDedupeKey(person) === key;
+    }
+    if (!(opts && opts.documents)) {
+      var blank = { details: emptyDetails(), contact: { phone: "", email: "" } };
+      savePersonBasics(profileId, blank);
+      return { profiles: 0, applications: 0, companionApplications: 0, basicsCleared: true };
+    }
+    var profiles = [];
+    [applicantProfiles, travellerProfiles].forEach(function (store) {
+      store.getAll().forEach(function (p) {
+        if (p.id === profileId || same(p)) {
+          profiles.push(JSON.parse(JSON.stringify(p)));
+          store.remove(p.id);
+        }
+      });
+    });
+    var ownIds = impact.applications.map(function (a) { return a.id; });
+    var removedApps = applications.filter(function (a) { return ownIds.indexOf(a.id) !== -1; });
+    applications = applications.filter(function (a) { return ownIds.indexOf(a.id) === -1; });
+    if (ownIds.indexOf(activeApplicationId) !== -1) activeApplicationId = null;
+    var companions = [];
+    applications = applications.map(function (a) {
+      var list = a.travellers || [];
+      var keep = [];
+      list.forEach(function (t, index) {
+        if (t.profileId === profileId || same(t)) companions.push({ appId: a.id, index: index, traveller: t });
+        else keep.push(t);
+      });
+      return keep.length === list.length ? a : Object.assign({}, a, { travellers: keep, updatedAt: nowIso() });
+    });
+    binAdd({
+      kind: "applicant",
+      label: impact.profile.fullName || "Unnamed applicant",
+      passportNumber: (impact.profile.passport && impact.profile.passport.current && impact.profile.passport.current.number) || "",
+      applications: removedApps,
+      profiles: profiles,
+      companions: companions,
+    });
+    persist();
+    notify();
+    return { profiles: profiles.length, applications: removedApps.length, companionApplications: companions.length };
+  }
+
+  /* ---------------------------------------------------------------------
+   * Recycle Bin. A deleted application (or a deleted applicant with all their
+   * applications) is kept here for BIN_DAYS days, then removed for good.
+   * Staff can restore an entry, or delete one / several / all of them
+   * permanently straight away (js/recycle-bin.js). Stored in this browser
+   * like the applications themselves. Passport pictures saved on this
+   * computer are only removed when an entry is deleted permanently.
+   * ------------------------------------------------------------------- */
+
+  var BIN_KEY = "khanna_recycle_bin_v1";
+  var BIN_DAYS = 30;
+  var bin = [];
+
+  function persistBin() {
+    storage.set(BIN_KEY, bin);
+  }
+
+  function binAdd(entry) {
+    bin.unshift(Object.assign({ id: utils.generateId("BIN"), deletedAt: nowIso() }, entry));
+    persistBin();
+  }
+
+  function binExpiresAt(entry) {
+    return new Date(new Date(entry.deletedAt).getTime() + BIN_DAYS * 86400000).toISOString();
+  }
+
+  function getRecycleBin() {
+    return bin.slice().sort(function (a, b) { return a.deletedAt < b.deletedAt ? 1 : a.deletedAt > b.deletedAt ? -1 : 0; });
+  }
+
+  function imageRefsOf(entry) {
+    var refs = [];
+    function add(p) {
+      if (p && p.passport && p.passport.imageRef && refs.indexOf(p.passport.imageRef) === -1) refs.push(p.passport.imageRef);
+    }
+    (entry.applications || []).forEach(function (a) {
+      add(a.applicant);
+      (a.travellers || []).forEach(add);
+    });
+    (entry.profiles || []).forEach(add);
+    (entry.companions || []).forEach(function (c) { add(c.traveller); });
+    return refs;
+  }
+
+  // Passport pictures of entries deleted for good — unless something still kept uses the same picture.
+  function removeImagesOf(entries) {
+    var images = global.KhannaPassportImageStore;
+    if (!images || !images.remove) return;
+    var inUse = {};
+    bin.forEach(function (e) { imageRefsOf(e).forEach(function (r) { inUse[r] = true; }); });
+    imageRefsOf({ applications: applications, profiles: applicantProfiles.getAll().concat(travellerProfiles.getAll()) }).forEach(function (r) { inUse[r] = true; });
+    entries.forEach(function (e) {
+      imageRefsOf(e).forEach(function (r) {
+        if (!inUse[r]) images.remove(r);
+      });
+    });
+  }
+
+  /** Deletes the given bin entries for good. Returns how many. */
+  function deleteFromBinPermanently(ids) {
+    var gone = bin.filter(function (e) { return ids.indexOf(e.id) !== -1; });
+    if (!gone.length) return 0;
+    bin = bin.filter(function (e) { return ids.indexOf(e.id) === -1; });
+    persistBin();
+    removeImagesOf(gone);
+    notify();
+    return gone.length;
+  }
+
+  /** Puts the given bin entries back where they were. Returns how many. */
+  function restoreFromBin(ids) {
+    var back = bin.filter(function (e) { return ids.indexOf(e.id) !== -1; });
+    if (!back.length) return 0;
+    back.forEach(function (e) {
+      (e.applications || []).forEach(function (a) {
+        if (!getApplication(a.id)) applications.push(a);
+      });
+      (e.profiles || []).forEach(function (p) {
+        var store = p.kind === "traveller" ? travellerProfiles : applicantProfiles;
+        store.restore(p);
+      });
+      (e.companions || []).slice().sort(function (x, y) { return x.index - y.index; }).forEach(function (c) {
+        var app = getApplication(c.appId);
+        if (!app) return;
+        var list = (app.travellers || []).slice();
+        if (list.some(function (t) { return t.id === c.traveller.id; })) return;
+        list.splice(Math.min(c.index, list.length), 0, c.traveller);
+        applications = applications.map(function (a) { return a.id === app.id ? Object.assign({}, a, { travellers: list }) : a; });
+      });
+    });
+    bin = bin.filter(function (e) { return ids.indexOf(e.id) === -1; });
+    persistBin();
+    persist();
+    notify();
+    return back.length;
+  }
+
+  /** Removes entries older than BIN_DAYS days (runs when the app loads). */
+  function purgeExpiredBin() {
+    var now = Date.now();
+    var expired = bin.filter(function (e) { return new Date(binExpiresAt(e)).getTime() <= now; });
+    if (!expired.length) return;
+    bin = bin.filter(function (e) { return expired.indexOf(e) === -1; });
+    persistBin();
+    // Pictures are removed once the page (and the picture store) has loaded.
+    setTimeout(function () { removeImagesOf(expired); }, 0);
   }
 
   // Same idea, for one traveller entry within an application's own
@@ -839,6 +1067,9 @@
     activeApplicationId = storage.get(ACTIVE_KEY, null);
     migrateApplicantAndTravellerProfiles();
     pruneBlankApplications(activeApplicationId);
+    bin = storage.get(BIN_KEY, []);
+    if (!Array.isArray(bin)) bin = [];
+    purgeExpiredBin();
   }
 
   function getApplications() {
@@ -946,15 +1177,29 @@
     return false;
   }
 
-  function deleteApplication(id) {
-    var before = applications.length;
+  // Deleting an application moves it to the Recycle Bin (30 days), unless it
+  // is an empty draft or opts.permanent is set (e.g. "Discard" of a draft).
+  function deleteApplication(id, opts) {
+    var app = getApplication(id);
+    if (!app) return false;
     applications = applications.filter(function (a) {
       return a.id !== id;
     });
     if (activeApplicationId === id) activeApplicationId = null;
+    if (!(opts && opts.permanent) && !isBlankApplication(app)) {
+      var L = global.KhannaApplicationsList;
+      binAdd({
+        kind: "application",
+        label: (L && L.applicantLabel ? L.applicantLabel(app) : "") || (app.applicant && app.applicant.fullName) || "Untitled application",
+        passportNumber: (app.applicant && app.applicant.passport && app.applicant.passport.current && app.applicant.passport.current.number) || "",
+        applications: [app],
+        profiles: [],
+        companions: [],
+      });
+    }
     persist();
     notify();
-    return applications.length !== before;
+    return true;
   }
 
   /* ---------------------------------------------------------------------
@@ -1200,6 +1445,14 @@
     createEmptyPerson: emptyPerson,
     createEmptyDetails: emptyDetails,
     savePersonBasics: savePersonBasics,
+    personDeletionImpact: personDeletionImpact,
+    deletePersonProfile: deletePersonProfile,
+    // Recycle Bin (js/recycle-bin.js)
+    RECYCLE_BIN_DAYS: BIN_DAYS,
+    getRecycleBin: getRecycleBin,
+    recycleBinExpiresAt: binExpiresAt,
+    restoreFromBin: restoreFromBin,
+    deleteFromBinPermanently: deleteFromBinPermanently,
     // a pristine Application record — js/applications.js compares real ones
     // against it to tell "only hotel blocking was ever filled in" apart.
     createEmptyApplication: createEmptyApplication,

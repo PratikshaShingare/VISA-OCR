@@ -1,0 +1,87 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — ⓘ help texts and needed fields
+   (js/core/form-guide.js). Brand tokens only.
+   ========================================================================== */
+
+/* A help text put behind its ⓘ: hidden until the ⓘ is pressed. */
+.fg-tip {
+  display: none !important;
+}
+
+.fg-tip.fg-tip--open {
+  display: block !important;
+  margin: 4px 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--color-primary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--color-primary-soft);
+  color: var(--color-text);
+  font-size: 0.82rem;
+  font-weight: 400;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.fg-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--color-text-muted);
+  vertical-align: middle;
+  cursor: pointer;
+  flex: none;
+}
+
+.fg-info svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.fg-info:hover,
+.fg-info[aria-expanded="true"] {
+  color: var(--color-primary);
+}
+
+.fg-info:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* A needed field left empty when Generate / Save was pressed. */
+.fg-info--missing {
+  color: var(--color-danger);
+}
+
+.fg-info--missing:hover,
+.fg-info--missing[aria-expanded="true"] {
+  color: var(--color-danger);
+}
+
+.fg-missing input,
+.fg-missing select,
+.fg-missing textarea {
+  border-color: var(--color-danger) !important;
+  box-shadow: 0 0 0 1px var(--color-danger);
+}
+
+.fg-missing .fg-tip--open.fg-need {
+  border-left-color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+.fg-missing > label,
+.fg-missing > .vf-label {
+  color: var(--color-danger);
+}
