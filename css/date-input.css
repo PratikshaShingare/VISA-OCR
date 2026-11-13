@@ -1,0 +1,67 @@
+/* ==========================================================================
+   Khanna Travels & Holidays — DD/MM/YYYY date boxes (js/core/date-input.js)
+   The text box takes the place (and the look) of the browser's date box.
+   ========================================================================== */
+
+.ddmm {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+.ddmm .ddmm__text {
+  width: 100%;
+  padding-right: 40px;
+}
+
+.ddmm .ddmm__text.is-invalid {
+  border-color: var(--color-danger);
+  box-shadow: 0 0 0 1px var(--color-danger);
+}
+
+.ddmm__cal {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text-muted);
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.ddmm__cal:hover {
+  color: var(--color-primary);
+}
+
+.ddmm__cal svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+/* The browser's own date box: still in the page (it holds the date and opens
+   the calendar), but not seen — placed under the calendar button. */
+.ddmm .ddmm__native {
+  position: absolute;
+  right: 6px;
+  bottom: 0;
+  width: 28px !important;
+  min-width: 0 !important;
+  height: 1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+}

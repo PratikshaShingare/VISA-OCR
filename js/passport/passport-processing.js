@@ -498,7 +498,7 @@
 
       var badDates = reviewForm.invalidDates(r);
       if (badDates.length) {
-        var dateMessage = "Enter dates as DD-MM-YYYY (check: " + badDates.join(", ") + ").";
+        var dateMessage = "Enter dates as DD/MM/YYYY (check: " + badDates.join(", ") + ").";
         setStatus(r, dateMessage);
         if (global.KhannaToast) global.KhannaToast.show(dateMessage, { type: "error" });
         return false;

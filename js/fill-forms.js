@@ -634,7 +634,7 @@
         (field.lockedTo ? '<div class="vf-row-actions"><span class="vf-lock-note">Typed by hand — not from the passport.</span><button type="button" class="btn btn-ghost btn-sm" data-ff-lock="' + field.key + '">Use the passport address</button></div>' : "");
     } else if (field.type === "date") {
       var bad = value && !reviewForm.parseDate(value);
-      control = '<input id="' + id + '" type="text" inputmode="numeric" placeholder="DD-MM-YYYY" maxlength="10" data-ff-key="' + field.key + '" data-date="1" value="' + esc(value) + '" aria-invalid="' + (bad ? "true" : "false") + '" />';
+      control = '<input id="' + id + '" type="text" inputmode="numeric" placeholder="DD/MM/YYYY" maxlength="10" data-ff-key="' + field.key + '" data-date="1" value="' + esc(value) + '" aria-invalid="' + (bad ? "true" : "false") + '" />';
     } else {
       control = '<input id="' + id + '" type="text" data-ff-key="' + field.key + '" value="' + esc(value) + '"' + max + " />";
     }
@@ -835,7 +835,7 @@
     var missing = missingRequired();
     var bad = invalidDates();
     var parts = [];
-    if (bad.length) parts.push('<p class="ud-warn">Not a valid DD-MM-YYYY date: ' + bad.map(esc).join(", ") + ".</p>");
+    if (bad.length) parts.push('<p class="ud-warn">Not a valid DD/MM/YYYY date: ' + bad.map(esc).join(", ") + ".</p>");
     if (missing.length) parts.push('<p class="ud-warn">Fill these before generating (marked *): ' + missing.map(esc).join("; ") + ".</p>");
     if (st.error) parts.push('<p class="ud-warn">' + esc(st.error) + "</p>");
     var actions =
@@ -1072,6 +1072,11 @@
     }
     utils.on(r, "input", "[data-ff-key]", onValue);
     utils.on(r, "change", "[data-ff-key]", function (e, input) {
+      // A typed date is shown as DD/MM/YYYY once the box is left ("14-05-1980" -> "14/05/1980").
+      if (input.hasAttribute("data-date")) {
+        var parsed = reviewForm.parseDate(input.value);
+        if (parsed && parsed.display !== input.value) input.value = parsed.display;
+      }
       onValue(e, input);
       if (input.type === "radio") render();
     });

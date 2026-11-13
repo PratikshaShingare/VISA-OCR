@@ -256,7 +256,7 @@
           "</select>";
       } else {
         input = '<input id="' + id + '" type="text" value="' + esc(value) + '" data-fc-detail="' + f.key + '" data-id="' + item.id + '"' +
-          (f.date ? ' placeholder="DD-MM-YYYY" inputmode="numeric" data-date="1"' : "") + " />";
+          (f.date ? ' placeholder="DD/MM/YYYY" inputmode="numeric" data-date="1"' : "") + " />";
       }
       return '<div class="field"><label for="' + id + '">' + esc(f.label) + "</label>" + input + "</div>";
     }).join("");
@@ -340,7 +340,7 @@
     if (!passports.length && !st.supporting.some(function (d) { return d.status === "done"; })) {
       return { ok: false, text: "Step 1: upload the passport (or choose a saved application) to compare the form with." };
     }
-    if (badDates.length) return { ok: false, text: "A passport date is not a valid DD-MM-YYYY date — correct it first." };
+    if (badDates.length) return { ok: false, text: "A passport date is not a valid DD/MM/YYYY date — correct it first." };
     if (!passports.length) return { ok: true, text: "No passport given: forms are only checked against the supporting documents." };
     return { ok: true, text: st.stale ? "Something changed since the last check — check again." : "" };
   }

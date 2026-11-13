@@ -82,7 +82,7 @@ async def main():
         await page.click(f"[data-action='pick-application'][data-app-id='{app_id}']")
         await page.wait_for_timeout(300)
         C.check("name: surname then given names", await page.input_value("#ff-fullName") == "SHARMA ANITA RAJ")
-        C.check("date of birth", await page.input_value("#ff-dob") == "14-05-1980")
+        C.check("date of birth", await page.input_value("#ff-dob") == "14/05/1980")
         C.check("place of birth 'INDIA PUNE'", await page.input_value("#ff-birthCountryPlace") == "INDIA PUNE")
         C.check("state of birth", await page.input_value("#ff-birthState") == "MAHARASHTRA")
         C.check("race INDIAN", await page.input_value("#ff-race") == "INDIAN")
@@ -105,7 +105,7 @@ async def main():
 
         await page.set_input_files("[data-ff-flight]", flight)
         await page.wait_for_selector(".vf-legs", timeout=60000)
-        C.check("flight: arrival = landing day in Singapore", await page.input_value("#ff-arrivalDate") == "04-12-2026")
+        C.check("flight: arrival = landing day in Singapore", await page.input_value("#ff-arrivalDate") == "04/12/2026")
         C.check("flight: less than 30 days ticked", await page.is_checked("input[name='ffr-stayLength'][value='less30']"))
 
         C.check("spouse questions hidden until Married is ticked", await page.locator("input[name='ffr-spouseStatus']").count() == 0)

@@ -147,7 +147,7 @@ async def main():
         await page.wait_for_timeout(300)
         C.check("prefill: surname", await page.input_value("#ff-surname") == "SHARMA")
         C.check("prefill: given names", await page.input_value("#ff-givenNames") == "ANITA RAJ")
-        C.check("prefill: DOB as DD-MM-YYYY", await page.input_value("#ff-dob") == "14-05-1980")
+        C.check("prefill: DOB as DD/MM/YYYY", await page.input_value("#ff-dob") == "14/05/1980")
         C.check("prefill: birth city / state split", await page.input_value("#ff-birthCity") == "PUNE" and await page.input_value("#ff-birthState") == "MAHARASHTRA")
         C.check("prefill: sex radio Female", await page.is_checked("input[name='ffr-sex'][value='F']"))
         C.check("prefill: passport type Ordinary from 'P'", await page.is_checked("input[name='ffr-passportType'][value='ordinary']"))
@@ -234,7 +234,7 @@ async def main():
 
         await page.set_input_files("[data-ff-flight]", FLIGHT_PDF)
         await page.wait_for_selector(".vf-legs", timeout=60000)
-        C.check("flight: arrival = landing date in Japan", await page.input_value("#ff-arrivalDate") == "24-12-2026")
+        C.check("flight: arrival = landing date in Japan", await page.input_value("#ff-arrivalDate") == "24/12/2026")
         C.check("flight: length of stay", await page.input_value("#ff-lengthOfStay") == "10 DAYS")
         C.check("flight: port of entry", await page.input_value("#ff-portOfEntry") == "TOKYO")
         C.check("flight: airline", await page.input_value("#ff-airline") == "ALL NIPPON AIRWAYS")

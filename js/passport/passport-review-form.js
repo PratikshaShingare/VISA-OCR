@@ -74,10 +74,10 @@
     { path: "old.placeOfIssue", label: "Place of issue" },
   ];
 
-  // ---- Dates: always DD-MM-YYYY on screen, ISO (YYYY-MM-DD) in saved data ----
+  // ---- Dates: always DD/MM/YYYY on screen, ISO (YYYY-MM-DD) in saved data ----
   // The browser's own <input type="date"> shows the visitor's locale (mm/dd/yyyy
   // on a US-English browser), so these are plain text inputs with a fixed
-  // DD-MM-YYYY format; the rest of the app keeps receiving ISO strings.
+  // DD/MM/YYYY format; the rest of the app keeps receiving ISO strings.
   function pad2(n) {
     return (n < 10 ? "0" : "") + n;
   }
@@ -97,7 +97,7 @@
     }
     var dt = new Date(y, mo - 1, d);
     if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d || y < 1900 || y > 2100) return null;
-    return { iso: y + "-" + pad2(mo) + "-" + pad2(d), display: pad2(d) + "-" + pad2(mo) + "-" + y };
+    return { iso: y + "-" + pad2(mo) + "-" + pad2(d), display: pad2(d) + "/" + pad2(mo) + "/" + y };
   }
 
   function isDateInput(input) {
@@ -122,7 +122,7 @@
       input = '<select id="' + id + '" data-field="' + f.path + '">' + opts + "</select>";
     } else if (f.type === "date") {
       input =
-        '<input type="text" inputmode="numeric" maxlength="10" placeholder="DD-MM-YYYY" data-date="1" id="' + id +
+        '<input type="text" inputmode="numeric" maxlength="10" placeholder="DD/MM/YYYY" data-date="1" id="' + id +
         '" data-field="' + f.path + '" autocomplete="off" />';
     } else {
       input =
@@ -234,7 +234,7 @@
     return input.value;
   }
 
-  /** Labels of date fields that hold something that is not a valid DD-MM-YYYY date. */
+  /** Labels of date fields that hold something that is not a valid DD/MM/YYYY date. */
   function invalidDates(container) {
     var bad = [];
     utils.qsa("input[data-date]", container).forEach(function (input) {
@@ -755,7 +755,7 @@
         if (meta) meta.textContent = "Manually entered / edited by staff.";
       }
     });
-    // Dates are typed as digits: the dashes are inserted for you, and the
+    // Dates are typed as digits: the slashes are inserted for you, and the
     // value is normalised (and validated) when the field loses focus.
     utils.on(container, "input", "input[data-date]", function (e, target) {
       var raw = target.value;
@@ -764,8 +764,8 @@
       if (target.selectionStart !== null && target.selectionStart < raw.length) return;
       var digits = raw.replace(/\D/g, "").slice(0, 8);
       var out = digits.slice(0, 2);
-      if (digits.length > 2) out += "-" + digits.slice(2, 4);
-      if (digits.length > 4) out += "-" + digits.slice(4);
+      if (digits.length > 2) out += "/" + digits.slice(2, 4);
+      if (digits.length > 4) out += "/" + digits.slice(4);
       if (out !== raw) target.value = out;
     });
     utils.on(container, "focusout", "input[data-date]", function (e, target) {
@@ -782,7 +782,7 @@
       } else {
         target.classList.add("is-invalid");
         var meta = metaEl(container, path);
-        if (meta) meta.textContent = "Enter the date as DD-MM-YYYY.";
+        if (meta) meta.textContent = "Enter the date as DD/MM/YYYY.";
       }
     });
     utils.on(container, "change", "[data-old-passport-toggle]", function (e, target) {
